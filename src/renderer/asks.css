@@ -1,0 +1,23 @@
+/* Perguntas do agente e tarefas sugeridas (AgentAsks.tsx). O cartao da pergunta reaproveita .pp/.pp-inline (permission.css). */
+.pp-inline .qp { border-color: var(--accent); }
+.qp h2 svg { color: var(--accent); }
+.qp-q { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.qp-q legend { padding: 0; margin-bottom: 4px; color: var(--text); line-height: 1.45; }
+.qp-q legend small { color: var(--muted); }
+.qp-tag { display: inline-block; margin-right: 8px; padding: 1px 8px; border-radius: 999px; background: var(--raised); color: var(--muted); font-size: 12px; vertical-align: 1px; }
+.qp-opt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); cursor: pointer; }
+.qp-opt:hover { background: var(--raised); }
+.qp-opt.on { border-color: var(--accent); background: var(--raised); }
+.qp-opt input { margin-top: 2px; accent-color: var(--accent); }
+.qp-opt span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.qp-opt small { color: var(--muted); }
+.qp-other { width: 100%; }
+
+.sg { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.sg-chip { display: flex; align-items: flex-start; gap: 8px; padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.sg-chip > svg { flex: none; margin-top: 3px; color: var(--limit); }
+.sg-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sg-text small { color: var(--muted); }
+.sg-title { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--text); font-weight: 600; text-align: left; }
+.sg-title:hover:not(:disabled) { background: none; text-decoration: underline; }
+.sg-prompt { margin: 6px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm); font: 12.5px/1.5 ui-monospace, 'Cascadia Code', Consolas, monospace; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow: auto; }

@@ -21,7 +21,7 @@ function useNovaState() {
     const load = () => api.novaState().then((s: any) => { if (live) setSt(s) }, () => {})
     load()
     const t = setInterval(load, 30_000)
-    const off = onChat((ev: any) => { if (ev?.done || ev?.permissionRequest || ev?.permissionResolved || ev?.contextRequest || ev?.contextResolved) load() })
+    const off = onChat((ev: any) => { if (ev?.done || ev?.permissionRequest || ev?.permissionResolved || ev?.questionRequest || ev?.questionResolved || ev?.contextRequest || ev?.contextResolved) load() })
     return () => { live = false; clearInterval(t); off() }
   }, [])
   return st

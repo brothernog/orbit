@@ -55,6 +55,8 @@ import { addRule, answerText, assessRule, listRules, nativePolicy, normalizePerm
 
 import { runChat } from './runner.ts'
 import { callTaskTool, childToolset, toolsFor, type ToolCtx } from './taskContext.ts'
+import { ASK_TOOL_NAME, QuestionBroker } from './questions.ts'
+import { dismissSuggestion, listSuggestions, startSuggestion, suggestTask, SUGGEST_TOOL_NAME } from './suggestions.ts'
 import { delegationReport, taskUsage } from './usage.ts'
 import { finishRun, reconcileRuns } from './runs.ts'
 import { projectInfo } from './projectInfo.ts'
@@ -322,6 +324,10 @@ async function noticeInfo(ev: any): Promise<NoticeInfo> {
     const perm = db.prepare('SELECT provider, summary FROM permission_requests WHERE id=?').get(ev.permissionRequest) as any
     info.permission = perm && { provider: perm.provider, summary: perm.summary ?? '' }
   }
+  if (ev.questionRequest) {
+    const q = questions.get(ev.questionRequest)
+    info.question = q && { provider: q.provider, summary: q.questions.map(x => x.question).join(' ') }
+  }
   if (ev.contextRequest) {
     const pkg = getPackage(db, ev.contextRequest)
     info.context = pkg && { items: pkg.items.length, recipient: `${providerLabel(pkg.recipient.provider)}${pkg.recipient.model ? ` ${pkg.recipient.model}` : ''}` }
@@ -399,7 +405,7 @@ function noticesToApp() {
   toPopup({ noticeClear: true })
 }
 function attend(ev: any) {
-  if (!ev?.done && !ev?.permissionRequest && !ev?.contextRequest && !ev?.commandDone) return
+  if (!ev?.done && !ev?.permissionRequest && !ev?.questionRequest && !ev?.contextRequest && !ev?.commandDone) return
   const prefs = notifyPrefs()
   noticeInfo(ev).then(info => { const n = noticeFor(ev, info, prefs); if (n) showNotice(n, prefs) }).catch(() => {})
 }
@@ -464,6 +470,8 @@ const note = (taskId: number, text: string) => {
   db.prepare("INSERT INTO messages (chat_key, role, text, task_id) VALUES (?, 'system', ?, ?)").run(`task:${taskId}`, text, taskId)
   emit({ taskId, refresh: true })
 }
+// Perguntas do agente pai ao usuario (ask_user): mesmo prazo que o timeout do cliente MCP ja cobre (chatService).
+const questions = new QuestionBroker({ timeoutMin: () => Math.max(contextLimits().approvalTimeoutMin, permissionSettings().timeoutMin), emit: ev => emit(ev), note })
 const delegationDeps: Deps = {
   db, guard, settings: delegationSettings, limits: contextLimits, aliases: agentAliases, nativePolicy: nativeFor, waiters, note,
   // A interface mostra o pedido (pacote exato + destinatario); aqui so avisamos no chat e emitimos o evento. Nada foi enviado ao destinatario.
@@ -510,6 +518,12 @@ const getMcp = () => (mcpServer ??= startMcpServer<McpCtx>({
       return { text: answerText(await broker.handle(p, args, signal)), isError: false }
     }
     if (c.kind === 'parent' && name === TOOL_NAME) return runDelegation(delegationDeps, c.p, args, signal)
+    if (c.kind === 'parent' && name === ASK_TOOL_NAME) return questions.ask({ taskId: c.p.taskId, runId: c.p.runId, provider: c.p.provider }, args, signal)
+    if (c.kind === 'parent' && name === SUGGEST_TOOL_NAME) {
+      const r = suggestTask(db, { taskId: c.p.taskId, runId: c.p.runId, provider: c.p.provider }, args)
+      if (!r.isError) emit({ taskId: c.p.taskId, suggestion: true })
+      return r
+    }
     if (c.kind === 'child' && !c.tools.some(t => t.name === name)) return { text: 'Ferramenta nao anunciada para esta execucao.', isError: true }
     const grants = ctxGrants(c), tctx = { ...(c.kind === 'parent' ? parentTool(c.p) : c.t), engines: grantedEngines(grants) }
     if (engineOf(name)) return callEngineTool(db, contextLimits(), tctx, grants, name, args, signal)
@@ -528,7 +542,7 @@ const { sendTask, decideSend: decideChatSend } = createChatService({
   workspaceBusy: commands.busy, onRunStart: runStart, summaryTitles,
   accountUsageWriter: id => accountUsageService.writer(id),
   engineGrants: (game, cwd) => engineGrants(db, game, cwd),
-  onFinished: o => handover(o),
+  onFinished: o => handover(o), questions,
   registerParent: (token, p, perm) => { tokens.set(token, { kind: 'parent', p, perm }) },
   unregisterToken: token => { tokens.delete(token) }
 })
@@ -953,7 +967,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
     setSetting('projectNames', JSON.stringify(m))
   },
   // ---- Tarefas
-  taskBriefs: (game: string) => taskBriefs(db, asGame(game)),
+  taskBriefs: (game: string) => taskBriefs(db, asGame(game)).map(b => ({ ...b, question: questions.list(b.id)[0]?.questions[0].question.slice(0, 60) ?? null })), // perguntas so em memoria
   listTasks: (game: string, o: any) => listTasks(db, asGame(game), { search: typeof o?.search === 'string' ? o.search.slice(0, 200) : undefined, archived: o?.archived === true })
     .map(t => ({ ...t, running: active.has(t.id) })),
   // Estado do projeto (tipo, Git da pasta e das worktrees) e atividade das tarefas; so leitura, sem IA.
@@ -1129,6 +1143,12 @@ const handlers: Record<string, (...a: any[]) => any> = {
   resolvePermissionRequest: (id: number, decision: string, opt: any) =>
     broker.resolve(asInt(id, 'pedido'), decision as PermDecision, { pattern: typeof opt?.pattern === 'string' ? opt.pattern.slice(0, 300) : undefined, project: opt?.project === true, acknowledged: opt?.acknowledged === true }),
   listPermissionRules: () => listRules(db),
+  // ---- Perguntas do agente (ask_user) e sugestoes de tarefa (suggest_task). Usar a sugestao so cria a tarefa: a ordem volta ao compositor.
+  listQuestions: (taskId?: number) => questions.list(taskId == null ? undefined : asTask(taskId).id),
+  answerQuestion: (id: number, answers: unknown) => questions.answer(asInt(id, 'pergunta'), answers ?? null),
+  listSuggestions: (taskId: number) => listSuggestions(db, asTask(taskId).id),
+  dismissSuggestion: (id: number) => dismissSuggestion(db, asInt(id, 'sugestao')),
+  startSuggestion: (id: number) => startSuggestion(db, asInt(id, 'sugestao')),
   addPermissionRule: (r: any) => addRule(db, {
     provider: asStr(r?.provider, 'agente', 30), kind: asStr(r?.kind, 'tipo', 10), pattern: asStr(r?.pattern, 'padrao', 300), decision: r?.decision,
     project: r?.project ? asGame(r.project) : '', acknowledged: r?.acknowledged === true
@@ -1217,7 +1237,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
     emit({ taskId: t.id, refresh: true })
     return r
   },
-  // Nova: o que espera voce (permissao/contexto pendente) e o que foi concluido hoje, por pasta. So leitura, sem IA.
+  // Nova: o que espera voce (pergunta/permissao/contexto pendente) e o que foi concluido hoje, por pasta. So leitura, sem IA.
   novaState: () => {
     const gs = new Set(listGames().map(g => g.toLowerCase()))
     const waiting = (db.prepare(`SELECT t.id, t.game, t.title,
@@ -1226,6 +1246,13 @@ const handlers: Record<string, (...a: any[]) => any> = {
         EXISTS (SELECT 1 FROM permission_requests p WHERE p.task_id=t.id AND p.state='pending') OR
         EXISTS (SELECT 1 FROM context_packages c WHERE c.task_id=t.id AND c.state='pending'))`).all() as any[])
       .filter(r => gs.has(String(r.game).toLowerCase())).map(r => ({ id: r.id, game: r.game, title: r.title, why: r.perm ? `Permitir: ${String(r.perm).slice(0, 60)}` : 'Aprovar contexto' }))
+    for (const q of questions.list()) { // perguntas ficam em memoria (questions.ts): uma linha por tarefa, e a pergunta vem primeiro
+      const t = getTask(db, q.taskId), why = `Responder: ${q.questions[0].question.slice(0, 60)}`
+      if (!t || t.archived_at || !gs.has(t.game.toLowerCase())) continue
+      const w = waiting.find(x => x.id === t.id)
+      if (!w) waiting.unshift({ id: t.id, game: t.game, title: t.title, why })
+      else if (!w.why.startsWith('Responder')) w.why = why
+    }
     const done = db.prepare("SELECT game, COUNT(*) n FROM tasks WHERE state='concluida' AND date(updated_at, 'localtime')=date('now', 'localtime') GROUP BY game").all() as any[]
     return { waiting, doneToday: Object.fromEntries(done.filter(r => gs.has(String(r.game).toLowerCase())).map(r => [r.game, r.n])) }
   },

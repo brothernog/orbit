@@ -10,7 +10,7 @@ export const DEFAULT_NOTIFY: NotifyPrefs = { done: true, failed: true, approval:
 export const normalizeNotify = (raw: any): NotifyPrefs =>
   Object.fromEntries(Object.entries(DEFAULT_NOTIFY).map(([k, d]) => [k, typeof raw?.[k] === 'boolean' ? raw[k] : d])) as NotifyPrefs
 
-export type NoticeKind = 'done' | 'review' | 'failed' | 'paused' | 'permission' | 'context' | 'cmd-ok' | 'cmd-fail'
+export type NoticeKind = 'done' | 'review' | 'failed' | 'paused' | 'permission' | 'question' | 'context' | 'cmd-ok' | 'cmd-fail'
 export type FileDelta = { path: string; added: number | null; removed: number | null; isNew: boolean }
 export type Notice = {
   key: number // atribuido por index.ts
@@ -26,7 +26,7 @@ export type Notice = {
   filesTotal: { count: number; added: number; removed: number } | null
   activity: Activity | null
   command: { name: string; exitCode: number | null } | null // comando do projeto (Teste/Build/Jogo) que terminou
-  ref?: { permission?: number; context?: number } // o cartao some quando o pedido e resolvido
+  ref?: { permission?: number; question?: number; context?: number } // o cartao some quando o pedido e resolvido
 }
 // O que index.ts busca no banco/disco para o evento.
 export type NoticeInfo = {
@@ -34,6 +34,7 @@ export type NoticeInfo = {
   step?: string | null
   changes?: FileDelta[] | null
   permission?: { provider: string; summary: string } | null
+  question?: { provider: string; summary: string } | null
   context?: { items: number; recipient: string } | null
 }
 
@@ -136,6 +137,9 @@ export function noticeFor(ev: any, info: NoticeInfo, prefs: NotifyPrefs): Omit<N
   if (!prefs.approval) return null
   if (ev.permissionRequest && info.permission) {
     return { ...empty, kind: 'permission', heading: 'Pede permissão', provider: info.permission.provider, summary: cut(plain(info.permission.summary), 200), summaryFrom: 'app', ref: { permission: ev.permissionRequest } }
+  }
+  if (ev.questionRequest && info.question) { // o agente esta parado esperando: mesmo peso de um pedido de permissao
+    return { ...empty, kind: 'question', heading: 'Tem uma pergunta', provider: info.question.provider, summary: cut(plain(info.question.summary), 200), summaryFrom: 'agent', ref: { question: ev.questionRequest } }
   }
   if (ev.contextRequest && info.context) {
     const c = info.context

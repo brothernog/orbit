@@ -2,18 +2,18 @@ import { Avatar, Icon, PROVIDER } from './icons'
 import './toasts.css'
 
 // Mesmo formato de src/main/notify.ts (Notice). O processo principal monta o resumo; aqui so mostra.
-export type Kind = 'done' | 'review' | 'failed' | 'paused' | 'permission' | 'context' | 'cmd-ok' | 'cmd-fail'
+export type Kind = 'done' | 'review' | 'failed' | 'paused' | 'permission' | 'question' | 'context' | 'cmd-ok' | 'cmd-fail'
 export type Activity = { tools: number; commands: number; tests: number; passed: number; failed: number; lastOk: boolean | null; summary: string | null }
 export type FileDelta = { path: string; added: number | null; removed: number | null; isNew: boolean }
 export type Notice = {
   key: number; kind: Kind; taskId: number; game: string; heading: string; title: string; project: string
   provider: string | null; model: string | null; duration: string | null; summary: string; summaryFrom: 'agent' | 'app'; step: string | null
   files: FileDelta[] | null; filesTotal: { count: number; added: number; removed: number } | null
-  activity: Activity | null; command: { name: string; exitCode: number | null } | null; ref?: { permission?: number; context?: number }
+  activity: Activity | null; command: { name: string; exitCode: number | null } | null; ref?: { permission?: number; question?: number; context?: number }
 }
 
-const BADGE: Record<Kind, string> = { done: 'check', review: 'target', failed: 'alert', paused: 'stop', permission: 'alert', context: 'layers', 'cmd-ok': 'check', 'cmd-fail': 'alert' }
-const ACTION: Record<Kind, string> = { done: 'Abrir tarefa', review: 'Revisar etapa', failed: 'Ver o erro', paused: 'Abrir tarefa', permission: 'Responder', context: 'Ver pedido', 'cmd-ok': 'Ver saída', 'cmd-fail': 'Ver saída' }
+const BADGE: Record<Kind, string> = { done: 'check', review: 'target', failed: 'alert', paused: 'stop', permission: 'alert', question: 'spark', context: 'layers', 'cmd-ok': 'check', 'cmd-fail': 'alert' }
+const ACTION: Record<Kind, string> = { done: 'Abrir tarefa', review: 'Revisar etapa', failed: 'Ver o erro', paused: 'Abrir tarefa', permission: 'Responder', question: 'Responder', context: 'Ver pedido', 'cmd-ok': 'Ver saída', 'cmd-fail': 'Ver saída' }
 const ALERT = new Set<Kind>(['failed', 'cmd-fail'])
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
