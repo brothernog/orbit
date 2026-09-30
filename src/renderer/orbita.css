@@ -91,7 +91,6 @@ button.task.active { background: linear-gradient(90deg, #7cc4ff17, #7cc4ff05 70%
 .now { border-color: #7cc4ff2a; background: radial-gradient(120% 140% at 0% 0%, #7cc4ff14, transparent 60%), var(--surface); border-radius: var(--r-lg); }
 .now-label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
 .roadmap-card { background: var(--side-bg); border-color: var(--line-soft); border-radius: var(--r-lg); }
-.modal-back { background: #04060acc; backdrop-filter: blur(8px) saturate(120%); }
 
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
 
