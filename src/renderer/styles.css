@@ -106,7 +106,7 @@ button.link:hover:not(:disabled) { background: none; text-decoration: underline;
 .rail button { -webkit-app-region: no-drag; }
 .rail .projects { flex: 1; min-height: 0; width: 100%; overflow-y: auto; scrollbar-width: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); margin: 4px 0; }
 .rail .projects::-webkit-scrollbar { display: none; }
-.rail-btn { position: relative; width: 44px; height: 44px; padding: 0; display: grid; place-items: center; background: none; border: 0; border-radius: 12px; color: var(--muted); }
+.rail-btn { position: relative; width: 44px; height: 44px; padding: 0; display: grid; place-items: center; background: none; border: 0; border-radius: 14px; color: var(--muted); transition: background-color .2s var(--ease), transform .25s var(--spring), color .2s; }
 .rail-btn:hover:not(:disabled), .rail-btn[aria-current=true] { background: var(--surface); color: var(--text); }
 /* Icone do projeto: o da pasta (Godot, favicon...) ou um padrao gerado do caminho. */
 .picon { display: block; width: 34px; height: 34px; border-radius: 10px; object-fit: contain; transition: border-radius .2s var(--ease), box-shadow .2s; }

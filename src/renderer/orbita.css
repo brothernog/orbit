@@ -30,8 +30,6 @@ input:focus, textarea:focus, select:focus { border-color: #7cc4ff66; }
 .rail .projects { border: 0; gap: 8px; padding: 10px 0; margin: 6px 0; position: relative; }
 .rail .projects::before, .rail .projects::after { content: ''; position: sticky; display: block; flex: none; width: 24px; height: 1px; background: var(--line); }
 .rail .projects::before { top: 0; } .rail .projects::after { bottom: 0; margin-top: auto; }
-.rail-btn { border-radius: 14px; transition: background-color .2s var(--ease), transform .25s var(--spring), color .2s; }
-.rail-btn:hover:not(:disabled), .rail-btn[aria-current=true] { background: var(--surface); }
 .rail-logo img { transition: transform .6s var(--spring), filter .3s; filter: drop-shadow(0 0 6px #7cc4ff40); }
 .rail-logo:hover img { transform: rotate(-18deg) scale(1.06); filter: drop-shadow(0 0 10px #7cc4ff80); }
 .rail-logo[aria-current=true], .rail-logo[aria-current=true]:hover:not(:disabled) { background: none; }
