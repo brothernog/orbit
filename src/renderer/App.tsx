@@ -161,10 +161,9 @@ export default function App() {
   const [providers, setProviders] = useState<Provider[] | null>(null)
   const [tasks, setTasks] = useState<Task[] | null>(null)
   const [taskId, setTaskId] = useState<number | null>(null)
-  const [settings, setSettings] = useState(false)
-  const [home, setHome] = useState(true)
-  const [li, setLi] = useState(false) // pagina LinkedIn
-  const [taskView, setTaskView] = useState(false) // no projeto: visao geral (false) ou chat da tarefa (true)
+  // Tela do centro. No projeto: visao geral ('project') ou chat da tarefa ('task').
+  const [view, setView] = useState<'home' | 'settings' | 'li' | 'project' | 'task'>('home')
+  const home = view === 'home', settings = view === 'settings', li = view === 'li', taskView = view === 'task'
   const [recent, setRecent] = useState<Record<string, number>>(() => { try { return JSON.parse(ls('recent') ?? '{}') } catch { return {} } })
   const [palette, setPalette] = useState(false)
   const [panel, setPanel] = useAuto('(min-width: 1250px)', false)
@@ -260,7 +259,7 @@ export default function App() {
   const pick = (g: string) => {
     const w = groupOf(groups, g)
     if (w) lsSet(`ws:${w.id}`, g) // ao voltar ao organizador, reabre a ultima pasta usada nele
-    lsSet('game', g); setGame(g); setSettings(false); setHome(false); setLi(false); setTaskView(false)
+    lsSet('game', g); setGame(g); setView('project')
     setRecent(r => { const n = { ...r, [g]: Date.now() }; lsSet('recent', JSON.stringify(n)); return n })
   }
   const addGame = (groupId?: string) => api.addGame().then((g: string | null) => {
@@ -276,11 +275,11 @@ export default function App() {
     transition(() => { pick(list.find(g => g === last) ?? [...list].sort((a, b) => (recent[b] ?? 0) - (recent[a] ?? 0))[0]); setChats(true) })
   }
   const createIn = (g: string) => (g === game ? create() : api.createTask(g).then((id: number) => openIn(g, id), (e: any) => setErr(errText(e))))
-  const goHome = () => transition(() => { setHome(true); setSettings(false); setLi(false) })
-  const goSettings = () => { setSettings(true); setLi(false) }
-  const goLi = () => { setLi(true); setSettings(false) }
+  const goHome = () => transition(() => setView('home'))
+  const goSettings = () => setView('settings')
+  const goLi = () => setView('li')
   const openTask = (id: number) => {
-    setSettings(false); setHome(false); setLi(false); setTaskView(true)
+    setView('task')
     setTaskId(id)
     loadTasks().then(() => setTaskId(id))
   }
@@ -291,7 +290,7 @@ export default function App() {
     if (!g) { if (/[\\/]linkedin$/i.test(gameOf)) goLi(); return } // a conversa da pagina LinkedIn nao e projeto
     lsSet(`task:${g}`, String(id))
     pick(g)
-    setTaskView(true)
+    setView('task')
   }
   const openActive = (a: Active) => openIn(a.game, a.taskId)
   const renameTask = (t: Task, v: string | null) => { setRenaming(null); if (v) api.renameTask(t.id, v).then(() => { loadTasks(); bump() }, (e: any) => setErr(errText(e))) }
@@ -358,7 +357,7 @@ export default function App() {
         {renaming === t.id
           ? <div className="task editing"><span className="task-dot" aria-hidden="true" /><RenameInput value={t.title} label="Novo nome da conversa" onDone={v => renameTask(t, v)} /></div>
           : <button className={`task ${sel ? 'active' : ''} s-${t.state} ${st.tone === 'wait' ? 'wait' : ''}`} aria-current={sel} aria-label={`${t.title}: ${st.text}${t.worktree ? `, branch ${t.branch}` : ''}`}
-              onClick={() => { briefCard.hide(); if (t.game !== game || !inProject) return openIn(t.game, t.id); setTaskId(t.id); setTaskView(true) }} onDoubleClick={() => setRenaming(t.id)}
+              onClick={() => { briefCard.hide(); if (t.game !== game || !inProject) return openIn(t.game, t.id); setTaskId(t.id); setView('task') }} onDoubleClick={() => setRenaming(t.id)}
               onMouseEnter={e => briefCard.show(e, t.id)} onMouseLeave={briefCard.hide}>
               {who ? <Avatar provider={who.provider} live size="sm" /> : <span className="task-dot" aria-hidden="true" />}
               <span className="task-text"><span className="task-title">{t.title}</span><span className={`task-sub ${st.tone}`}>{st.text}</span>
@@ -471,8 +470,8 @@ export default function App() {
   return (
     <div className={`app ${(panel && inProject) || showFiles ? 'panel-open' : ''} ${drawer ? 'chats-open' : ''}`}>
       <nav className="rail" aria-label="Projetos">
-        <button className="rail-btn rail-logo" aria-label="Início" aria-current={home && !settings && !li} onClick={goHome}><img src={orbitMark} alt="" width={30} height={30} draggable={false} /><span className="rail-tip">Início</span></button>
-        <button className={`rail-btn rail-li ${active.some(a => /[\\/]linkedin$/i.test(a.game)) ? 'live' : ''}`} aria-label="LinkedIn" aria-current={li && !settings} onClick={goLi}><span className="li-glyph" aria-hidden="true">in</span><span className="rail-tip">LinkedIn</span></button>
+        <button className="rail-btn rail-logo" aria-label="Início" aria-current={home} onClick={goHome}><img src={orbitMark} alt="" width={30} height={30} draggable={false} /><span className="rail-tip">Início</span></button>
+        <button className={`rail-btn rail-li ${active.some(a => /[\\/]linkedin$/i.test(a.game)) ? 'live' : ''}`} aria-label="LinkedIn" aria-current={li} onClick={goLi}><span className="li-glyph" aria-hidden="true">in</span><span className="rail-tip">LinkedIn</span></button>
         <button className="rail-btn rail-new" aria-label="Novo organizador" onClick={() => setGroupDlg({ games: [] })}><Icon n="plus" /><span className="rail-tip">Novo organizador</span></button>
         <ul className={`projects ${drag ? 'dragging' : ''}`}>{shownGroups.map(groupItem)}</ul>
         {tipCard()}
