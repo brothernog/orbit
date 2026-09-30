@@ -67,7 +67,7 @@ export type TaskChat = {
 
 // Eventos de streaming do chat: { taskId, text } enquanto executa e { taskId, done } ao terminar.
 const listeners = new Set<(ev: any) => void>()
-;(window as any).onChat?.((ev: any) => {
+const offBridge: (() => void) | undefined = (window as any).onChat?.((ev: any) => {
   if (Number.isSafeInteger(ev.accountUsage?.accountId)) {
     const key = `accountUsage:${ev.accountUsage.accountId}`
     if (ev.accountUsage.usage === null) {
@@ -75,8 +75,10 @@ const listeners = new Set<(ev: any) => void>()
       invalidateRead(`accountStatus:${ev.accountUsage.accountId}`)
     } else setRead(key, ev.accountUsage.usage)
   }
-  listeners.forEach(f => f(ev))
+  // Um listener com erro nao impede a entrega aos outros.
+  for (const f of listeners) try { f(ev) } catch (e) { console.error(e) }
 })
+import.meta.hot?.dispose(() => offBridge?.()) // HMR recarrega este modulo: sem isso os listeners da ponte se acumulam
 export const onChat = (f: (ev: any) => void) => {
   listeners.add(f)
   return () => { listeners.delete(f) }
