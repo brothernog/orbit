@@ -1,11 +1,7 @@
 // Ponte com o processo principal (ver src/preload/index.ts) e tipos compartilhados da interface.
 import { expireRead, invalidateRead, setRead } from './readCache.ts'
+import { SETTINGS_READS } from '../main/settingsReads.ts'
 
-const settingsReads: Record<string, string> = {
-  setContextLimits: 'getContextLimits', setNotifySettings: 'getNotifySettings', setJarvisSettings: 'getJarvisSettings',
-  setDelegationSettings: 'getDelegationSettings', setPermissionSettings: 'getPermissionSettings',
-  setAgentAliases: 'getAgentAliases', setSummaryTitles: 'summaryTitles', setAutomations: 'getAutomations', setHandover: 'getHandover'
-}
 const changedLists: Record<string, string[]> = {
   addPermissionRule: ['listPermissionRules', 'listPermissionRequests'],
   removePermissionRule: ['listPermissionRules', 'listPermissionRequests'],
@@ -14,7 +10,7 @@ const changedLists: Record<string, string[]> = {
 }
 export const api = new Proxy({} as Record<string, (...a: any[]) => Promise<any>>, {
   get: (_t, name: string) => (...args: any[]) => {
-    const read = settingsReads[name]
+    const read = SETTINGS_READS[name] // o main devolve em cada setter o formato da leitura
     if (read) expireRead(read)
     changedLists[name]?.forEach(expireRead)
     return (window as any).invoke(name, ...args).then((value: any) => {

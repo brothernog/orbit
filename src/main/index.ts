@@ -5,6 +5,7 @@ import { todoBoard, saveTodo, todoTask } from './planning.ts'
 import { createChatService } from './chatService.ts'
 import { createAutomations } from './automations.ts'
 import { createHandover, normalizeHandover } from './handover.ts'
+import { returnReads } from './settingsReads.ts'
 import { createAccountUsageService } from './accountUsage.ts'
 import { createJarvisService } from './jarvisService.ts'
 import { createLinkedInService } from './linkedinService.ts'
@@ -1264,6 +1265,7 @@ const trusted = (e: IpcMainInvokeEvent) => {
   const url = e.senderFrame?.url ?? ''
   return rendererUrl ? url.startsWith(rendererUrl) : url.startsWith(pathToFileURL(path.dirname(rendererFile)).href)
 }
+returnReads(handlers) // setters devolvem o formato da leitura (o renderer o guarda como cache)
 for (const [name, fn] of Object.entries(handlers))
   ipcMain.handle(name, (e, ...args) => (trusted(e) ? backups.invoke(() => fn(...args)) : fail('Origem nao permitida.')))
 
