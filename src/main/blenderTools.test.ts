@@ -5,7 +5,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { blenderStats, setBlenderScriptRoots } from './blender.ts'
+import { blenderStats, clearBlenderCache, setBlenderScriptRoots } from './blender.ts'
 import { BLENDER_TOOLS, callBlenderTool } from './blenderTools.ts'
 import { openGrant } from './consent.ts'
 import { openDb } from './db.ts'
@@ -63,6 +63,10 @@ for o in (cube, c2): bpy.context.scene.collection.objects.unlink(o); props.objec
 bpy.ops.object.camera_add(); bpy.context.scene.camera = bpy.context.object
 os.makedirs(os.path.join(d, 'textures'), exist_ok=True)
 open(os.path.join(d, 'textures', 'wood_n.png'), 'wb').write(bytes.fromhex('89504e470d0a1a0a0000000d4948445200000100000000800802000000'))
+open(os.path.join(d, 'textures', 'wood_r.png'), 'wb').write(bytes.fromhex('89504e470d0a1a0a0000000d49484452000003e8000003e80802000000'))
+t3 = nt.nodes.new('ShaderNodeTexImage'); t3.image = bpy.data.images.load(os.path.join(d, 'textures', 'wood_r.png')); t3.image.colorspace_settings.name = 'Non-Color'
+nt.links.new(t3.outputs['Color'], bsdf.inputs['Roughness'])
+t4 = nt.nodes.new('ShaderNodeTexImage'); t4.image = bpy.data.images.new('ao_gone', 4, 4); t4.image.source = 'FILE'; t4.image.filepath = '//textures/ao_gone.png'
 bpy.ops.wm.save_as_mainfile(filepath=out)
 os.remove(os.path.join(d, 'lib.blend'))
 # cena grande: 3000 objetos compartilhando uma malha
@@ -74,6 +78,34 @@ bpy.ops.wm.save_as_mainfile(filepath=os.path.join(d, 'forest.blend'), compress=T
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.context.scene.collection.objects.link(bpy.data.objects.new('Evil\\n[ERRO] forjado', None))
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(d, 'evil.blend'))
+# rig quebrado: armature em cm, grupo com nome errado, metade sem peso, action com osso inexistente, driver Python e text block registrado
+bpy.ops.wm.read_factory_settings(use_empty=True)
+arm = bpy.data.armatures.new('Rig'); ao = bpy.data.objects.new('Rig', arm); bpy.context.scene.collection.objects.link(ao)
+bpy.context.view_layer.objects.active = ao; bpy.ops.object.mode_set(mode='EDIT')
+for n, h, t in (('root', (0,0,0), (0,0,1)), ('arm.R', (0,0,1), (-1,0,1))):
+    eb = arm.edit_bones.new(n); eb.head = h; eb.tail = t
+arm.edit_bones['arm.R'].parent = arm.edit_bones['root']; bpy.ops.object.mode_set(mode='OBJECT'); ao.scale = (0.01, 0.01, 0.01)
+bpy.ops.mesh.primitive_uv_sphere_add(segments=16, ring_count=8); body = bpy.context.object; body.name = 'Body'; body.parent = ao
+body.data.materials.append(bpy.data.materials.new('Skin'))
+body.vertex_groups.new(name='root').add([v.index for v in body.data.vertices if v.co.z < 0], 1.0, 'REPLACE'); body.vertex_groups.new(name='arm_R')
+body.modifiers.new('Armature', 'ARMATURE').object = ao
+body.shape_key_add(name='Basis'); body.shape_key_add(name='Smile')
+fc = body.data.shape_keys.key_blocks['Smile'].driver_add('value'); fc.driver.type = 'SCRIPTED'
+fc.driver.expression = "open(%r, 'w').write('x') and 0" % os.path.join(d, 'PWNED_driver')
+tx = bpy.data.texts.new('boot.py'); tx.write("open(%r, 'w').write('x')\\n" % os.path.join(d, 'PWNED_text')); tx.use_module = True
+act = bpy.data.actions.new('Idle'); act.use_fake_user = True
+for bn in ('root', 'tail'): act.fcurves.new('pose.bones["%s"].location' % bn, index=0).keyframe_points.insert(1, 0)
+ao.animation_data_create(); ao.animation_data.action = act
+bpy.ops.mesh.primitive_cube_add(location=(3, 0, 0)); bpy.context.object.name = 'UCX_Body_00'
+bpy.ops.wm.save_as_mainfile(filepath=os.path.join(d, 'rig.blend'))
+# pesada: subsurf alto; abrir avaliaria ~1M faces sem o limitador. Slow tem nos (estimativa incerta) para exercitar o alarme.
+bpy.ops.wm.read_factory_settings(use_empty=True)
+for n in ('Statue', 'Slow'):
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=256, ring_count=128); bpy.context.object.name = n
+bpy.ops.mesh.primitive_monkey_add()
+for o in bpy.data.objects: o.modifiers.new('S', 'SUBSURF').levels = 2  # depois dos operadores: cada operador reavaliaria a cena
+bpy.data.objects['Slow'].modifiers.new('G', 'NODES').node_group = bpy.data.node_groups.new('GN', 'GeometryNodeTree')
+bpy.data.libraries.write(os.path.join(d, 'heavy.blend'), {bpy.context.scene})  # save_as_mainfile avaliaria os subsurf (~30 s)
 `
 const scenePath = path.join(cwd, 'models', 'scene.blend')
 let sceneHash = ''
@@ -130,8 +162,9 @@ test('blender_scene summary/object/materials/images/libraries/audit em .blend re
   const sum = await ok('blender_scene', { path: 'models/scene.blend' })
   assert.match(sum, /cena Scene \(ativa\) · EEVEE · 1920x1080@100% · 24 fps · frames 1-250 · camera Camera · 7 objetos/)
   assert.match(sum, /Props \[2 direto, 2 total\]/)
-  assert.match(sum, /imagens 2 \(AUSENTES 1\) · bibliotecas 1 \(AUSENTES 1\)/)
-  assert.match(sum, /\nCrate · MESH · Props · v8 f6 t12 · dim 4x2x2 · mods bevel · mats Wood · escala \(2, 1, 1\)\n Crate\.001 · MESH/)
+  assert.match(sum, /imagens 4 \(AUSENTES 2\) · bibliotecas 1 \(AUSENTES 1\)/)
+  assert.match(sum, /\nCrate · MESH · Props · v8 f6 t12 · dim 4x2x2 · mods bevel · mats Wood · escala \(2, 1, 1\)\n Crate\.001 · MESH · v8 f6 t12 · ~t48 apos mods · /)
+  assert.match(sum, /malha na cena .* t36 · ~t72 apos modificadores \(estimado\)/)
   assert.doesNotMatch(sum, new RegExp(root.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')))
   const again = await call('blender_scene', { path: 'models/scene.blend' })
   assert.match(again.text, / · cache/)
@@ -140,7 +173,7 @@ test('blender_scene summary/object/materials/images/libraries/audit em .blend re
   assert.match(obj, /escala \(2, 1, 1\) \[nao uniforme, nao aplicada\]/)
   assert.match(obj, /Bevel BEVEL: segments=3\n/)
   assert.match(obj, /faces 6 \(tris 0, quads 6, ngons 0\)/); assert.match(obj, /propriedades custom: game_id=7/); assert.match(obj, /filhos \(1\): Crate\.001/)
-  assert.match(await ok('blender_scene', { path: 'models/scene.blend', mode: 'object', object: 'Crate.001' }), /apos modificadores \(viewport\): v26 · faces 24 · triangulos 48\n.*\n?shape keys \(2\): Basis, Squash/)
+  assert.match(await ok('blender_scene', { path: 'models/scene.blend', mode: 'object', object: 'Crate.001' }), /apos modificadores \(estimado\): faces 24 · triangulos 48\napos modificadores \(viewport\): v26 · faces 24 · triangulos 48\n.*\n?shape keys \(2, relativas\): Basis, Squash/)
   assert.match((await call('blender_scene', { path: 'models/scene.blend', mode: 'object', object: 'crate' })).text, /^Erro: Objeto "crate" inexistente\. Parecidos: Crate/)
 
   const mats = await ok('blender_scene', { path: 'models/scene.blend', mode: 'materials' })
@@ -154,7 +187,8 @@ test('blender_scene summary/object/materials/images/libraries/audit em .blend re
   const audit = await ok('blender_scene', { path: 'models/scene.blend', mode: 'audit' })
   for (const re of [/\[ERRO\] imagens ausentes \(1\): wood -> models\/textures\/wood_missing\.png/, /\[ERRO\] bibliotecas ausentes \(1\)/, /\[AVISO\] escala negativa .*Disc/,
     /\[AVISO\] escala nao uniforme \(1\): Crate/, /\[AVISO\] malhas com n-gons .*\(1\): Disc: 1 n-gon/, /\[AVISO\] malhas sem faces \(1\): Wire/, /\[AVISO\] slots de material vazios \(1\): Slotty\[0\]/,
-    /\[AVISO\] malhas sem material \(1\): Disc/, /\[AVISO\] shape keys \+ modificadores .*Crate\.001/, /wood_n sRGB em Normal Map/, /\[INFO\] materiais sem objetos .*Unused/, /nao cobre:/])
+    /\[AVISO\] malhas sem material \(1\): Disc/, /\[AVISO\] shape keys \+ modificadores .*Crate\.001/, /wood_n sRGB em Normal Map/, /\[INFO\] materiais sem objetos .*Unused/, /nao cobre:/,
+    /\[AVISO\] texturas com lado nao potencia de 2 \(.*\(1\): wood_r\.png 1000x1000/, /\[INFO\] imagens ausentes so em nos sem ligacao .*\(1\): ao_gone -> models\/textures\/ao_gone\.png/])
     assert.match(audit, re)
   assert.ok(audit.indexOf('[ERRO]') < audit.indexOf('[AVISO]') && audit.indexOf('[AVISO]') < audit.indexOf('[INFO]'))
   assert.match(await ok('blender_scene', { path: 'models/scene.blend', mode: 'audit', object: 'Disc' }), /filtro "Disc": 1 objetos/)
@@ -167,7 +201,7 @@ test('blender_scene summary/object/materials/images/libraries/audit em .blend re
 test('cena grande: séries agregadas, lista limitada com dica, filtro glob e paginação', e2e, async () => {
   const t = await call('blender_scene', { path: 'models/forest.blend' }, ctx, 50_000)
   assert.equal(t.isError, false, t.text)
-  assert.match(t.text, /tipos: MESH 3400/); assert.match(t.text, /malhas mais pesadas: malha M t3 x3400 obj \(Tree0000\.\.\.\)/)
+  assert.match(t.text, /tipos: MESH 3400/); assert.match(t.text, /malhas mais pesadas \(triangulos apos modificadores, estimados\): malha M t3 x3400 obj \(Tree0000\.\.\.\)/)
   assert.match(t.text, /Tree\* · 3000 x MESH · malha M compartilhada · t9000 total/)
   assert.match(t.text, /objetos \(400 fora das series; arvore por parentesco; primeiros 150\)/); assert.match(t.text, /\+250 objetos; use object=<glob>/)
   assert.ok(t.text.length < 12_000, String(t.text.length))
@@ -186,14 +220,15 @@ test('cache invalida quando uma textura externa aparece; arquivo ilegível e nom
   fs.copyFileSync(path.join(cwd, 'models', 'textures', 'wood_n.png'), tex)
   try {
     const after = await ok('blender_scene', { path: 'models/scene.blend', mode: 'audit' })
-    assert.doesNotMatch(after, /imagens ausentes| · cache/)
+    assert.doesNotMatch(after, /\[ERRO\] imagens ausentes| · cache/)
   } finally { fs.rmSync(tex) }
-  assert.match((await call('blender_scene', { path: 'models/fake.blend' })).text, /^Erro: .*(não abriu|não produziu)/)
+  assert.match((await call('blender_scene', { path: 'models/fake.blend' })).text, /^Erro: Blender nao abriu o arquivo pedido .*models\/fake\.blend/)
   const evil = await ok('blender_scene', { path: 'models/evil.blend' })
   assert.match(evil, /Evil\?\[ERRO\] forjado · EMPTY/); assert.doesNotMatch(evil, /\n\[ERRO\]/)
 })
 
 test('cancelamento pelo cliente encerra a execução', e2e, async () => {
+  clearBlenderCache() // companheiros de consultas anteriores já cobririam images
   const ac = new AbortController(); setTimeout(() => ac.abort(), 50)
   const r = await call('blender_scene', { path: 'models/forest.blend', mode: 'images' }, ctx, 8000, ac.signal)
   assert.equal(r.isError, true); assert.match(r.text, /cancelada/)
@@ -214,4 +249,36 @@ test('blender_diagnostics em log real de script que falha: traceback com arquivo
   assert.ok(raw.length <= 1000); assert.match(raw, /Blender \d/)
   assert.equal((await call('blender_diagnostics', { path: 'models/scene.blend' })).isError, true)
   assert.equal((await call('blender_diagnostics', { path: 'logs/fix.log', raw: true, detail: 0 })).isError, true)
+})
+
+test('rig: escala em cm, grupo sem osso, vértices sem peso, action com osso inexistente e driver; nada embutido executa', e2e, async () => {
+  const pwned = ['PWNED_driver', 'PWNED_text'].map(n => path.join(cwd, 'models', n))
+  const audit = await ok('blender_scene', { path: 'models/rig.blend', mode: 'audit' })
+  for (const re of [/\[AVISO\] escala uniforme >=10x .*: Rig 0\.01/, /\[AVISO\] grupos de vertices sem osso .*: Body: arm_R/, /\[AVISO\] vertices sem peso .*: Body: \d+ de 114/,
+    /\[AVISO\] actions com canais de ossos inexistentes .*: Idle: tail/, /\[INFO\] drivers .*: Body: key_blocks\["Smile"\]\.value \(SCRIPTED\)/])
+    assert.match(audit, re)
+  assert.doesNotMatch(audit, /shape keys \+ modificadores|malhas sem material/, 'Armature + shape keys exporta; colisor UCX_ não precisa de material')
+  assert.match(await ok('blender_scene', { path: 'models/rig.blend' }), /actions \(1\): Idle 1-1 \(fake\) -> Rig/)
+  const rig = await ok('blender_scene', { path: 'models/rig.blend', mode: 'object', object: 'Rig' })
+  assert.match(rig, /malhas deformadas: Body\nactions de pose \(1\): Idle 1-1 ossos inexistentes: tail/)
+  assert.match(await ok('blender_scene', { path: 'models/rig.blend', mode: 'object', object: 'Body' }), /animacao das shape keys: 1 drivers · driver key_blocks\["Smile"\]\.value \(SCRIPTED\)/)
+  for (const p of pwned) assert.equal(fs.existsSync(p), false, 'driver/text block embutido não pode executar')
+  // Controle: com auto-exec forçado (-y) o mesmo arquivo executa; prova que o fixture é um ataque real.
+  spawnSync(EXE, ['-b', '--factory-startup', '-y', path.join(cwd, 'models', 'rig.blend'), '--python-expr', 'import bpy; bpy.context.evaluated_depsgraph_get()'], { timeout: 60_000 })
+  assert.ok(pwned.every(p => fs.existsSync(p))); pwned.forEach(p => fs.rmSync(p))
+})
+
+test('cena pesada: modificadores caros não são avaliados ao abrir; estimativa exata; alarme encerra o Blender', e2e, async () => {
+  clearBlenderCache()
+  const started = Date.now(), sum = await ok('blender_scene', { path: 'models/heavy.blend' })
+  assert.ok(Date.now() - started < 15_000, String(Date.now() - started))
+  assert.match(sum, /modificadores NAO avaliados ao abrir .*: Slow, Statue/)
+  assert.match(sum, /Statue · MESH · v32\.5k f32\.8k t65\.0k · ~t1\.04M apos mods \(nao avaliados: pesado\)/)
+  assert.match(sum, /Suzanne · MESH · .* · ~t15\.7k apos mods · /)
+  assert.match(await ok('blender_scene', { path: 'models/heavy.blend', mode: 'audit' }), /malhas acima de 100k triangulos .*Statue t1\.04M \(base t65\.0k\)/)
+  assert.match(await ok('blender_scene', { path: 'models/heavy.blend', mode: 'object', object: 'Statue' }), /apos modificadores \(estimado\): faces 522\.2k · triangulos 1\.04M\n\(avaliacao real omitida/)
+  if (process.platform === 'win32') return
+  const json = JSON.stringify({ mode: 'object', object: 'Slow', file: path.join(cwd, 'models', 'heavy.blend'), root: cwd, nonce: 'n', deadline: 2 }), t0 = Date.now()
+  const r = spawnSync(EXE, ['-b', '--factory-startup', '-Y', '--python', path.resolve('resources/blender/orbit_inspect.py'), '--', json], { timeout: 60_000 })
+  assert.equal(r.signal, 'SIGALRM'); assert.ok(Date.now() - t0 < 20_000)
 })

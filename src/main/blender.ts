@@ -9,7 +9,7 @@ import { normalizeCommand } from './commands.ts'
 import { SKIP_DIRS } from './engines.ts'
 import { cliSpawn, killTree, resolveCli } from './providers.ts'
 
-export const BLENDER_LIMITS = { runMs: 60_000, probeMs: 10_000, outputBytes: 2 * 1024 * 1024, maxRuns: 2, cacheEntries: 50, cacheMs: 10 * 60_000 }
+export const BLENDER_LIMITS = { runMs: 60_000, probeMs: 10_000, outputBytes: 2 * 1024 * 1024, maxRuns: 2, cacheEntries: 120, cacheMs: 10 * 60_000 }
 export type BlendHeader = { version: string | null; pointer: 4 | 8 | null; endian: 'little' | 'big' | null; compressed: 'gzip' | 'zstd' | null }
 export type BlendFile = { rel: string; abs: string; size: number; mtimeMs: number; backups: number }
 export type BlenderDiagnostic = { severity: 'error' | 'warning' | 'info'; message: string; file?: string; line?: number; count: number; outputLines: number[] }
@@ -158,22 +158,24 @@ const locks = new Map<string, Promise<unknown>>()
 export const blenderStats = { runs: 0 }
 export const clearBlenderCache = () => cache.clear()
 
-// Uma execução por arquivo (as demais esperam e costumam sair do cache). -Y desativa scripts/drivers embutidos no .blend;
-// --factory-startup ignora preferências/add-ons do usuário; o script nunca salva. Cache: caminho+tamanho+mtime+args+script+exe.
+// Uma execução por arquivo (as demais esperam e costumam sair do cache). -Y + open_mainfile(use_scripts=False) no script desativam
+// scripts/drivers embutidos no .blend; --factory-startup ignora preferências/add-ons/scripts do usuário; o script nunca salva.
+// A mesma abertura devolve os modos companheiros (mesmos filtros), cacheados à parte. Cache: caminho+tamanho+mtime+args+script+exe.
 export async function inspectBlend(o: { exe: string; version: string; file: string; root: string; args: InspectArgs; signal?: AbortSignal }): Promise<{ text: string; key: string; cached: boolean }> {
   const script = blenderScript(), st = fs.statSync(o.file)
-  const key = createHash('sha256').update(JSON.stringify([o.file, st.size, st.mtimeMs, o.args, script.hash, o.exe, o.version, o.root])).digest('hex')
-  const hit = fresh(key)
+  const keyOf = (args: InspectArgs) => createHash('sha256').update(JSON.stringify([o.file, st.size, st.mtimeMs, args, script.hash, o.exe, o.version, o.root])).digest('hex')
+  const key = keyOf(o.args), hit = fresh(key)
   if (hit) return { text: hit.text, key, cached: true }
   const previous = locks.get(o.file) ?? Promise.resolve()
   const current = previous.catch(() => {}).then(async () => {
     const again = fresh(key)
     if (again) return { text: again.text, key, cached: true }
     const nonce = randomBytes(12).toString('hex')
-    const json = JSON.stringify({ ...o.args, root: o.root, file: o.file, nonce })
+    // deadline: alarme POSIX no próprio Blender (encerra mesmo se o app morrer antes do kill).
+    const json = JSON.stringify({ ...o.args, root: o.root, file: o.file, nonce, companions: true, deadline: Math.ceil(BLENDER_LIMITS.runMs / 1000) + 5 })
     await acquire(o.signal)
     let res: { out: string; code: number | null }
-    try { blenderStats.runs++; res = await run(o.exe, ['-b', '--factory-startup', '-Y', o.file, '--python', script.file, '--', json], o.root, BLENDER_LIMITS.runMs, o.signal) } finally { release() }
+    try { blenderStats.runs++; res = await run(o.exe, ['-b', '--factory-startup', '-Y', '--python', script.file, '--', json], o.root, BLENDER_LIMITS.runMs, o.signal) } finally { release() }
     const { out, code } = res
     const m = new RegExp(`<<ORBIT-${nonce}>>(.*?)<<END-${nonce}>>`, 's').exec(out)
     if (!m) {
@@ -182,32 +184,58 @@ export async function inspectBlend(o: { exe: string; version: string; file: stri
     }
     const r = JSON.parse(m[1])
     if (r.error) throw Error(String(r.error))
-    const text = String(r.text), deps = Array.isArray(r.deps) ? r.deps.filter((p: unknown) => typeof p === 'string') : []
-    cache.set(key, { at: Date.now(), text, deps, sig: depSig(deps) })
-    if (cache.size > BLENDER_LIMITS.cacheEntries) cache.delete(cache.keys().next().value as string)
+    const text = String(r.text), deps = Array.isArray(r.deps) ? r.deps.filter((p: unknown) => typeof p === 'string') : [], sig = depSig(deps)
+    const more = r.more && typeof r.more === 'object' ? Object.entries(r.more).filter(([mode, t]) => mode !== o.args.mode && typeof t === 'string') : []
+    for (const [k, t] of [...more.map(([mode, t]) => [keyOf({ ...o.args, mode }), t as string]), [key, text]]) {
+      cache.delete(k); cache.set(k, { at: Date.now(), text: t, deps, sig })
+    }
+    while (cache.size > BLENDER_LIMITS.cacheEntries) cache.delete(cache.keys().next().value as string)
     return { text, key, cached: false }
   })
   locks.set(o.file, current)
   try { return await current } finally { if (locks.get(o.file) === current) locks.delete(o.file) }
 }
 
-// Log do Blender: tracebacks Python (último frame + exceção), Error/Warning (inclui formato CLOG "ERROR (bke.x):"),
-// bibliotecas/arquivos ausentes e "Read blend:" (arquivos abertos, info). Agrupa repetições.
-export function blenderDiagnostics(output: string): { items: BlenderDiagnostic[]; errorCount: number; warningCount: number; totalLines: number } {
+// Log do Blender: tracebacks Python (frame do workspace, senão o último + exceção; traceback aninhado em RuntimeError/"Error: Python:"
+// mostra a causa), Error/Warning (inclui CLOG "ERROR (bke.x):" e logging "12:00:00 | ERROR:"), arquivos ausentes e "Read blend:" (info).
+// Agrupa repetições. o.cwd (opcional, mesmo formato da receita de engine) prioriza frames de scripts do projeto.
+export function blenderDiagnostics(output: string, o: { cwd?: string } = {}): { items: BlenderDiagnostic[]; errorCount: number; warningCount: number; totalLines: number } {
   const lines = output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/), raw: BlenderDiagnostic[] = []
+  const root = o.cwd ? path.resolve(o.cwd) + path.sep : null, own = (f: string) => !!root && path.resolve(root, f).startsWith(root)
+  const nested = /Traceback \(most recent call last\):$/
+  const exc = /^[\w.]+(?:Error|Exception|Exit|Interrupt|Warning)\b/
+  // Consome frames indentados a partir de i; devolve o frame preferido e o índice da última linha consumida.
+  const frames = (i: number) => {
+    let file: string | undefined, line: number | undefined, mine = false
+    while (i + 1 < lines.length && /^\s/.test(lines[i + 1])) {
+      const fr = /^\s*File "([^"]+)", line (\d+)/.exec(lines[++i])
+      if (fr && (!mine || own(fr[1]))) { file = fr[1]; line = Number(fr[2]); mine = own(fr[1]) }
+    }
+    return { file, line, i }
+  }
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim()
-    if (/^Traceback \(most recent call last\):/.test(t)) {
-      const d: BlenderDiagnostic = { severity: 'error', message: 'Traceback Python', count: 1, outputLines: [i + 1] }
-      while (i + 1 < lines.length && /^\s/.test(lines[i + 1])) {
-        const fr = /^\s*File "([^"]+)", line (\d+)/.exec(lines[++i])
-        if (fr) { d.file = fr[1]; d.line = Number(fr[2]) }
+    // "12:00:00 | ERROR:" = logging de add-on (glTF): vira aviso; o exportador registra ali até falhas opcionais (Draco ausente).
+    const hit = /^(\d\d:\d\d:\d\d(?:\.\d+)? \| )?(ERROR|Error|WARN(?:ING)?|Warning)(?:\s*\([^)]*\))?\s*:\s*(.*)$/.exec(t)
+    if (/^Traceback \(most recent call last\):/.test(t) || hit && nested.test(hit[3])) {
+      const d: BlenderDiagnostic = { severity: 'error', message: hit ? hit[3].replace(nested, '').trim() || 'Traceback Python' : 'Traceback Python', count: 1, outputLines: [i + 1] }
+      let fr = frames(i)
+      if (fr.file) d.file = fr.file, d.line = fr.line
+      i = fr.i
+      // Exceção final; se ela embute outro traceback (RuntimeError do operador), segue até a causa e mantém o frame do projeto.
+      while (i + 1 < lines.length && exc.test(lines[i + 1].trim())) {
+        const m = lines[++i].trim()
+        d.message = d.message === 'Traceback Python' ? m : `${d.message} ${m}`
+        d.outputLines.push(i + 1)
+        if (!nested.test(m)) break
+        d.message = d.message.replace(nested, '').trim()
+        fr = frames(i)
+        if (fr.file && !(d.file && own(d.file))) d.file = fr.file, d.line = fr.line
+        i = fr.i
       }
-      if (i + 1 < lines.length && /^[\w.]+(?:Error|Exception|Exit|Interrupt|Warning)\b/.test(lines[i + 1].trim())) d.message = lines[++i].trim(), d.outputLines.push(i + 1)
       raw.push(d); continue
     }
-    const hit = /^(ERROR|Error|WARN(?:ING)?|Warning)(?:\s*\([^)]*\))?\s*:\s*(.*)$/.exec(t)
-    if (hit) { raw.push({ severity: /^E/i.test(hit[1]) ? 'error' : 'warning', message: hit[2], count: 1, outputLines: [i + 1] }); continue }
+    if (hit) { raw.push({ severity: /^E/i.test(hit[2]) && !hit[1] ? 'error' : 'warning', message: hit[3], count: 1, outputLines: [i + 1] }); continue }
     const read = /^Read blend:\s*"?([^"]+)"?/.exec(t)
     if (read) { raw.push({ severity: 'info', message: 'Arquivo aberto', file: read[1], count: 1, outputLines: [i + 1] }); continue }
     if (/^Info: (?:Cannot find lib|LIB: .*missing)/.test(t) || /No such file or directory|not found|Unable to open|Cannot (?:read|open)/i.test(t))

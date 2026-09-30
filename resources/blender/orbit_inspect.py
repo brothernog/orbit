@@ -1,13 +1,17 @@
 # Orbit: introspeccao SOMENTE LEITURA de um .blend (Blender 3.6+). Executado pelo app com
-# `blender -b --factory-startup -Y <arquivo> --python orbit_inspect.py -- <json>`; nunca salva nem altera arquivos.
+# `blender -b --factory-startup -Y --python orbit_inspect.py -- <json>`: o proprio script abre o arquivo (use_scripts=False)
+# para desligar, so em memoria, modificadores pesados antes da avaliacao do depsgraph ao carregar; nunca salva nem altera arquivos.
 # Saida: um JSON (ASCII) entre marcadores com nonce; o texto e compacto, limitado e com dicas de detalhamento.
-import bpy, sys, os, re, json, fnmatch, difflib, struct
+import bpy, sys, os, re, json, fnmatch, difflib, struct, signal
 
 ARGS = json.loads(sys.argv[sys.argv.index('--') + 1]) if '--' in sys.argv else {}
 ROOT = os.path.realpath(ARGS.get('root') or os.getcwd())
 CAP = 150  # linhas de objetos/itens por listagem
 EX = 8  # exemplos por verificacao de auditoria
 POLY_BUDGET = 5_000_000  # poligonos iterados para contar n-gons
+VERT_BUDGET = 2_000_000  # vertices iterados para conferir pesos de ossos
+EVAL_BUDGET = 200_000  # faces estimadas apos modificadores avaliadas ao abrir (~3 s); acima disso, os mais pesados ficam so com a malha base
+COLLIDER = re.compile(r'^(?:UCX|UBX|UCP|USP|UMM)_|[-_.](?:col|colonly|convcol|convcolonly)$', re.I)  # convencoes Unreal/Godot
 
 
 def g(o, a, d=None):
@@ -109,8 +113,10 @@ def img_dims(img):
             p = absp(img.filepath, img.library)
             if not os.path.isfile(p):
                 return ''
-            with open(p, 'rb') as fh:
-                head = fh.read(65536)
+            with open(p, 'rb') as fh:  # PNG so precisa de 24 bytes; JPEG pode ter EXIF antes do SOF
+                head = fh.read(24)
+                if head[:2] == b'\xff\xd8':
+                    head += fh.read(65536 - 24)
         if head[:8] == b'\x89PNG\r\n\x1a\n':
             return '%dx%d' % struct.unpack('>II', head[16:24])
         if head[:2] == b'\xff\xd8':
@@ -162,6 +168,84 @@ def face_sizes(me, budget):
 def mesh_counts(me):
     v, fc, lp = len(me.vertices), len(me.polygons), len(me.loops)
     return v, fc, lp - 2 * fc  # triangulos = loops - 2*faces
+
+
+SKIPPED = {}  # as_pointer() do objeto -> nomes dos modificadores desligados so em memoria (pesados)
+
+
+def mod_on(o, m):
+    return m.show_viewport or m.name in SKIPPED.get(o.as_pointer(), ())
+
+
+def estimate(o):
+    """(faces, triangulos, incerto) apos modificadores de viewport que multiplicam geometria; None se nenhum muda a contagem.
+    Estimativa aritmetica (subsurf/multires, array, mirror, solidify, decimate), sem avaliar; nos/geometria desconhecidos = incerto."""
+    if o.type != 'MESH' or not o.data or not len(o.modifiers):
+        return None
+    fc, lp = len(o.data.polygons), len(o.data.loops)
+    unsure = touched = False
+    for m in o.modifiers:
+        if not mod_on(o, m):
+            continue
+        t = m.type
+        if t in ('SUBSURF', 'MULTIRES'):
+            lv = g(m, 'levels', 0)
+            if lv > 0:
+                fc, lp = lp * 4 ** (lv - 1), lp * 4 ** lv
+                touched = True
+        elif t == 'ARRAY':
+            n = g(m, 'count', 1) if g(m, 'fit_type') == 'FIXED_COUNT' else 1
+            unsure |= g(m, 'fit_type') != 'FIXED_COUNT'
+            fc, lp, touched = fc * n, lp * n, True
+        elif t == 'MIRROR':
+            n = 2 ** sum(1 for a in g(m, 'use_axis', ()) if a)
+            fc, lp, touched = fc * n, lp * n, True
+        elif t == 'SOLIDIFY':
+            fc, lp, touched, unsure = fc * 2, lp * 2, True, True
+        elif t == 'DECIMATE':
+            r = g(m, 'ratio', 1) if g(m, 'decimate_type') == 'COLLAPSE' else 0.25 ** g(m, 'iterations', 0) if g(m, 'decimate_type') == 'UNSUBDIV' else 1
+            fc, lp, touched, unsure = int(fc * r), int(lp * r), True, unsure or g(m, 'decimate_type') == 'DISSOLVE'
+        elif t in ('NODES', 'SCREW', 'REMESH', 'SKIN', 'PARTICLE_INSTANCE'):  # podem gerar/trocar toda a geometria
+            unsure = True
+    if not touched and not unsure:
+        return None
+    return fc, lp - 2 * fc, unsure, touched
+
+
+def est_text(o):
+    e = estimate(o)
+    if not e:
+        return ''
+    return ('~t%s%s apos mods' % (k(e[1]), '?' if e[2] else '') if e[3] else 'apos mods: ? (nos/remesh)') + (' (nao avaliados: pesado)' if o.as_pointer() in SKIPPED else '')
+
+
+def throttle_heavy():
+    """load_post: antes da avaliacao do depsgraph ao abrir, desliga (em memoria) os modificadores dos objetos com mais faces
+    estimadas ate o total avaliado caber em EVAL_BUDGET; senao abrir uma cena com subsurf alto leva minutos."""
+    cands = []
+    for o in bpy.data.objects:
+        e = estimate(o) if not o.library else None
+        if e and e[3] and e[0] > len(o.data.polygons):
+            cands.append((e[0], o))
+    total = 0
+    for est, o in sorted(cands, key=lambda c: c[0]):
+        total += est
+        if total <= EVAL_BUDGET:
+            continue
+        names = [m.name for m in o.modifiers if m.show_viewport]
+        try:
+            for m in o.modifiers:
+                m.show_viewport = False
+            SKIPPED[o.as_pointer()] = names
+        except Exception:
+            pass
+
+
+def restore(o):
+    for n in SKIPPED.pop(o.as_pointer(), ()):
+        m = o.modifiers.get(n)
+        if m:
+            m.show_viewport = True
 
 
 _DEF = {}
@@ -239,15 +323,7 @@ def action_info(ad):
     parts = []
     act = g(ad, 'action')
     if act:
-        fc = g(act, 'fcurves')
-        if fc is None:  # actions em camadas (4.4+/5.x)
-            n = 0
-            for layer in g(act, 'layers', []):
-                for st in g(layer, 'strips', []):
-                    for cb in g(st, 'channelbags', []):
-                        n += len(g(cb, 'fcurves', []))
-        else:
-            n = len(fc)
+        n = len(fcurves(act))
         fr = g(act, 'frame_range')
         parts.append('action %s (%d fcurves%s)' % (act.name, n, ', frames %s-%s' % (f(fr[0]), f(fr[1])) if fr else ''))
     dr = len(g(ad, 'drivers', []))
@@ -292,10 +368,12 @@ def obj_line(o, depth=0, show_parent=False, colls=True):
     if o.type == 'MESH' and o.data:
         v, fc, t = mesh_counts(o.data)
         bits.append('v%s f%s t%s' % (k(v), k(fc), k(t)))
+        if est_text(o):
+            bits.append(est_text(o))
     elif o.type == 'LIGHT' and o.data:
         bits.append(o.data.type)
-    elif o.type == 'EMPTY' and g(o, 'instance_collection'):
-        bits.append('instancia ' + o.instance_collection.name)
+    elif o.type == 'EMPTY' and g(o, 'instance_collection') and o.instance_type == 'COLLECTION':
+        bits.append('instancia %s (t%s)' % (o.instance_collection.name, k(coll_tris(o.instance_collection))))
     if o.type in ('MESH', 'CURVE', 'FONT', 'SURFACE', 'META', 'ARMATURE', 'GPENCIL', 'GREASEPENCIL', 'CURVES', 'POINTCLOUD', 'VOLUME'):
         bits.append('dim ' + 'x'.join(f(x) for x in o.dimensions))
     if len(o.modifiers):
@@ -319,6 +397,63 @@ def obj_line(o, depth=0, show_parent=False, colls=True):
     if flags:
         bits.append(' '.join(flags))
     return ' · '.join(bits)
+
+
+_CT = {}
+
+
+def coll_tris(c):
+    """Triangulos (estimados apos modificadores) de uma colecao instanciada, incluindo instancias aninhadas."""
+    if c.name_full not in _CT:
+        _CT[c.name_full] = 0
+        t = 0
+        for o in g(c, 'all_objects', c.objects):
+            if o.type == 'MESH' and o.data:
+                e = estimate(o)
+                t += e[1] if e else mesh_counts(o.data)[2]
+            elif o.type == 'EMPTY' and g(o, 'instance_collection') and o.instance_type == 'COLLECTION':
+                t += coll_tris(o.instance_collection)
+        _CT[c.name_full] = t
+    return _CT[c.name_full]
+
+
+def instanced():
+    return set(o.instance_collection.name_full for o in bpy.data.objects if o.instance_type == 'COLLECTION' and g(o, 'instance_collection'))
+
+
+def fcurves(act):
+    fc = g(act, 'fcurves')
+    if fc is not None:
+        return list(fc)
+    out = []  # actions em camadas (4.4+/5.x)
+    for layer in g(act, 'layers', []):
+        for st in g(layer, 'strips', []):
+            for cb in g(st, 'channelbags', []):
+                out += list(g(cb, 'fcurves', []))
+    return out
+
+
+def key_owner(key):
+    """Nome do objeto (ou da malha) dono de um datablock de shape keys."""
+    u = g(key, 'user')
+    return next((o.name for o in bpy.data.objects if u is not None and o.data == u), g(u, 'name', key.name))
+
+
+def action_users():
+    """action -> ['Rig', 'Rig (NLA)'] a partir de animation_data de objetos e shape keys."""
+    use = {}
+    for idb in list(bpy.data.objects) + list(bpy.data.shape_keys):
+        ad = g(idb, 'animation_data')
+        if not ad:
+            continue
+        who = key_owner(idb) if isinstance(idb, bpy.types.Key) else idb.name
+        if ad.action:
+            use.setdefault(ad.action.name, []).append(who)
+        for tr in ad.nla_tracks:
+            for st in tr.strips:
+                if st.action:
+                    use.setdefault(st.action.name, []).append(who + ' (NLA)')
+    return use
 
 
 def coll_tree(sc, out):
@@ -388,19 +523,33 @@ def summary():
     D = bpy.data
     miss_i = sum(1 for i in D.images if img_state(i)[2] == 'AUSENTE')
     miss_l = sum(1 for l in D.libraries if not os.path.isfile(absp(l.filepath)))
-    orphan = sum(1 for o in D.objects if not o.users_scene)
+    inst = instanced()
+    orphan = sum(1 for o in D.objects if not o.users_scene and not o.library and not any(c.name_full in inst for c in o.users_collection))
     out.append('dados: meshes %d · materiais %d · imagens %d%s · bibliotecas %d%s · actions %d · node groups %d · armatures %d%s' % (
         len(D.meshes), len(D.materials), len(D.images), ' (AUSENTES %d)' % miss_i if miss_i else '', len(D.libraries),
         ' (AUSENTES %d)' % miss_l if miss_l else '', len(D.actions), len(D.node_groups), len(D.armatures),
         ' · %d objetos fora de cenas' % orphan if orphan else ''))
-    tv = tf = tt = 0
+    tv = tf = tt = te = ti = 0
     meshes = []
+    unsure = False
     for o in objs:
         if o.type == 'MESH' and o.data:
             v, fc, t = mesh_counts(o.data)
-            tv += v; tf += fc; tt += t
-            meshes.append((t, o.name))
-    out.append('malha na cena (base, sem modificadores; instancias contadas por objeto): v%s f%s t%s' % (k(tv), k(tf), k(tt)))
+            e = estimate(o)
+            tv += v; tf += fc; tt += t; te += e[1] if e else t
+            unsure |= bool(e and e[2])
+            meshes.append((e[1] if e else t, o.name))
+        elif o.type == 'EMPTY' and g(o, 'instance_collection') and o.instance_type == 'COLLECTION':
+            ti += coll_tris(o.instance_collection)
+    out.append('malha na cena (base, sem modificadores; instancias contadas por objeto): v%s f%s t%s%s%s' % (
+        k(tv), k(tf), k(tt), ' · ~t%s%s apos modificadores (estimado)' % (k(te), '?' if unsure else '') if te != tt or unsure else '',
+        ' · +t%s em instancias de colecao' % k(ti) if ti else ''))
+    if SKIPPED:
+        out.append('modificadores NAO avaliados ao abrir (pesados; dimensoes desses objetos sao da malha base): ' + ', '.join(more(sorted(o.name for o in D.objects if o.as_pointer() in SKIPPED), 10)))
+    au = action_users()
+    if len(D.actions):
+        out.append('actions (%d): %s' % (len(D.actions), ', '.join(more(['%s %s-%s%s%s' % (a.name, f(a.frame_range[0]), f(a.frame_range[1]), ' (fake)' if a.use_fake_user else '',
+                                                                                    ' -> ' + '/'.join(au[a.name][:2]) if a.name in au else ' sem usuario') for a in sorted(D.actions, key=lambda a: a.name)], 20))))
     pat = ARGS.get('object')
     if pat:
         sel = [o for o in objs if fnmatch.fnmatchcase(o.name, pat)]
@@ -412,10 +561,10 @@ def summary():
         if meshes:
             per = {}
             for t, n in meshes:
-                me = sc.objects[n].data.name
+                me = sc.objects[n].data.name_full
                 per.setdefault(me, [t, n, 0, me])[2] += 1
             top = sorted(per.values(), reverse=True)[:10]
-            out.append('malhas mais pesadas: ' + ', '.join('%s t%s' % (n, k(t)) if c == 1 else 'malha %s t%s x%d obj (%s...)' % (me, k(t), c, n) for t, n, c, me in top))
+            out.append('malhas mais pesadas (triangulos apos modificadores, estimados): ' + ', '.join('%s t%s' % (n, k(t)) if c == 1 else 'malha %s t%s x%d obj (%s...)' % (me, k(t), c, n) for t, n, c, me in top))
         series = {}
         for o in objs:
             series.setdefault((stem(o.name), o.type), []).append(o)
@@ -466,6 +615,8 @@ def object_mode():
         raise Exception('Objeto "%s" inexistente.%s' % (name, ' Parecidos: ' + ', '.join(near) if near else ''))
     out = []
     data = o.data
+    heavy = o.as_pointer() in SKIPPED
+    restore(o)  # so este objeto volta a ter modificadores; os demais pesados continuam desligados
     out.append('objeto %s · %s%s · dados %s (usuarios %d)%s' % (
         o.name, o.type, ' · vinculado de ' + rel(o.library.filepath) if o.library else '', data.name if data else '-',
         data.users if data else 0, ' · pai %s%s' % (o.parent.name, ' (osso %s)' % o.parent_bone if g(o, 'parent_bone') else '') if o.parent else ''))
@@ -519,8 +670,13 @@ def object_mode():
         fs = face_sizes(me, [POLY_BUDGET])
         qt = ' (tris %s, quads %s, ngons %s)' % tuple(k(x) for x in fs) if fs else ' (tipos de face nao contados: malha grande)'
         out.append('malha base (sem modificadores): v%s · arestas %s · faces %s%s · triangulos %s' % (k(v), k(len(me.edges)), k(fc), qt, k(t)))
-        if len(o.modifiers) and o.users_scene and len(o.users_scene[0].objects) <= 2000:
-            # Avaliacao so para este caso (modificadores e cena moderada): custo do depsgraph cresce com a cena.
+        e = estimate(o)
+        if e and e[3]:
+            out.append('apos modificadores (estimado): faces %s · triangulos %s%s' % (k(e[0]), k(e[1]), ' (incerto: nos/remesh/etc.)' if e[2] else ''))
+        if heavy and e and not e[2]:
+            out.append('(avaliacao real omitida: objeto pesado e estimativa exata para estes modificadores)')
+        elif len(o.modifiers) and o.users_scene and len(o.users_scene[0].objects) <= 2000:
+            # Avaliacao so para este caso (modificadores e cena moderada): custo do depsgraph cresce com a cena; os demais pesados seguem desligados.
             try:
                 ev = o.evaluated_get(bpy.context.evaluated_depsgraph_get())
                 em = ev.to_mesh()
@@ -545,7 +701,11 @@ def object_mode():
             out.append('normais: ' + ', '.join(sm))
     sk = g(data, 'shape_keys') if data else None
     if sk:
-        out.append('shape keys (%d): %s' % (len(sk.key_blocks), ', '.join(more([b.name for b in sk.key_blocks], 30))))
+        out.append('shape keys (%d%s): %s' % (len(sk.key_blocks), ', relativas' if sk.use_relative else ', ABSOLUTAS', ', '.join(more(
+            ['%s%s' % (b.name, '=%s' % f(b.value) if b.value and b != sk.key_blocks[0] else '') for b in sk.key_blocks], 30))))
+        an = action_info(g(sk, 'animation_data'))
+        if an:
+            out.append('animacao das shape keys: ' + an + ''.join(' · driver %s (%s)' % (d.data_path, d.driver.type) for d in list(sk.animation_data.drivers)[:5]))
     props = [(kk, o[kk]) for kk in o.keys() if not kk.startswith('_')] if hasattr(o, 'keys') else []
     if props:
         out.append('propriedades custom: ' + ', '.join(more(['%s=%s' % (kk, str(vv)[:40]) for kk, vv in props], 20)))
@@ -553,7 +713,21 @@ def object_mode():
     if an:
         out.append('animacao: ' + an)
     if o.type == 'ARMATURE' and data:
-        out.append('ossos (%d): %s' % (len(data.bones), ', '.join(more([b.name for b in data.bones], 40))))
+        nd = sum(1 for b in data.bones if not b.use_deform)
+        out.append('ossos (%d%s; raizes %s): %s' % (len(data.bones), ', %d sem deform' % nd if nd else '', ','.join(b.name for b in data.bones if not b.parent)[:80],
+                                                    ', '.join(more([b.name for b in data.bones], 40))))
+        skinned = [x.name for x in bpy.data.objects if any(m.type == 'ARMATURE' and g(m, 'object') == o for m in g(x, 'modifiers', []))]
+        out.append('malhas deformadas: ' + (', '.join(more(skinned, 20)) or 'nenhuma'))
+        bones, au = set(data.bones.keys()), action_users()
+        acts = []
+        for a in sorted(bpy.data.actions, key=lambda a: a.name):
+            used = set(re.findall(r'pose\.bones\["([^"]+)"\]', ' '.join(c.data_path for c in fcurves(a))))
+            if used:
+                miss = sorted(used - bones)
+                acts.append('%s %s-%s%s%s' % (a.name, f(a.frame_range[0]), f(a.frame_range[1]), '' if a.name in au else ' (sem usuario)',
+                                             ' ossos inexistentes: ' + ','.join(miss[:5]) if miss else ''))
+        if acts:
+            out.append('actions de pose (%d): %s' % (len(acts), '; '.join(more(acts, 20))))
     if o.type == 'LIGHT' and data:
         out.append('luz %s · energia %s · cor %s' % (data.type, f(g(data, 'energy', 0)), vec(data.color)))
     if o.type == 'CAMERA' and data:
@@ -686,6 +860,61 @@ def libraries():
     return out
 
 
+def rig_checks(objs, add):
+    """Skin: grupos sem osso, vertices sem peso ou com >4 influencias (glTF/engines cortam em 4), actions com ossos inexistentes."""
+    nobone, unweighted, over, skipped = [], [], [], []
+    budget = [VERT_BUDGET]
+    for o in objs:
+        mods = [m for m in g(o, 'modifiers', []) if m.type == 'ARMATURE' and g(m, 'object') and g(m.object, 'type') == 'ARMATURE' and g(m, 'use_vertex_groups', True)]
+        if o.type != 'MESH' or not mods or not len(o.vertex_groups):
+            continue
+        bones = set(b.name for m in mods for b in m.object.data.bones)
+        deform = set(b.name for m in mods for b in m.object.data.bones if b.use_deform)
+        extra = [vg.name for vg in o.vertex_groups if vg.name not in bones]
+        if extra:
+            nobone.append('%s: %s' % (o.name, ','.join(extra[:6]) + ('+%d' % (len(extra) - 6) if len(extra) > 6 else '')))
+        n = len(o.data.vertices)
+        if n > budget[0]:
+            skipped.append(o.name)
+            continue
+        budget[0] -= n
+        idx = set(vg.index for vg in o.vertex_groups if vg.name in deform)
+        none = many = 0
+        for v in o.data.vertices:
+            c = 0
+            for gw in v.groups:
+                if gw.group in idx and gw.weight > 0:
+                    c += 1
+            if c == 0:
+                none += 1
+            elif c > 4:
+                many += 1
+        if none:
+            unweighted.append('%s: %d de %d' % (o.name, none, n))
+        if many:
+            over.append('%s: %d' % (o.name, many))
+    add('AVISO', 'grupos de vertices sem osso correspondente (nao deformam; nome errado?)', nobone, 'renomeie para o osso certo; ignore se for mascara')
+    add('AVISO', 'vertices sem peso de osso deformante (ficam parados/presos a origem na engine)', unweighted, 'pinte pesos ou use Automatic Weights')
+    add('AVISO', 'vertices com >4 ossos (glTF/engines mantem so 4; deformacao muda)', over, 'Limit Total (4) + Normalize All')
+    add('INFO', 'malhas skinadas nao verificadas (orcamento de %s vertices)' % k(VERT_BUDGET), skipped)
+    arms = [o for o in bpy.data.objects if o.type == 'ARMATURE' and o.data]
+    owner = {}
+    for o in arms:
+        ad = g(o, 'animation_data')
+        for a in ([ad.action] if ad and ad.action else []) + ([st.action for tr in ad.nla_tracks for st in tr.strips if st.action] if ad else []):
+            owner.setdefault(a.name, set()).update(b.name for b in o.data.bones)
+    bad = []
+    for a in bpy.data.actions:
+        bones = owner.get(a.name) or (set(b.name for b in arms[0].data.bones) if len(arms) == 1 else None)
+        if bones is None:
+            continue
+        used = set(re.findall(r'pose\.bones\["([^"]+)"\]', ' '.join(c.data_path for c in fcurves(a))))
+        miss = sorted(used - bones)
+        if miss:
+            bad.append('%s: %s' % (a.name, ','.join(miss[:5]) + ('+%d' % (len(miss) - 5) if len(miss) > 5 else '')))
+    add('AVISO', 'actions com canais de ossos inexistentes (canais ignorados; action de outro rig?)', bad)
+
+
 def audit():
     out = []
     sc = pick_scene()
@@ -698,12 +927,24 @@ def audit():
     pat = ARGS.get('object')
     objs = [o for o in sc.objects if not pat or fnmatch.fnmatchcase(o.name, pat)]
     meshes = [o for o in objs if o.type == 'MESH' and o.data]
-    add('ERRO', 'imagens ausentes', ['%s -> %s' % (i.name, img_state(i)[1]) for i in D.images if img_state(i)[2] == 'AUSENTE'], 'corrija o caminho (relativo //) ou empacote')
+    xf = [o for o in objs if o.type in ('MESH', 'ARMATURE') and o.data]  # escala de armature tambem vai para a engine (ossos/animacao)
+    visual = [o for o in meshes if not COLLIDER.search(o.name)]  # colisores (UCX_, -col) nao precisam de material/UV
+    wired, loose = set(), set()  # imagens em nos de textura ligados / sem nenhuma saida ligada
+    for nt in [m.node_tree for m in D.materials if g(m, 'node_tree')] + list(D.node_groups) + [w.node_tree for w in D.worlds if g(w, 'node_tree')]:
+        for n in nt.nodes:
+            if n.type in ('TEX_IMAGE', 'TEX_ENVIRONMENT') and g(n, 'image'):
+                (wired if any(o.is_linked for o in n.outputs) else loose).add(n.image.name)
+    gone = [i for i in D.images if img_state(i)[2] == 'AUSENTE']
+    add('ERRO', 'imagens ausentes', ['%s -> %s' % (i.name, img_state(i)[1]) for i in gone if i.name not in loose - wired], 'corrija o caminho (relativo //) ou empacote')
+    add('INFO', 'imagens ausentes so em nos sem ligacao (nao afetam render/exportacao)', ['%s -> %s' % (i.name, img_state(i)[1]) for i in gone if i.name in loose - wired], 'remova o no ou corrija o caminho')
     add('ERRO', 'bibliotecas ausentes', ['%s -> %s' % (l.name, rel(l.filepath)) for l in D.libraries if not os.path.isfile(absp(l.filepath))])
     add('ERRO', 'dados vinculados ausentes', [x.name for c in ('objects', 'meshes', 'materials', 'collections') for x in getattr(D, c) if g(x, 'is_missing')])
-    add('AVISO', 'escala negativa (normais invertidas na exportacao)', [o.name for o in meshes if any(x < 0 for x in o.scale)], 'aplique a escala (Ctrl+A) e recalcule normais', names=True)
-    add('AVISO', 'escala nao uniforme', ['%s %s' % (o.name, vec(o.scale)) for o in meshes if max(abs(x) for x in o.scale) - min(abs(x) for x in o.scale) > 1e-4], 'aplique antes de exportar/usar colisao')
-    add('INFO', 'escala uniforme nao aplicada (!= 1)', ['%s %s' % (o.name, f(o.scale[0])) for o in meshes if all(abs(x - o.scale[0]) <= 1e-4 for x in o.scale) and abs(o.scale[0] - 1) > 1e-4])
+    add('AVISO', 'escala negativa (normais invertidas na exportacao)', [o.name for o in xf if any(x < 0 for x in o.scale)], 'aplique a escala (Ctrl+A) e recalcule normais', names=True)
+    add('AVISO', 'escala nao uniforme', ['%s %s' % (o.name, vec(o.scale)) for o in xf if max(abs(x) for x in o.scale) - min(abs(x) for x in o.scale) > 1e-4], 'aplique antes de exportar/usar colisao')
+    uni = [o for o in xf if all(abs(x - o.scale[0]) <= 1e-4 for x in o.scale) and abs(o.scale[0] - 1) > 1e-4 and o.scale[0] > 0]
+    add('AVISO', 'escala uniforme >=10x ou <=0.1x (tipico de unidades cm/m trocadas; o no exportado herda a escala)', ['%s %s' % (o.name, f(o.scale[0])) for o in uni if max(o.scale[0], 1 / o.scale[0]) >= 10],
+        'aplique a escala (armature: aplique com os filhos e confira as actions)')
+    add('INFO', 'escala uniforme nao aplicada (!= 1)', ['%s %s' % (o.name, f(o.scale[0])) for o in uni if max(o.scale[0], 1 / o.scale[0]) < 10])
     add('INFO', 'rotacao nao aplicada', [o.name for o in meshes if o.rotation_mode not in ('QUATERNION', 'AXIS_ANGLE') and any(abs(a) > 1e-5 for a in o.rotation_euler)], 'normal em objetos posicionados; aplique so em assets exportados isolados', names=True)
     budget = [POLY_BUDGET]
     users = {}
@@ -720,18 +961,20 @@ def audit():
     add('INFO', 'malhas nao verificadas para n-gons (orcamento de %s poligonos)' % k(POLY_BUDGET), skipped)
     add('AVISO', 'malhas sem faces', [o.name for o in meshes if len(o.data.polygons) == 0], 'ok se for guia/wire intencional', names=True)
     add('AVISO', 'slots de material vazios', ['%s[%d]' % (o.name, i) for o in objs for i, s in enumerate(g(o, 'material_slots', [])) if not s.material])
-    add('AVISO', 'malhas sem material', [o.name for o in meshes if not len(o.material_slots) and len(o.data.polygons)], names=True)
+    add('AVISO', 'malhas sem material', [o.name for o in visual if not len(o.material_slots) and len(o.data.polygons)], names=True)
     used = set(s.material.name for o in D.objects for s in g(o, 'material_slots', []) if s.material)
     add('INFO', 'materiais sem objetos (so fake user ou orfaos; somem ao salvar sem fake user)', [m.name for m in D.materials if m.name not in used and not m.library and not g(m, 'is_grease_pencil')])
     add('INFO', 'imagens sem usuarios', [i.name for i in D.images if i.users == 0 or i.users == 1 and i.use_fake_user])
     add('AVISO', 'imagens com caminho absoluto (quebra ao mover o projeto)', [i.name for i in D.images if g(i, 'source') in ('FILE', 'TILED') and i.filepath and not i.filepath.startswith('//') and not g(i, 'packed_file') and not i.library])
     uvless = []
-    for o in meshes:
+    for o in visual:
         if not len(g(o.data, 'uv_layers', [])) and len(o.data.polygons):
             if any(s.material and g(s.material, 'node_tree') and any(n.type == 'TEX_IMAGE' for n in s.material.node_tree.nodes) for s in o.material_slots):
                 uvless.append(o.name)
     add('AVISO', 'textura de imagem sem mapa UV', uvless, names=True)
-    add('AVISO', 'shape keys + modificadores (exportadores nao aplicam modificadores com shape keys)', [o.name for o in meshes if g(o.data, 'shape_keys') and len(o.modifiers)], names=True)
+    add('AVISO', 'shape keys + modificadores alem de Armature (exportadores nao aplicam modificadores com shape keys)',
+        [o.name for o in meshes if g(o.data, 'shape_keys') and any(m.type != 'ARMATURE' and m.show_viewport for m in o.modifiers)], names=True)
+    rig_checks(objs, add)
     add('AVISO', 'modificador Armature sem grupos de vertices', [o.name for o in meshes if any(m.type == 'ARMATURE' for m in o.modifiers) and not len(o.vertex_groups)], names=True)
     add('AVISO', 'modificador Armature sem objeto', ['%s/%s' % (o.name, m.name) for o in objs for m in o.modifiers if m.type == 'ARMATURE' and not g(m, 'object')])
     add('AVISO', 'modificador Boolean sem objeto/colecao', ['%s/%s' % (o.name, m.name) for o in objs for m in o.modifiers if m.type == 'BOOLEAN' and not g(m, 'object') and not g(m, 'collection')])
@@ -752,8 +995,39 @@ def audit():
     add('AVISO', 'espaco de cor suspeito (dados devem ser Non-Color)', cs_bad)
     dup = sorted(set(x.name for c in ('objects', 'materials', 'images') for x in getattr(D, c) if not x.library and len(x.name) > 4 and x.name[-4] == '.' and x.name[-3:].isdigit()))
     add('INFO', 'nomes com sufixo .001 (duplicatas; nomes viram nomes de no/material na engine)', dup)
-    heavy = [(mesh_counts(o.data)[2], o.name) for o in meshes]
-    add('INFO', 'malhas acima de 100k triangulos (base)', ['%s t%s' % (n, k(t)) for t, n in sorted(heavy, reverse=True) if t > 100_000])
+    heavy = []
+    for o in meshes:
+        e, t = estimate(o), mesh_counts(o.data)[2]
+        heavy.append((e[1] if e else t, o.name, t, bool(e and e[2])))
+    add('INFO', 'malhas acima de 100k triangulos (apos modificadores, estimado)', ['%s t%s%s%s' % (n, k(t), '?' if u else '', '' if t == b else ' (base t%s)' % k(b))
+                                                                               for t, n, b, u in sorted(heavy, reverse=True) if t > 100_000])
+    pot, big = [], []
+    for i in D.images:
+        if i.users and g(i, 'source') in ('FILE', 'TILED') and i.name in wired | loose:
+            d = img_dims(i)
+            if d:
+                w, h = map(int, d.split('x'))
+                if w & (w - 1) or h & (h - 1):
+                    pot.append('%s %s' % (i.name, d))
+                if max(w, h) >= 4096:
+                    big.append('%s %s' % (i.name, d))
+    add('AVISO', 'texturas com lado nao potencia de 2 (sem compressao/mipmaps eficientes em algumas engines)', pot, 'redimensione para 2^n (512, 1024, 2048)')
+    add('INFO', 'texturas >= 4096 px (memoria de GPU; confira o limite do alvo)', big)
+    drv = []
+    for c in ('objects', 'meshes', 'shape_keys', 'materials', 'armatures', 'node_groups'):
+        for idb in getattr(D, c):
+            ad = g(idb, 'animation_data')
+            for d in (ad.drivers if ad else []):
+                drv.append('%s: %s (%s)' % (key_owner(idb) if c == 'shape_keys' else idb.name, d.data_path, d.driver.type))
+    add('INFO', 'drivers (engines nao importam drivers; expressoes Python nunca sao avaliadas aqui)', drv, 'asse em keyframes/shape keys se o efeito precisa ir para a engine')
+    far = []
+    for o in visual:
+        bb = [tuple(c) for c in o.bound_box]
+        lo, hi = [min(c[a] for c in bb) for a in range(3)], [max(c[a] for c in bb) for a in range(3)]
+        size = max(hi[a] - lo[a] for a in range(3))
+        if size > 0 and any(lo[a] - 0.25 * size > 0 or hi[a] + 0.25 * size < 0 for a in range(3)):
+            far.append(o.name)
+    add('INFO', 'origem fora da geometria (pivo deslocado na engine)', far, 'ok em cenas montadas; em asset isolado use Origin to Geometry/3D cursor', names=True)
     us = sc.unit_settings
     if abs(us.scale_length - 1) > 1e-6:
         add('INFO', 'escala de unidade da cena != 1', ['scale_length %s' % f(us.scale_length)], 'exportadores glTF/FBX podem aplicar ou ignorar; confira o importador')
@@ -765,23 +1039,50 @@ def audit():
         out.append('[%s] %s: %s%s' % (sev, title, '; '.join(more(items, EX)), ' -> ' + hint if hint else ''))
     if not checks:
         out.append('nenhum problema nas verificacoes cobertas.')
-    out.append('nao cobre: geometria nao-manifold, vertices soltos/duplicados, normais invertidas de faces, sobreposicao de UV, pesos de skin, resultado apos modificadores, texturas que so existem na engine. Detalhe: mode=object object=<nome>.')
+    out.append('nao cobre: geometria nao-manifold, vertices soltos/duplicados, normais invertidas de faces, sobreposicao de UV, qualidade dos pesos de skin, geometria real apos nos/booleanos, dimensoes de texturas fora de PNG/JPEG. Detalhe: mode=object object=<nome>.')
     return out
+
+
+MODES = {'summary': summary, 'object': object_mode, 'materials': materials, 'images': images, 'audit': audit, 'libraries': libraries}
+
+
+def render(mode):
+    # Nomes com quebras/controles nao podem forjar linhas da resposta.
+    text = '\n'.join(re.sub(r'[\x00-\x1f\x7f]', '?', line) for line in MODES[mode]())
+    return text[:400_000] + ('\n[saida truncada]' if len(text) > 400_000 else '')
 
 
 def main():
     want = ARGS.get('file')
-    if want and os.path.normcase(os.path.realpath(bpy.data.filepath or '')) != os.path.normcase(os.path.realpath(want)):
-        raise Exception('Blender nao abriu o arquivo pedido (versao incompativel ou arquivo corrompido); veja o log.')
     mode = ARGS.get('mode', 'summary')
-    fn = {'summary': summary, 'object': object_mode, 'materials': materials, 'images': images, 'audit': audit, 'libraries': libraries}.get(mode)
-    if not fn:
-        raise Exception('mode invalido')
-    # Nomes com quebras/controles nao podem forjar linhas da resposta.
-    text = '\n'.join(re.sub(r'[\x00-\x1f\x7f]', '?', line) for line in fn())
-    return {'text': text[:400_000] + ('\n[saida truncada]' if len(text) > 400_000 else ''), 'deps': deps()}
+    if mode not in MODES or not want:
+        raise Exception('mode/arquivo invalido')
+    bpy.app.handlers.load_post.append(bpy.app.handlers.persistent(lambda *a: throttle_heavy()))  # sem persistent o load limpa o handler
+    try:
+        # use_scripts=False reforca o -Y: drivers Python e text blocks registrados nao executam.
+        bpy.ops.wm.open_mainfile(filepath=want, load_ui=False, use_scripts=False)
+    except Exception as e:
+        raise Exception('Blender nao abriu o arquivo pedido (versao incompativel ou arquivo corrompido): %s' % str(e).strip()[:300])
+    finally:
+        bpy.app.handlers.load_post.clear()
+    if os.path.normcase(os.path.realpath(bpy.data.filepath or '')) != os.path.normcase(os.path.realpath(want)):
+        raise Exception('Blender nao abriu o arquivo pedido (versao incompativel ou arquivo corrompido); veja o log.')
+    res = {'text': render(mode)}
+    # Companheiros: os outros modos com os mesmos filtros saem da mesma abertura (custo de ms) e vao para o cache do app.
+    if ARGS.get('companions') and mode != 'object':
+        res['more'] = {}
+        for m in ('summary', 'audit', 'materials', 'images', 'libraries'):
+            if m != mode and (m in ('summary', 'audit') or not ARGS.get('scene')):
+                try:
+                    res['more'][m] = render(m)
+                except Exception:
+                    pass
+    res['deps'] = deps()
+    return res
 
 
+if hasattr(signal, 'alarm') and ARGS.get('deadline'):
+    signal.alarm(int(ARGS['deadline']))  # POSIX: SIGALRM encerra o processo mesmo se o app morrer sem mata-lo (sem orfaos)
 try:
     res = main()
 except Exception as e:  # erro legivel; o traceback fica no log do processo

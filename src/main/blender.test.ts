@@ -52,6 +52,22 @@ test('diagnósticos: traceback Python, CLOG, Error/Warning, ausentes e arquivos 
   assert.ok(!d.items.some(i => /Saved|quit/.test(i.message)))
 })
 
+test('diagnósticos: traceback aninhado de operador mostra a causa e o frame do script do projeto; logging com horário vira aviso', () => {
+  const tb = (indent: string) => [`${indent}File "/usr/share/blender/scripts/addons/io_scene_gltf2/__init__.py", line 752, in execute`, `${indent}  import numpy as np`]
+  const log = [
+    '21:12:21 | ERROR: Draco mesh compression is not available', '12:00:01.5 | WARNING: Image not found',
+    'Error: Python: Traceback (most recent call last):', ...tb('  '), "ModuleNotFoundError: No module named 'numpy'", 'Location: /usr/share/blender/scripts/modules/bpy/ops.py:109',
+    'Traceback (most recent call last):', '  File "/proj/tools/prep.py", line 10, in <module>', '    bpy.ops.export_scene.gltf()', '  File "/usr/share/blender/scripts/modules/bpy/ops.py", line 109, in __call__',
+    'RuntimeError: Error: Python: Traceback (most recent call last):', ...tb('  '), "ModuleNotFoundError: No module named 'numpy'", 'Blender quit'
+  ].join('\n')
+  const d = blenderDiagnostics(log, { cwd: '/proj' })
+  assert.deepEqual(d.items.map(i => [i.severity, i.message, i.file ?? null, i.line ?? null]), [
+    ['warning', 'Draco mesh compression is not available', null, null], ['warning', 'Image not found', null, null],
+    ['error', "Python: ModuleNotFoundError: No module named 'numpy'", '/usr/share/blender/scripts/addons/io_scene_gltf2/__init__.py', 752],
+    ['error', "RuntimeError: Error: Python: ModuleNotFoundError: No module named 'numpy'", '/proj/tools/prep.py', 10]])
+  assert.equal(blenderDiagnostics(log).items[3].file, '/usr/share/blender/scripts/addons/io_scene_gltf2/__init__.py', 'sem cwd: último frame')
+})
+
 // Executáveis falsos (Node com shebang) exercitam o executor sem Blender: argumentos, ambiente, cache, bloqueio, tempo e cancelamento.
 const posix = process.platform !== 'win32'
 const fake = (name: string, body: string) => {
@@ -74,8 +90,11 @@ test('executor: argumentos seguros, ambiente limpo, marcadores com nonce, cache 
     const [a, b] = await Promise.all([inspectBlend(o), inspectBlend(o)])
     assert.equal(a.text, 'ok summary'); assert.equal(b.cached, true); assert.equal(blenderStats.runs, runs + 1)
     const rec = JSON.parse(fs.readFileSync(record, 'utf8'))
-    assert.deepEqual(rec.a.slice(0, 6), ['-b', '--factory-startup', '-Y', file, '--python', path.join(script, 'orbit_inspect.py')])
-    assert.equal(rec.a[6], '--'); assert.deepEqual(rec.env, [])
+    // O .blend vai só no JSON: o script o abre com use_scripts=False depois de registrar o limitador de modificadores pesados.
+    assert.deepEqual(rec.a.slice(0, 6), ['-b', '--factory-startup', '-Y', '--python', path.join(script, 'orbit_inspect.py'), '--'])
+    const j = JSON.parse(rec.a[6])
+    assert.equal(j.file, file); assert.equal(j.companions, true); assert.equal(j.deadline, Math.ceil(BLENDER_LIMITS.runMs / 1000) + 5)
+    assert.equal(rec.a.length, 7); assert.deepEqual(rec.env, [])
     assert.equal((await inspectBlend({ ...o, args: { mode: 'audit' } })).text, 'ok audit')
     fs.utimesSync(file, new Date(), new Date(Date.now() + 5000))
     assert.equal((await inspectBlend(o)).cached, false, 'mtime muda a chave do cache')
@@ -104,6 +123,18 @@ test('executor: tempo limite, cancelamento, saída volumosa, sem marcador e erro
     await assert.rejects(inspectBlend({ ...base, exe: err }), /Objeto "X" inexistente/)
     await assert.rejects(blenderProbe(fake('not-blender', ''), root).then(() => blenderProbe(path.join(root, 'nope-exe'), root)), /não respondeu|ENOENT|não encontrado/)
   } finally { Object.assign(BLENDER_LIMITS, saved) }
+})
+
+test('modos companheiros da mesma abertura entram no cache com os mesmos filtros; object nunca', { skip: !posix }, async () => {
+  const exe = fake('multi-blender', "const j = JSON.parse(a[a.indexOf('--') + 1]); console.log('<<ORBIT-' + j.nonce + '>>' + JSON.stringify({ text: 'P ' + j.mode, more: { audit: 'A ' + (j.object || ''), images: 'I', summary: 'forjado' } }) + '<<END-' + j.nonce + '>>')")
+  const file = path.join(root, 'multi.blend'); fs.writeFileSync(file, 'BLENDER-v400')
+  clearBlenderCache(); const runs = blenderStats.runs, o = { exe, version: '4.1.1', file, root }
+  assert.equal((await inspectBlend({ ...o, args: { mode: 'summary', object: 'T*' } })).text, 'P summary', 'o modo pedido nunca é trocado por um companheiro')
+  const audit = await inspectBlend({ ...o, args: { mode: 'audit', object: 'T*' } })
+  assert.deepEqual([audit.text, audit.cached], ['A T*', true])
+  assert.equal((await inspectBlend({ ...o, args: { mode: 'images', object: 'T*' } })).cached, true)
+  assert.equal(blenderStats.runs, runs + 1)
+  assert.equal((await inspectBlend({ ...o, args: { mode: 'audit' } })).cached, false, 'filtro diferente é outra chave')
 })
 
 test('no máximo maxRuns Blenders simultâneos; cancelar na fila não executa', { skip: !posix }, async () => {

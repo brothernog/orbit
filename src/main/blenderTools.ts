@@ -11,7 +11,7 @@ import type { ToolCtx } from './taskContext.ts'
 const MODES = ['summary', 'object', 'materials', 'images', 'audit', 'libraries']
 export const BLENDER_TOOLS: ToolDef[] = [
   { name: 'blender_project', description: 'Blender local: versão do executável e arquivos .blend (tamanho, versão do cabeçalho, compressão, backups). Não abre os arquivos.', inputSchema: schema(pageArgs) },
-  { name: 'blender_scene', description: 'Fatos de um .blend: abre o Blender local em segundo plano com scripts embutidos desativados; nunca salva; cacheado. mode: summary (padrão), object (object=nome exato), materials, images, libraries, audit (antes de exportar). Nos demais modos object = filtro glob de nomes.', inputSchema: schema({ path: { type: 'string' }, mode: { type: 'string', enum: MODES }, object: { type: 'string' }, scene: { type: 'string' }, ...pageArgs }, ['path']) },
+  { name: 'blender_scene', description: 'Fatos de um .blend: abre o Blender local em segundo plano com scripts embutidos desativados; nunca salva; cacheado. mode: summary (padrão), object (object=nome exato), materials, images, libraries, audit (antes de exportar: transformações, UV, texturas, skin/rig). Nos demais modos object = filtro glob de nomes.', inputSchema: schema({ path: { type: 'string' }, mode: { type: 'string', enum: MODES }, object: { type: 'string' }, scene: { type: 'string' }, ...pageArgs }, ['path']) },
   { name: 'blender_diagnostics', description: 'Agrupa tracebacks Python, erros e avisos de um log do Blender (.log/.txt no workspace). detail = índice; raw = log paginado.', inputSchema: schema({ path: { type: 'string' }, detail: { type: 'integer', minimum: 0 }, raw: { type: 'boolean' }, ...pageArgs }, ['path']) }
 ]
 const INTERNAL = ['.git', '.worktrees', 'node_modules']
@@ -50,7 +50,7 @@ async function scene(c: Local, a: any, lim: ContextLimits, signal?: AbortSignal)
   const warn = newerThan(header?.version ?? null, probe.version) ? `ATENÇÃO: arquivo salvo no Blender ${header!.version}, mais novo que o local ${probe.version}; dados novos podem faltar.\n` : ''
   const r = await inspectBlend({ exe: probe.exe, version: probe.version, file: f.abs, root: c.cwd, args, signal })
   const body = warn + hideAbsolute(c, r.text)
-  return page(`${f.rel} · ${mode} · Blender ${probe.version}${r.cached ? ' · cache' : ''}`, sha(r.key + body), body, a, lim, 'Somente leitura; malhas base (mode=object inclui após modificadores). Detalhe: mode=object object=<nome>; filtro: object=<glob>.')
+  return page(`${f.rel} · ${mode} · Blender ${probe.version}${r.cached ? ' · cache' : ''}`, sha(r.key + body), body, a, lim, 'Somente leitura; t=malha base, ~t=estimado após modificadores. Detalhe: mode=object object=<nome>; filtro: object=<glob>.')
 }
 
 function diagnostics(c: Local, a: any, lim: ContextLimits) {
@@ -58,7 +58,7 @@ function diagnostics(c: Local, a: any, lim: ContextLimits) {
   if (!/\.(?:log|txt)$/i.test(file.rel)) fail('path deve indicar um log textual .log ou .txt do Blender.')
   if (a.raw !== undefined && typeof a.raw !== 'boolean') fail('raw inválido.')
   if (a.raw && a.detail !== undefined) fail('Selecione raw ou detail.')
-  const diag = blenderDiagnostics(file.text)
+  const diag = blenderDiagnostics(file.text, { cwd: c.cwd })
   let body = `${diag.errorCount} erro(s), ${diag.warningCount} aviso(s), ${diag.items.length} diagnóstico(s) distintos em ${diag.totalLines} linhas. Ausência de diagnóstico reconhecido não prova sucesso.\n`
   if (a.raw) body = hideAbsolute(c, file.text)
   else if (a.detail !== undefined) {

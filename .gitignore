@@ -13,3 +13,4 @@ GEMINI.md
 .claude/
 docs/
 marketing/
+__pycache__/
