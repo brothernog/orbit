@@ -68,7 +68,7 @@ test('Engine flow: opções validadas, nome manual preservado e preparação at�
     assert.throws(() => f.prepare('open', { file: 'models/a.blend', toString: 'x' }), /Opções/)
     assert.throws(() => prepareEngine(f.db, f.cwd, f.cwd, 'godot', 'open', {}, f.probe), /Engine inválida/)
     assert.throws(() => prepareEngine(f.db, f.cwd, f.cwd, 'unity', 'open', {}, f.probe), /Unity|Ative/)
-    assert.throws(() => engineRecipe('unity'), /Unity ainda não/)
+    assert.equal(engineRecipe('unity').actions.includes('compile'), true)
     assert.throws(() => prepareEngine(f.db, f.cwd, f.cwd, 'blender', 'open', { file: 'models/a.blend' }, { exe: 'blender', version: '4.0' }), /Confira/)
     saveCommands(f.db, f.cwd, [manual]); f.db.exec('BEGIN')
     const command = f.prepare('open', { file: 'models/a.blend' }); assert.deepEqual(projectCommands(f.db, f.cwd), [manual, command]); f.validate(command)

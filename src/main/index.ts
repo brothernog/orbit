@@ -796,7 +796,8 @@ const handlers: Record<string, (...a: any[]) => any> = {
   engineDiagnostics: (taskId: number, engine: unknown, commandId: unknown) => {
     const e = flowEngine(engine), t = asTask(taskId), run = listCommandRuns(db, t.id).find(r => r.id === asInt(commandId, 'comando')) ?? fail('Comando de outra tarefa ou fora do histórico disponível.')
     if (!isEngineCommand(e, run.name)) fail('Selecione um comando desta engine.')
-    return { run, ...engineRecipe(e).diagnostics(run.output) }
+    const command = { name: run.name, purpose: 'test' as const, program: run.program, args: JSON.parse(run.args) }
+    return { run, ...engineRecipe(e).diagnostics(run.output, { command, cwd: run.workspace }) }
   },
   registerGodotBuild: (taskId: number, commandId: unknown, raw: any) => {
     const t = asTask(taskId), cwd = taskCwd(t), id = asInt(commandId, 'comando')

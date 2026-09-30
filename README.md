@@ -79,6 +79,29 @@ As respostas iniciais são limitadas por `queryChars`, com continuação por off
 
 As consultas não executam Godot nem acrescentam uma chamada de IA. Os três schemas entram apenas nas invocações elegíveis; o agente pede detalhes quando precisa deles. Isso pode reduzir payload e leituras repetidas, mas schemas e chamadas também têm custo: os testes medem caracteres, não economia real de tokens nem qualidade de um jogo. A integração MCP atual cobre Claude, Codex e OpenCode; Gemini e o terminal interativo não recebem essas ferramentas. O painel de comandos locais funciona independentemente do provedor de IA.
 
+## Unity e Blender
+
+Funcionam como o Godot: em **Configurar organizador…**, marque **Ativar integração Unity** ou **Ativar integração Blender** e informe o executável (vazio usa `unity`/`blender` no PATH). Ativar não inicia engine nem IA; vale só para os projetos desse organizador e só concede ferramentas a agentes invocados dentro dele.
+
+Ferramentas MCP de leitura (Claude, Codex e OpenCode), cada uma paginada por `queryChars` com offset e hash:
+
+- `unity_project`: versão do editor, pacotes, render pipeline, input, cenas do build, asmdefs (quais são de teste), tags/layers e serialização.
+- `unity_asset`: hierarquia de cenas, prefabs e assets YAML, com componente e propriedade brutos sob demanda; assets binários não são lidos.
+- `unity_refs`: GUID via `.meta`, nos dois sentidos, e quem cita um GUID antes de renomear ou apagar. Zero usos não prova que é seguro apagar.
+- `unity_diagnostics`: erros agrupados de um `Editor.log`/`-logFile` ou do XML NUnit de `-testResults`.
+- `blender_project`: versão do Blender local e arquivos `.blend` (cabeçalho, tamanho, backups), sem abri-los.
+- `blender_scene`: fatos de um `.blend` com o Blender em segundo plano, scripts embutidos desativados (`-Y`), sem salvar e com cache.
+- `blender_diagnostics`: tracebacks e erros de um log do Blender escolhido.
+
+As skills `unity` e `blender` (lidas por `read_task_skill` só quando a engine foi concedida) orientam a ordem das consultas e as alterações seguras.
+
+Os painéis **Unity local** e **Blender local** seguem o modelo do Godot: **Verificar instalação**, **Preparar comando para revisão** (programa, argumentos e, quando houver, o conteúdo do código que será executado) e **Executar** como ação separada. Trocar pasta, organizador, configuração, binário ou argumentos recalculados exige nova preparação.
+
+- **Unity** (batchmode, `-projectPath .`, `-logFile` novo dentro do projeto): importar e compilar; testes EditMode/PlayMode com filtro opcional e `-testResults`; build Windows/macOS/Linux das cenas ativas em Build Settings, numa pasta vazia ou nova; `-executeMethod` de um método `static` encontrado num `.cs` de `Assets/`, cujo arquivo fica fixado por hash; abrir o editor. O Unity não tem `--version` rápido: a versão vem do caminho de instalação do Hub (ou do `Info.plist` no macOS) e é comparada com `ProjectVersion.txt` só como aviso. Testes que falham reprovam o comando com o resumo do XML, com exit 2 ou 0; erros do log e arquivos esperados ausentes também reprovam.
+- **Blender**: renderizar um quadro PNG, exportar `.glb` com o exportador padrão, executar um script Python revisado (fixado por hash) e abrir o arquivo. Sempre com `-Y` e destinos novos.
+
+Não coberto: Android/iOS/WebGL e demais alvos Unity, perfis de build, licença e instalação de módulos, e o código de editor do projeto (`[InitializeOnLoad]`, pós-processadores) que o Unity executa ao abrir o projeto em qualquer ação, sem revisão pelo painel. Comandos de teste e build têm limite de 15 minutos; a primeira importação de um projeto grande pode excedê-lo. Os testes automatizados usam um Unity falso; o Unity real não foi executado neste ambiente. Como no Godot, a economia foi medida em caracteres nos testes, não em tokens reais de provedor.
+
 ## Backup e restauração
 
 Em **Configurações > Dados**, **Criar backup…** grava uma pasta nova no destino escolhido: banco SQLite, anexos das conversas, snapshots de assets/builds, screenshots de playtests e `linkedin/perfil.md`, `rascunhos/` e `videos/`. O manifesto registra tamanho e SHA-256; guarde a pasta inteira. Arquivos dos projetos e worktrees, logins/configurações e sessões nativas das CLIs, cofre do LinkedIn, caches e preferências de navegação do Electron ficam fora. Faça uma cópia própria dos projetos.

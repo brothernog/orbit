@@ -8,6 +8,7 @@ import { projectCommands, saveCommands, type ProjectCommand } from './commands.t
 import { ENGINE_LABELS, engineOrganizer } from './engines.ts'
 import { samePath, safeJoin } from './guard.ts'
 import { BLENDER_RECIPE } from './blenderFlow.ts'
+import { UNITY_RECIPE } from './unityFlow.ts'
 
 export const FLOW_ENGINES = ['unity', 'blender'] as const
 export type FlowEngine = typeof FLOW_ENGINES[number]
@@ -15,17 +16,19 @@ export type EngineProbe = { exe: string; version: string }
 export type EngineDiagnostic = { severity: 'error' | 'warning' | 'info'; message: string; file?: string; line?: number; count: number }
 export type EngineReview = { file: string; text: string; truncated: boolean }
 // O que cada engine fornece ao fluxo. build valida e monta o comando (nome "<Engine> · ..."); pins são arquivos relativos
-// cujo conteúdo fica fixado até a execução; outputs são arquivos que a execução precisa produzir.
+// cujo conteúdo fica fixado até a execução; outputs são arquivos que a execução precisa produzir. diagnostics recebe o comando e a
+// pasta da execução quando a engine grava o log em arquivo (Unity -logFile); verdict reprova antes dos erros genéricos (ex.: testes).
 export type EngineRecipe = {
   actions: readonly string[]
   fields: Record<string, 'string' | 'integer' | 'boolean'>
   probe: (executable: string, cwd: string) => Promise<EngineProbe>
   build: (cwd: string, exe: string, action: string, args: Record<string, unknown>) => { command: ProjectCommand; pins: string[] }
   outputs: (command: ProjectCommand) => string[]
-  diagnostics: (output: string) => { items: EngineDiagnostic[]; errorCount: number; warningCount: number; totalLines: number }
+  diagnostics: (output: string, run?: { command: ProjectCommand; cwd: string }) => { items: EngineDiagnostic[]; errorCount: number; warningCount: number; totalLines: number }
+  verdict?: (command: ProjectCommand, cwd: string) => string | undefined
   details: (cwd: string) => Promise<unknown>
 }
-const RECIPES: Partial<Record<FlowEngine, EngineRecipe>> = { blender: BLENDER_RECIPE }
+const RECIPES: Partial<Record<FlowEngine, EngineRecipe>> = { unity: UNITY_RECIPE, blender: BLENDER_RECIPE }
 
 type BinaryIdentity = { path: string; size: number; mtime: number; dev: number; ino: number; birthtime: number }
 type Plan = { engine: FlowEngine; organizerId: string; configExecutable: string; workspace: string; action: string; args: Record<string, unknown>; command: ProjectCommand; executableIdentity: BinaryIdentity; version: string; pins: Record<string, string> }
@@ -109,7 +112,9 @@ export function validatePreparedEngine(db: DatabaseSync, game: string, cwd: stri
 export function engineCommandError(command: ProjectCommand, output: string, truncated: boolean, cwd: string): string | undefined {
   const e = engineOfCommand(command), recipe = e && RECIPES[e]
   if (!e || !recipe) return undefined
-  const label = ENGINE_LABELS[e], errors = recipe.diagnostics(output).errorCount
+  const label = ENGINE_LABELS[e], verdict = recipe.verdict?.(command, cwd)
+  if (verdict) return verdict
+  const errors = recipe.diagnostics(output, { command, cwd }).errorCount
   if (errors) return `${label} informou ${errors} erro(s); consulte os diagnósticos. Exit 0 não comprova o resultado.`
   if (truncated) return `Saída ${label} truncada: não foi possível confirmar ausência de erros. Consulte o log completo e execute novamente.`
   const missing = recipe.outputs(command).find(rel => { try { const f = safeJoin(cwd, rel), s = fs.lstatSync(f); return !s.isFile() || !s.size } catch { return true } })
