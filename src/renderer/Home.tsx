@@ -40,11 +40,14 @@ export function RoadmapCard({ games, initial, todo, onOpen, fixed }: { games: st
   useEffect(() => { if (!game && initial) setGame(initial) }, [initial])
   useEffect(() => {
     if (!game) return
+    let live = true
     setDoc(undefined); setErr('')
     api.listDocs(game).then(async (d: string[]) => {
       const r = d.filter(p => name(p).toLowerCase() === 'roadmap.md').sort((a, b) => depth(a) - depth(b) || a.length - b.length)[0]
-      setDoc(r ? { path: r, text: await api.readDoc(game, r) } : null)
-    }, e => { setErr(errText(e)); setDoc(null) })
+      const found = r ? { path: r, text: await api.readDoc(game, r) as string } : null
+      if (live) setDoc(found)
+    }).catch(e => { if (live) { setErr(errText(e)); setDoc(null) } })
+    return () => { live = false }
   }, [game])
 
   const lines = doc?.text.split('\n') ?? []
