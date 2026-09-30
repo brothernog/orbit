@@ -572,7 +572,7 @@ try {
   const wtWrite=async(dir,...args)=>{const end=Date.now()+5000;for(;;){try{return execFileSync('git',args,{cwd:dir,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim()}catch(e){if(Date.now()>=end||!/Unable to create [\s\S]*index\.lock['"]?: File exists/.test(String(e.stderr??e.message)))throw e;await sleep(100)}}}
   wtGit(projGit,'config','user.name','Fixture');wtGit(projGit,'config','user.email','fixture@users.noreply.github.com')
   wtGit(projGit,'config','core.autocrlf','false') // bytes da fixture independem da configuração global do Windows
-  const wtSource=iso.value.worktree,wtBranch=iso.value.branch,wtCalls=argvLog().length
+  const wtSource=iso.value.worktree,wtReal=fs.realpathSync.native(iso.value.worktree),projGitReal=fs.realpathSync.native(projGit),wtBranch=iso.value.branch,wtCalls=argvLog().length
   const wtHistory=(await inv(ev,'taskChat',tg,{provider:'codex'})).value.messages
   fs.writeFileSync(path.join(wtSource,'delivery-e2e.txt'),'Entrega revisada E2E\n')
   fs.writeFileSync(path.join(wtSource,'.gitignore'),'ignored-e2e.txt\n')
@@ -582,7 +582,7 @@ try {
   wtGit(wtSource,'add','newer-e2e.txt');wtGit(wtSource,'commit','-m','Atualiza entrega E2E')
   check('worktrees: prévia obsoleta não inicia merge nem avança destino',!(await inv(ev,'beginWorktreeMerge',gameGit,wtSource,obsoleteMerge.token)).ok&&wtGit(projGit,'rev-parse','HEAD')===obsoleteMerge.target.head&&!(await inv(ev,'worktreeView',gameGit)).value.pending)
   const validMerge=(await inv(ev,'previewWorktreeMerge',gameGit,wtSource)).value
-  check('worktrees: prévia mostra origem, destino, commits e arquivos exatos',validMerge.source.path.toLowerCase()===wtSource.toLowerCase()&&validMerge.target.path.toLowerCase()===projGit.toLowerCase()&&validMerge.commits.length===2&&['.gitignore','delivery-e2e.txt','newer-e2e.txt'].every(p=>validMerge.files.includes(p)))
+  check('worktrees: prévia mostra origem, destino, commits e arquivos exatos',validMerge.source.path.toLowerCase()===wtReal.toLowerCase()&&validMerge.target.path.toLowerCase()===projGitReal.toLowerCase()&&validMerge.commits.length===2&&['.gitignore','delivery-e2e.txt','newer-e2e.txt'].every(p=>validMerge.files.includes(p)))
   const wtWait=async predicate=>{const end=Date.now()+15000;let last;while(Date.now()<end){last=await inv(ev,'worktreeView',gameGit);if(last.ok&&predicate(last.value)){await sleep(150);return last.value}await sleep(150)}throw Error('Estado da worktree não chegou: '+JSON.stringify(last))}
   const wtUI=async(expression,label)=>{const end=Date.now()+20000;while(Date.now()<end){if(await ev(expression))return;await sleep(200)}throw Error('Interface não chegou: '+label)}
   const wtProject=async()=>{
@@ -593,11 +593,11 @@ try {
   const wtButton=async label=>{
     const until=Date.now()+20000
     while(Date.now()<until){if(await ev(`(() => {const b=[...document.querySelectorAll('.wt button')].find(b=>b.textContent===${JSON.stringify(label)}&&!b.disabled);if(!b)return false;b.click();return true})()`)){await sleep(350);return}await sleep(200)}
-    throw Error('Ação de worktree não ficou disponível: '+label)
+    throw Error('Ação de worktree não ficou disponível: '+label+' '+await ev("JSON.stringify({tab:document.querySelector('.br-dirs [aria-selected=true]')?.title,wt:document.querySelector('.wt')?.textContent?.slice(0,400)??null})"))
   }
   const wtConfirm=async label=>{await ev(`(() => {const b=[...document.querySelectorAll('.confirm button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b)throw Error('Confirmação de worktree ausente');b.click()})()`);await sleep(200)}
   const wtSelect=async()=>{
-    const predicate=`[...document.querySelectorAll('.br-dirs [role=tab]')].find(b=>b.title.replace(/\\\\/g,'/').toLowerCase()===${JSON.stringify(fs.realpathSync.native(wtSource).replace(/\\/g,'/').toLowerCase())})` // abas mostram o caminho do git (real, sem nome curto 8.3)
+    const predicate=`[...document.querySelectorAll('.br-dirs [role=tab]')].find(b=>b.title.replace(/\\\\/g,'/').toLowerCase()===${JSON.stringify(wtReal.replace(/\\/g,'/').toLowerCase())})` // o app devolve caminhos reais (sem nome curto 8.3)
     const until=Date.now()+20000
     while(Date.now()<until){if(await ev(`!!(${predicate})`)){await ev(`(${predicate}).click()`);await sleep(500);return}await sleep(200)}
     throw Error('Abas da worktree não carregaram: '+await ev("JSON.stringify({tabs:[...document.querySelectorAll('.br-dirs [role=tab]')].map(b=>b.title),branch:document.querySelector('.branch')?.textContent})"))
@@ -662,7 +662,7 @@ try {
   }
   await wtSelect();await wtButton('Atualizar worktrees');await wtButton('Prévia da limpeza')
   await wtButton('Remover worktree');await wtConfirm('Remover worktree')
-  await wtWait(v=>!v.sources.some(s=>s.path.toLowerCase()===wtSource.toLowerCase()))
+  await wtWait(v=>!v.sources.some(s=>s.path.toLowerCase()===wtReal.toLowerCase()))
   const afterWTCleanup=(await inv(ev,'taskChat',tg,{provider:'codex'})).value
   check('worktrees UI: remoção libera vínculos e sessão preservando histórico e branch',!fs.existsSync(wtSource)&&!afterWTCleanup.task.worktree&&afterWTCleanup.session===null&&wtHistory.every(m=>afterWTCleanup.messages.some(n=>n.id===m.id&&n.text===m.text))&&!!wtGit(projGit,'show-ref','--verify',`refs/heads/${wtBranch}`))
   const cleanupPin=Number((await inv(ev,'addPin',gameGit,'Limpeza de problema E2E','Ordem humana E2E')).value.lastInsertRowid)
