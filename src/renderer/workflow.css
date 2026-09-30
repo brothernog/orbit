@@ -1,0 +1,20 @@
+.workflow { flex-shrink: 0; margin: 0 20px; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+.workflow > summary { cursor: pointer; padding: 10px 0; color: var(--muted); }
+.workflow > summary span { margin-left: 8px; font-variant-numeric: tabular-nums; }
+.workflow-body { max-height: min(260px, 30vh); overflow-y: auto; padding-bottom: 12px; }
+.workflow ol { padding: 0; list-style: none; margin: 0; display: grid; gap: 8px; }
+.workflow li { padding: 10px 12px; background: var(--surface); border-radius: var(--r-sm); }
+.workflow li > div { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.workflow li summary { cursor: pointer; margin: 6px 0; color: var(--muted); }
+.step-state { color: var(--muted); } .step-state.accepted { color: var(--ok); } .step-state.failed { color: var(--hot); } .step-state.review { color: var(--limit); }
+.step-instruction { white-space: pre-wrap; overflow-wrap: anywhere; }
+.step-actions { display: flex; gap: 8px; margin-top: 8px; }
+.workflow form { display: grid; gap: 8px; margin-top: 12px; }
+.workflow input, .workflow textarea { width: 100%; }
+
+.command-list { list-style: none; padding: 0; display: grid; gap: 8px; }
+.command-list code { display: block; margin: 6px 0; overflow-wrap: anywhere; }
+.project-commands .step-actions { flex-wrap: wrap; }
+.command-result { margin: 8px 0; }
+.command-result pre { max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-commands summary { cursor: pointer; }

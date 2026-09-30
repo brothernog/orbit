@@ -1,0 +1,96 @@
+/* Pagina LinkedIn: o mesmo app, um tom mais fundo e anil. A voz do agente e anil; os rascunhos sao papel (como vao aparecer no feed). */
+.li {
+  --li-bg: #0a0d18; --li-voice: #a3b1ff; --li-voice-dim: #a3b1ff33;
+  --paper: #eef1f6; --ink: #1b2130; --ink-soft: #5d6678;
+  flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 380px;
+  background: radial-gradient(900px 420px at 20% -10%, #a3b1ff12, transparent 70%), var(--li-bg);
+}
+
+/* Conversa */
+.li-talk { display: flex; flex-direction: column; min-height: 0; }
+.li-head { display: flex; align-items: center; gap: 14px; padding: 22px 32px 16px; max-width: 760px; width: 100%; margin: 0 auto; }
+.li-head h1 { font-size: 22px; }
+.li-status { color: var(--muted); font-size: 14px; }
+.li-orb { flex: none; width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff 0 8%, var(--li-voice) 30%, #5b6bd6 75%); box-shadow: 0 0 0 4px var(--li-voice-dim); }
+.li-orb.on { animation: li-breathe 1.4s ease-in-out infinite; }
+@keyframes li-breathe { 50% { box-shadow: 0 0 0 7px #a3b1ff1a, 0 0 22px #a3b1ff80; transform: scale(.92); } }
+
+.li-week { margin-left: auto; text-align: right; }
+.li-ticks { display: inline-flex; gap: 4px; }
+.li-ticks i { width: 18px; height: 5px; border-radius: 3px; background: var(--raised); }
+.li-ticks i.on { background: var(--li-voice); }
+.li-week small { font-size: 12px; margin-top: 2px; }
+
+.li-msgs { flex: 1; min-height: 0; overflow: auto; }
+.li-msgs > * { max-width: 760px; margin-left: auto; margin-right: auto; padding-left: 32px; padding-right: 32px; }
+.li-empty { padding-top: 12vh; display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
+.li-empty p { font-size: 17px; color: var(--muted); }
+.li-empty .primary { background: var(--li-voice); color: #0a0d18; }
+.li-you { color: var(--muted); font-size: 14px; margin-top: 22px; }
+.li-you::before { content: 'Você  '; color: var(--faint); }
+.li-agent { margin-top: 6px; font-size: 15px; line-height: 1.65; border-left: 2px solid var(--li-voice-dim); padding-top: 2px; padding-bottom: 2px; }
+.li-agent > .md, .li-agent > small { margin-left: 14px; display: block; }
+.li-agent.streaming { border-left-color: var(--li-voice); }
+.li-agent.failed { border-left-color: var(--hot); }
+.li-msgs > :last-child { margin-bottom: 18px; }
+
+.li-dock { max-width: 760px; width: 100%; margin: 0 auto; padding: 0 32px 20px; display: flex; flex-direction: column; gap: 10px; }
+.li-cmds { display: flex; gap: 6px; flex-wrap: wrap; }
+.li-cmd { font-size: 12.5px; color: var(--muted); background: none; border-color: var(--line-soft); border-radius: 20px; padding: 4px 12px; }
+.li-cmd:hover:not(:disabled) { color: var(--text); border-color: var(--li-voice-dim); background: none; }
+.li-console { display: flex; align-items: flex-end; gap: 10px; padding: 8px 8px 8px 16px; border-radius: 18px; background: var(--surface); border: 1px solid var(--line); transition: border-color .2s, box-shadow .2s; }
+.li-console:focus-within { border-color: #a3b1ff80; box-shadow: 0 0 0 4px #a3b1ff14; }
+.li-console.on { border-color: var(--li-voice-dim); }
+.li-console textarea { flex: 1; min-width: 0; resize: none; field-sizing: content; max-height: 200px; background: none; border: 0; padding: 7px 0; font-size: 15px; }
+.li-console textarea:focus-visible { box-shadow: none; }
+.li-model { align-self: center; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.li-agents { align-self: center; display: inline-flex; padding: 2px; border-radius: 20px; background: var(--li-bg); border: 1px solid var(--line-soft); }
+.li-agents button { font-size: 12px; padding: 3px 10px; border: 0; border-radius: 16px; background: none; color: var(--muted); white-space: nowrap; }
+.li-agents button[aria-checked=true] { background: var(--raised); color: var(--li-voice); }
+.li-console .send:not(.stop):not(:disabled) { background: var(--li-voice); color: #0a0d18; }
+
+/* Mesa: rascunhos como papel */
+.li-desk { min-height: 0; overflow: auto; padding: 22px 22px 24px; border-left: 1px solid var(--line-soft); background: #0c1020; }
+.li-desk-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; }
+.li-desk-head:not(:first-child) { margin-top: 26px; }
+.li-desk-head h2 { font-size: 14px; color: var(--muted); font-weight: 600; }
+.li-desk > .hint { font-size: 13px; }
+.li-drafts { display: flex; flex-direction: column; gap: 16px; }
+.li-paper { background: var(--paper); color: var(--ink); border-radius: 8px; padding: 14px 16px; font: 14px/1.45 'Segoe UI', system-ui, sans-serif; }
+.li-paper p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.li-more { background: none; border: 0; padding: 0; color: var(--ink-soft); font-weight: 600; }
+.li-more:hover:not(:disabled) { background: none; color: var(--ink); text-decoration: underline; }
+.li-draft-bar { display: flex; align-items: center; gap: 2px; margin-top: 6px; }
+.li-draft-bar small { margin-right: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+.li-draft-bar .text-btn { font-size: 12.5px; }
+.li-videos li { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); padding: 5px 0; overflow-wrap: anywhere; }
+
+/* Trilho: sigla da pagina */
+.li-glyph { font: 700 15px/1 'Segoe UI Variable Display', 'Segoe UI', sans-serif; letter-spacing: -.02em; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 5px; box-shadow: inset 0 0 0 1.6px currentColor; }
+.rail-li[aria-current=true] { color: #a3b1ff; }
+.rail-li.live::after { content: ''; position: absolute; right: 5px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: #a3b1ff; box-shadow: 0 0 0 2px var(--side-bg); animation: pip 1.6s ease-in-out infinite; }
+
+@media (max-width: 1100px) {
+  .li { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .li-desk { border-left: 0; border-top: 1px solid var(--line-soft); max-height: 38vh; }
+}
+@media (max-width: 640px) {
+  .li-head, .li-dock, .li-msgs > * { padding-left: 16px; padding-right: 16px; }
+  .li-week { display: none; }
+}
+
+/* Publicacao pela API */
+.li-post { color: var(--li-voice); }
+.li-posted { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ok); margin-bottom: 14px; }
+.li-desk-foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.li-conn { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.li-conn b { color: var(--text); font-weight: 600; }
+.li-conn-open { font-size: 13px; }
+.li-connect { display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+.li-connect h2 { font-size: 14px; }
+.li-connect ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; color: var(--muted); }
+.li-connect ol b { color: var(--text); font-weight: 600; }
+.li-redirect { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+.li-redirect code { font-size: 12px; color: var(--text); background: var(--surface); padding: 3px 8px; border-radius: var(--r-sm); overflow-wrap: anywhere; }
+.li-connect footer { display: flex; justify-content: flex-end; gap: 8px; }
+.li-connect .primary { background: var(--li-voice); color: #0a0d18; }

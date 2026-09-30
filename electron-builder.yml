@@ -1,0 +1,35 @@
+# Instaladores: npm run dist (gera em dist/ para o sistema atual). Sem assinatura de codigo por enquanto.
+appId: com.brothernog.orbita
+productName: Orbita
+directories:
+  output: dist
+files:
+  - out/**
+  - resources/icon.png
+  - package.json
+# Skills lidas em runtime por process.resourcesPath/skills (index.ts: setSkillRoots).
+extraResources:
+  - from: resources/skills
+    to: skills
+icon: resources/icon.png
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableCookieEncryption: true
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+win:
+  target: nsis
+  # .ico pronto: o conversor PNG->ICO do electron-builder falha (WebAssembly.Memory) neste ambiente
+  icon: resources/icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+linux:
+  target: [AppImage, deb]
+  category: Development
+  maintainer: brothernog

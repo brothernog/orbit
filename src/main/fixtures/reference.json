@@ -1,0 +1,28 @@
+{
+  "aviso": "Caracteres de payload em cenarios SIMULADOS; nao sao tokens do provedor nem economia real.",
+  "leitura": {
+    "antes": 19768,
+    "depois": 3421,
+    "recuperavel_no_artefato": 19688
+  },
+  "implementacao": {
+    "antes": 8008,
+    "depois": 3367
+  },
+  "correcao": {
+    "primeira_entrada": 2882,
+    "nova_sessao_repetindo": 2875,
+    "continuacao": 240
+  },
+  "troca_de_provedor": {
+    "antes_enviado_direto": 12064,
+    "depois_enviado_antes_da_aprovacao": 0,
+    "pedido_para_aprovar": 5451
+  },
+  "historico_longo": {
+    "mensagens": 400,
+    "limite_antes": 12000,
+    "limite_depois": 6000,
+    "marcadores_de_ferramenta_no_pedido": 0
+  }
+}

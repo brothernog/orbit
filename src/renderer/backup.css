@@ -1,0 +1,21 @@
+.backup-settings { min-width: 0; }
+.backup-lede { color: var(--text); max-width: 64ch; }
+.backup-exclusions { margin-top: 8px; color: var(--muted); font-size: 13px; max-width: 64ch; }
+.backup-current { display: flex; flex-direction: column; gap: 4px; margin-top: 16px; color: var(--muted); font-size: 12.5px; }
+.backup-path { overflow-wrap: anywhere; font: 12.5px/1.6 ui-monospace, 'Cascadia Code', Consolas, monospace; }
+.backup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.backup-result { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
+.backup-result h3 { font-size: 14px; margin-bottom: 8px; }
+.backup-success { color: var(--ok); font-weight: 500; }
+.backup-summary { margin: 8px 0 0; display: flex; flex-direction: column; gap: 8px; }
+.backup-summary > div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
+.backup-summary dt { color: var(--muted); font-size: 13px; }
+.backup-summary dd { margin: 0; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.backup-warning { margin-top: 16px; padding: 12px; border-left: 2px solid var(--limit); background: var(--bg); color: var(--text); font-size: 13px; border-radius: var(--r-sm); }
+.backup-actions .backup-restore-btn { color: var(--hot); }
+.backup-status { margin: 8px 0; overflow-wrap: anywhere; }
+.backup-result > small { margin-top: 8px; }
+.set-head [role=tablist] { flex-wrap: wrap; max-width: 100%; }
+@media (max-width: 600px) {
+  .backup-summary > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}

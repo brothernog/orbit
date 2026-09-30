@@ -1,0 +1,36 @@
+{
+  "name": "gaming-planning-dashboard",
+  "version": "1.0.0",
+  "description": "Dashboard desktop para planejar jogos e coordenar agentes",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node --no-warnings --test --test-timeout=120000 \"src/**/*.test.ts\"",
+    "e2e": "node scripts/e2e/run.mjs",
+    "dev:sandbox": "node scripts/dev-sandbox.mjs",
+    "migration:check": "node scripts/check-migration.mjs",
+    "dist": "electron-vite build && electron-builder"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.16",
+    "marked": "^18.0.14",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.6"
+  },
+  "private": true,
+  "author": "brothernog"
+}

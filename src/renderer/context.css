@@ -1,0 +1,95 @@
+/* Pedido de contexto acima do compositor: chama a atencao sem gritar (borda ambar, um pedido por vez). */
+.ctx-req {
+  display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; padding: 12px 14px;
+  border-radius: 14px; background: linear-gradient(180deg, #f2b45c12, transparent 80%), var(--surface);
+  border: 1px solid #f2b45c55; animation: now-in .3s var(--ease);
+}
+.cr-head { display: flex; align-items: center; gap: 10px; }
+.cr-title { flex: 1; min-width: 0; font-size: 14px; }
+.countdown { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--limit); background: #f2b45c18; padding: 1px 8px; border-radius: 20px; }
+.countdown.hot { color: var(--hot); background: #ff7b6b18; }
+.cr-summary { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 2px 4px; background: none; border: 0; color: var(--muted); font-size: 13px; }
+.cr-summary:hover:not(:disabled) { background: none; color: var(--text); }
+.cr-summary svg { transition: transform .18s var(--ease); }
+.cr-summary[aria-expanded=true] svg { transform: rotate(90deg); }
+.cr-items { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow: auto; padding: 8px; border-radius: var(--r-sm); background: var(--bg); }
+.cr-items li { display: flex; flex-direction: column; gap: 2px; }
+.cr-items b { font-size: 13px; }
+.cr-items li.dropped { opacity: .45; }
+.cr-pick { align-self: flex-start; display: inline-flex; gap: 6px; font-size: 12px; cursor: pointer; }
+.cr-items small { font-size: 11.5px; color: var(--faint); }
+.cr-items pre { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 'Cascadia Code', Consolas, monospace; color: var(--muted); }
+.cr-scope { font-size: 12px; color: var(--faint); }
+.cr-dest { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; font-size: 12.5px; }
+.cr-dest div { display: flex; gap: 6px; }
+.cr-dest dt { color: var(--faint); }
+.cr-dest dd { margin: 0; color: var(--text); }
+.cr-omitted { font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.cr-omitted.warn > b { color: var(--hot); }
+.cr-omitted summary { cursor: pointer; }
+.cr-omitted ul { margin: 4px 0 0; padding-left: 16px; }
+.cr-msg { display: flex; flex-direction: column; gap: 2px; margin: 0; font-size: 13px; }
+.cr-msg q { color: var(--muted); overflow-wrap: anywhere; quotes: none; padding-left: 8px; border-left: 2px solid var(--line); }
+.ctx-req.unsent { border-color: var(--line); background: var(--surface); }
+.ctx-req.unsent q { color: var(--muted); quotes: none; }
+.ctx-req button:focus-visible { outline: 2px solid var(--accent, #7aa2ff); outline-offset: 2px; }
+.cr-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.text-btn.danger { color: var(--hot); margin-left: auto; }
+
+/* Gaveta de contexto da tarefa (memoria, uso, enviado) */
+.inspector {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 8; width: min(400px, 92%);
+  display: flex; flex-direction: column; background: var(--side-bg); border-left: 1px solid var(--line);
+  box-shadow: -20px 0 40px -12px #000a; animation: from-right .22s var(--ease);
+}
+.inspector > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 10px 10px 12px; }
+.inspector [role=tablist] { display: flex; gap: 2px; padding: 3px; background: var(--bg); border-radius: var(--r); }
+.inspector [role=tab] { background: none; border-color: transparent; color: var(--muted); padding: 5px 10px; font-size: 13px; border-radius: 7px; }
+.inspector [role=tab].on { color: var(--text); background: var(--raised); }
+.insp-body { flex: 1; overflow: auto; padding: 6px 16px 20px; font-size: 13.5px; }
+
+.mem { display: flex; flex-direction: column; gap: 14px; }
+.mem h3 { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.mem li.dim { opacity: .5; }
+.mem-row { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 8px; text-align: left; background: none; border-color: transparent; border-radius: var(--r-sm); }
+.mem-row:hover:not(:disabled) { background: var(--surface); }
+.mem-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-body { padding: 4px 8px 8px; color: #c7d0dd; white-space: pre-wrap; overflow-wrap: anywhere; animation: reveal .2s var(--ease); }
+.mem-body small { margin-top: 4px; font: 11.5px 'Cascadia Code', Consolas, monospace; color: var(--faint); }
+.vtag { flex: none; font-size: 11.5px; padding: 0 7px; border-radius: 20px; background: var(--raised); color: var(--muted); }
+.vtag.ok { color: var(--ok); background: #5bd69a14; }
+.vtag.warn { color: var(--limit); background: #f2b45c14; }
+.vtag.faint { color: var(--faint); }
+
+.usage-p { display: flex; flex-direction: column; gap: 14px; }
+.u-sum { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.u-sum div { display: flex; flex-direction: column; padding: 10px 12px; border-radius: var(--r); background: var(--surface); }
+.u-sum span { font-size: 12px; color: var(--muted); }
+.u-sum b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.u-sum small { font-size: 11.5px; }
+.u-list { display: flex; flex-direction: column; gap: 8px; }
+.u-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) 90px 56px; align-items: center; gap: 10px; }
+.u-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.u-bar { height: 6px; border-radius: 3px; background: var(--raised); overflow: hidden; }
+.u-bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+.u-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+.sent { display: flex; flex-direction: column; gap: 6px; }
+.sent li { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: var(--r-sm); background: var(--surface); }
+.sent-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sent-body small { font-size: 12px; }
+
+/* Configuracoes: limites */
+.limits { display: flex; flex-direction: column; gap: 8px; }
+.limits label { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 13.5px; }
+.lim-in { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.lim-in input { width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
+.lim-in small { width: 72px; font-size: 12px; }
+.lvl { display: flex; flex-direction: column; gap: 6px; }
+.lvl input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
+.lvl-names { display: flex; justify-content: space-between; }
+.lvl-names button { background: none; border-color: transparent; padding: 2px 4px; color: var(--muted); font-size: 13px; }
+.lvl-names button.on { color: var(--accent); font-weight: 600; }
+.lvl-adv { margin-top: 4px; }
+.lvl-adv[open] { display: flex; flex-direction: column; gap: 8px; }
+.lvl.custom input[type=range] { opacity: .45; } /* personalizado: o polegar no meio nao e um nivel */

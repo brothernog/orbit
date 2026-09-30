@@ -1,0 +1,42 @@
+/* Pop-up de permissao e secao de regras (componentes isolados; usam so os tokens do tema). */
+.pp-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px; background: #05080dcc; }
+.pp { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 18px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.pp h2 { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.pp h2 svg { color: var(--limit); }
+.pp-count { margin-left: auto; font-weight: 400; }
+.pp-what { color: var(--muted); }
+.pp-what b { color: var(--text); font-weight: 600; }
+.pp-cmd { margin: 6px 0 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm); font: 12.5px/1.5 ui-monospace, 'Cascadia Code', Consolas, monospace; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }
+.pp-warn { padding: 8px 10px; border: 1px solid var(--limit); border-radius: var(--r-sm); background: #f2b45c14; color: var(--text); }
+.pp-warn svg { color: var(--limit); vertical-align: -3px; }
+.pp-always { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; }
+.pp-always legend { padding: 0 6px; color: var(--muted); }
+.pp-opt { display: flex; gap: 8px; align-items: flex-start; }
+.pp-opt.off { opacity: .55; }
+.pp-opt code, .pr code { margin-left: 6px; padding: 1px 6px; background: var(--bg); border-radius: 4px; font: 12.5px ui-monospace, 'Cascadia Code', Consolas, monospace; }
+.pp-risk { display: block; font-style: normal; font-size: 12.5px; color: var(--limit); }
+.pp-risk.destructive { color: var(--hot); }
+.pp-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.pr-agent { display: grid; grid-template-columns: 96px 1fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+.pr-agent:last-child { border-bottom: 0; }
+.pr-agent > div { display: flex; flex-direction: column; gap: 8px; }
+.pr-inline { color: var(--muted); font-size: 13px; padding-left: 23px; }
+.pr-inline input { width: 56px; margin: 0 4px; }
+.pr-rules, .pr-recent { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+.pr-rules li, .pr-recent li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 6px 6px 10px; border-radius: var(--r-sm); }
+.pr-rules li:hover, .pr-recent li:hover { background: var(--raised); }
+.pr-rules code, .pr-recent code { flex: 1; min-width: 0; margin: 0; padding: 0; background: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-rules small, .pr-recent small { flex: none; }
+.pr-who { flex: none; color: var(--muted); font-size: 13px; }
+.pr-dec { flex: none; width: 58px; font-weight: 600; font-size: 13px; }
+.pr-dec.allow { color: var(--ok); }
+.pr-dec.deny { color: var(--hot); }
+.pr-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.pr-form input { flex: 1 1 220px; min-width: 0; }
+.pr-warn, .pr-note { flex-basis: 100%; }
+
+/* No chat: cartao acima do composer, sem escurecer a tela */
+.pp-inline { margin-bottom: 8px; }
+.pp-inline .pp { width: 100%; max-height: 50vh; gap: 10px; padding: 14px 16px; border-color: var(--limit); }
+.pp-inline .pp h2 { font-size: 14px; }

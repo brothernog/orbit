@@ -1,0 +1,54 @@
+# Testes nos tres sistemas a cada push/PR; instaladores sob demanda (Actions > CI > Run workflow) ou em tag v*.
+# Tudo com CLIs simuladas: nenhuma chamada paga, nenhum login.
+name: CI
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20 # um teste pendurado nao pode segurar o job por 6 h
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # O e2e usa electron.exe e CLIs falsas .cmd: por enquanto so no Windows.
+      - if: runner.os == 'Windows'
+        run: node node_modules/electron/install.js && npm run build && npm run e2e
+
+  package:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      # Sem assinatura de codigo: o Windows mostra o SmartScreen e o macOS pede liberacao manual.
+      - run: npm run build && npx electron-builder --publish never
+        env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orbita-${{ runner.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: error

@@ -1,0 +1,15 @@
+node_modules/
+out/
+*.db
+*.db-wal
+*.db-shm
+.env*
+dist/
+
+# Privado: instrucoes de agente, documentos de trabalho e material pessoal ficam so neste computador.
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.claude/
+docs/
+marketing/
