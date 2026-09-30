@@ -55,7 +55,11 @@ export type Agent = {
 }
 
 // ponytail: cmd.exe nao tem escape confiavel dentro de aspas; removemos os caracteres perigosos.
-export const q = (s: string) => `"${s.replace(/["%^\r\n&|<>]+/g, ' ').trim()}"`
+// Elsewhere the line runs under sh (macOS .command, sh -c on Linux), where double quotes still expand
+// $( ), backticks and $VAR: POSIX single quotes expand nothing, and ' becomes '\''.
+export const q = (s: string, win = process.platform === 'win32') => win
+  ? `"${s.replace(/["%^\r\n&|<>]+/g, ' ').trim()}"`
+  : `'${s.replace(/[\r\n]+/g, ' ').trim().replace(/'/g, `'\\''`)}'`
 
 // Ids de sessao, modelos e esforcos entram na linha de comando: so caracteres inofensivos (sem espaco, aspas, & | < > ^ %).
 export const SAFE_ARG = /^[\w.:@=+/-]{1,200}$/

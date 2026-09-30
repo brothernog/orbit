@@ -4,6 +4,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { q } from './adapters.ts'
 import { cancelLogin, categorize, claudeEnv, claudeStatus, cliSpawn, hostlessEnv, killTree, logEvent, loginState, macTerminalScript, mergePath, presentEnv, runCli, sanitize, shellArgs, startLogin } from './providers.ts'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-test-'))
@@ -157,6 +159,20 @@ test('PATH do shell de login vem primeiro, sem duplicar, e entradas so do proces
 test('script do Terminal (macOS) exporta so o que o perfil mudou, remove o que tirou e protege aspas', () => {
   const s = macTerminalScript("/Users/a/meu jogo's", 'claude', { HOME: '/Users/a', CLAUDE_CONFIG_DIR: "/c/x'y" }, { HOME: '/Users/a', ANTHROPIC_API_KEY: 'k' })
   assert.deepEqual(s.split('\n'), ['#!/bin/sh', "export CLAUDE_CONFIG_DIR='/c/x'\\''y'", 'unset ANTHROPIC_API_KEY', "cd '/Users/a/meu jogo'\\''s' || exit 1", 'claude', ''])
+})
+
+test('terminal prompt: cmd.exe drops the dangerous characters; sh gets the literal text in single quotes', () => {
+  assert.equal(q('a"b&c%d\n', true), '"a b c d"')
+  assert.equal(q("it's $(x) `y` $HOME\nz", false), `'it'\\''s $(x) \`y\` $HOME z'`)
+})
+
+test('prompt with $( ), backticks and $VAR executes nothing in the Terminal script', { skip: win }, () => {
+  const canary = path.join(tmp, 'pwned')
+  const text = `Bug $(touch ${canary}) \`touch ${canary}\` $HOME it's "x"`
+  const file = path.join(tmp, 'prompt.command')
+  fs.writeFileSync(file, macTerminalScript(tmp, `printf %s ${q(text)}`, process.env))
+  assert.equal(execFileSync('/bin/sh', [file], { encoding: 'utf8' }), text)
+  assert.equal(fs.existsSync(canary), false)
 })
 
 test('killTree fora do Windows derruba os netos da CLI (grupo de processos)', { skip: process.platform === 'win32' }, async () => {
