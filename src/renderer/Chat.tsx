@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { AGENTS, api, errText, onChat, type Account, type Catalog, type Metric, type Msg, type Provider, type Sel, type Task } from './api'
 import { cap, Dropdown, type Opt } from './Dropdown'
 import { Avatar, Icon, PROVIDER } from './icons'
@@ -280,14 +280,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
             <Avatar provider={sel.provider} />
             <p>Escreva abaixo para começar. O histórico fica na tarefa, mesmo se você trocar de provedor.</p>
           </div>}
-          {hist?.messages.map(m => (
-            <div key={m.id} className={`msg ${m.role} ${m.status ?? ''}`}>
-              {m.role === 'agent' && <div className="who">{m.provider && <Avatar provider={m.provider} size="sm" />}<span>{label(m, accounts)}</span>
-                {m.status === 'failed' && <span className="flag">falhou</span>}{m.status === 'cancelled' && <span className="flag">interrompida</span>}</div>}
-              {m.role === 'agent' ? <Markdown text={m.text} /> : stripMarks(m.text) && <p>{stripMarks(m.text)}</p>}
-              <MsgImages taskId={task.id} text={m.text} marksOnly={m.role !== 'agent'} onOpen={setView} />
-            </div>
-          ))}
+          {hist && <Thread messages={hist.messages} accounts={accounts} taskId={task.id} onOpen={setView} />}
           {running && <div className="msg agent streaming">
             <div className="who"><Avatar provider={sel.provider} size="sm" live /><span>{PROVIDER[sel.provider]?.label ?? sel.provider} trabalhando</span></div>
             {live && live !== '…' && <Markdown text={live} />}
@@ -306,6 +299,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
         <UnsentMessages sends={pkgs.sends} reload={pkgs.load} onRecover={t => setText(cur => (cur.trim() ? `${cur}\n\n${t}` : t))} />
         <PermissionPrompt inline taskId={task.id} />
         <form className={`composer ${running ? 'running' : ''}`} onSubmit={e => { e.preventDefault(); send() }}>
+          {running && <span className="composer-glow" aria-hidden="true" />}
           <textarea aria-label="Mensagem" placeholder={awaiting ? 'Decida sobre o contexto pendente acima para continuar' : `Mensagem para ${PROVIDER[sel.provider]?.label ?? sel.provider}`} value={text} rows={1}
             onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && e.ctrlKey) send() }}
             onPaste={e => { const imgs = [...e.clipboardData.files].filter(f => f.type.startsWith('image/')); if (imgs.length) { e.preventDefault(); attach(imgs) } }} />
@@ -344,10 +338,28 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
   )
 }
 
+// Historico: memoizado para que digitar no compositor e cada trecho do streaming nao reprocessem todas as mensagens antigas.
+// Nao usa name()/apelidos de projeto; se passar a usar, precisa de uma prop que mude com eles.
+const Thread = memo(function Thread({ messages, accounts, taskId, onOpen }: { messages: Msg[]; accounts: Account[]; taskId: number; onOpen: (src: string) => void }) {
+  return <>{messages.map(m => <MsgRow key={m.id} m={m} accounts={accounts} taskId={taskId} onOpen={onOpen} />)}</>
+})
+
+const MsgRow = memo(function MsgRow({ m, accounts, taskId, onOpen }: { m: Msg; accounts: Account[]; taskId: number; onOpen: (src: string) => void }) {
+  const plain = useMemo(() => (m.role === 'agent' ? '' : stripMarks(m.text)), [m.role, m.text])
+  return (
+    <div className={`msg ${m.role} ${m.status ?? ''}`}>
+      {m.role === 'agent' && <div className="who">{m.provider && <Avatar provider={m.provider} size="sm" />}<span>{label(m, accounts)}</span>
+        {m.status === 'failed' && <span className="flag">falhou</span>}{m.status === 'cancelled' && <span className="flag">interrompida</span>}</div>}
+      {m.role === 'agent' ? <Markdown text={m.text} /> : plain && <p>{plain}</p>}
+      <MsgImages taskId={taskId} text={m.text} marksOnly={m.role !== 'agent'} onOpen={onOpen} />
+    </div>
+  )
+})
+
 // Miniaturas das imagens citadas na mensagem. O processo principal so devolve imagens do projeto da tarefa ou dos anexos dela;
 // o resto (caminho inexistente, fora das pastas, internet) simplesmente nao aparece.
 function MsgImages({ taskId, text, marksOnly, onOpen }: { taskId: number; text: string; marksOnly?: boolean; onOpen: (src: string) => void }) {
-  const refs = imageRefs(text, marksOnly).join('|') // chave estavel para o efeito ('|' nao aparece em caminho)
+  const refs = useMemo(() => imageRefs(text, marksOnly).join('|'), [text, marksOnly]) // chave estavel para o efeito ('|' nao aparece em caminho)
   const [srcs, setSrcs] = useState<string[]>([])
   useEffect(() => {
     let live = true

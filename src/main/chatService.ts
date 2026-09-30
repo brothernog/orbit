@@ -221,7 +221,7 @@ export function createChatService(d: ChatDeps) {
         db.prepare('DELETE FROM settings WHERE key=?').run(`lastError:${sel.provider}`) // uma execucao bem-sucedida resolve a falha antiga do painel Provedores
       }
       // status/tempo/resposta alimentam o aviso de atencao (notify.ts); a interface continua recarregando pelo `done`
-      emit({ taskId: t.id, done: true, runId, status: r.status, paused: r.paused, error: r.error, durationMs: r.durationMs, provider: sel.provider, model: sel.model, answer: r.answer || r.text, acts })
+      emit({ taskId: t.id, game: t.game, done: true, runId, status: r.status, paused: r.paused, error: r.error, durationMs: r.durationMs, provider: sel.provider, model: sel.model, answer: r.answer || r.text, acts })
       try { d.onFinished?.({ taskId: t.id, sel, text, status: r.status, category: r.category, partial: r.text, acts }) } catch {}
     })
     return { status: 'started', runId }

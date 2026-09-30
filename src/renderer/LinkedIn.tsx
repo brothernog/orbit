@@ -7,6 +7,7 @@ import { PermissionPrompt } from './PermissionPrompt'
 import { ContextRequests, UnsentMessages, usePackages } from './TaskContext'
 import { stripMarks } from './msgImages'
 import { Confirm } from './Nav'
+import { useCachedRead } from './useCachedRead'
 import './linkedin.css'
 import { CMDS, expand, fold } from './linkedinText'
 
@@ -87,7 +88,7 @@ const isSel = (a: Agent, s: Sel) => a.provider === s.provider && a.model === s.m
 export function LinkedIn({ accounts, onErr }: { accounts: Account[]; onErr: (e: string) => void }) {
   const [page, setPage] = useState<{ taskId: number; desk: Desk } | null>(null)
   const [hist, setHist] = useState<{ running: boolean; awaitingContext?: boolean; messages: Msg[]; sel?: Sel | null } | null>(null)
-  const [agents, setAgents] = useState<Agent[]>([])
+  const agents = useCachedRead<Agent[]>('getAgentAliases', () => api.getAgentAliases()).data ?? [] // mesma chave de Configuracoes > Agentes
   const [auth, setAuth] = useState<Auth | null>(null)
   const [posted, setPosted] = useState('') // link do ultimo post publicado pela API
   const [live, setLive] = useState('')
@@ -102,7 +103,7 @@ export function LinkedIn({ accounts, onErr }: { accounts: Account[]; onErr: (e: 
 
   const loadDesk = () => api.linkedin().then(setPage, (e: any) => onErr(errText(e)))
   const load = () => taskId ? api.taskChat(taskId, sel).then((h: any) => { setHist(h); setLive(h.live || (h.running ? '…' : '')) }, (e: any) => onErr(errText(e))) : Promise.resolve()
-  useEffect(() => { loadDesk(); api.getAgentAliases().then(setAgents, () => {}); api.linkedinAuth().then(setAuth, () => {}) }, [])
+  useEffect(() => { loadDesk(); api.linkedinAuth().then(setAuth, () => {}) }, [])
   useEffect(() => { load() }, [taskId])
   useEffect(() => onChat(ev => {
     if (ev.taskId !== taskId) return

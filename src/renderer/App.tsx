@@ -41,16 +41,28 @@ function useAuto(query: string, initial: boolean) {
 }
 
 // Agentes ativos em todos os projetos. ponytail: polling de 3 s num Map local; trocar por evento se ficar pesado.
+// Lista igual nao troca o estado (nada re-renderiza) e janela oculta/minimizada nao consulta.
 function useActive() {
   const [list, setList] = useState<Active[]>([])
   useEffect(() => {
-    const load = () => api.listActive().then(setList, () => {})
+    const load = () => api.listActive().then((next: Active[]) => setList(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next)), () => {})
     load()
-    const t = setInterval(load, 3000)
+    const t = setInterval(() => { if (document.visibilityState === 'visible') load() }, 3000)
+    const vis = () => { if (document.visibilityState === 'visible') load() }
+    document.addEventListener('visibilitychange', vis)
     const off = onChat(ev => { if (ev.done || ev.refresh) load() })
-    return () => { clearInterval(t); off() }
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', vis); off() }
   }, [])
   return list
+}
+
+// Textos relativos ("há 5 min") da gaveta e do Inicio: um re-render por minuto com a janela visivel.
+function useMinuteTick() {
+  const [, tick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => { if (document.visibilityState === 'visible') tick(n => n + 1) }, 60_000)
+    return () => clearInterval(t)
+  }, [])
 }
 
 const ago = (iso: string) => {
@@ -117,7 +129,8 @@ function AgentDock({ active, onOpen }: { active: Active[]; onOpen: (a: Active) =
 }
 
 // Conversas das outras pastas do workspace (a pasta atual vem de loadTasks). ponytail: recarrega todas a cada evento; cache por pasta se pesar.
-function useFolderTasks(folders: string[], ver: unknown[]) {
+// Recarrega pelos eventos e por `ver` (acoes na gaveta); as tarefas da pasta atual nao entram: o `done` que as recarrega ja chega aqui.
+function useFolderTasks(folders: string[], ver: number) {
   const [map, setMap] = useState<Record<string, Task[]>>({})
   const key = folders.join('|')
   useEffect(() => {
@@ -126,7 +139,7 @@ function useFolderTasks(folders: string[], ver: unknown[]) {
     load()
     const off = onChat(ev => { if (ev.done || ev.refresh) load() })
     return () => { live = false; off() }
-  }, [key, ...ver])
+  }, [key, ver])
   return map
 }
 
@@ -189,6 +202,7 @@ export default function App() {
   const [, setAliasVer] = useState(0)
   const req = useRef(0)
   const active = useActive()
+  useMinuteTick()
 
   const loadAccounts = () => api.listAccounts().then((list: Account[]) => {
     setAccounts(list)
@@ -339,7 +353,7 @@ export default function App() {
   const ws = game ? groupOf(groups, game) ?? inbox : null
   const drawer = inProject && chats
   const folders = ws ? ws.games.filter(g => games.includes(g)) : []
-  const folderTasks = useFolderTasks(drawer ? folders.filter(g => g !== game) : [], [tasks, ver])
+  const folderTasks = useFolderTasks(drawer ? folders.filter(g => g !== game) : [], ver)
   const briefs = useBriefs(game, tasks, active)
   const briefCard = useBriefCard(briefs)
   // Esperando voce: pedido de contexto pendente. E o unico grupo com cor forte (o que fazer agora).

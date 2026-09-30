@@ -39,8 +39,8 @@ html.planet-root #root { height: 100vh; }
 .corner.open .planet svg { transform: scale(1.12); opacity: 0; transition: transform .22s ease-out, opacity .16s ease .04s; }
 .corner.open .planet { pointer-events: none; }
 
-.pl-glow { fill: color-mix(in srgb, var(--k) 26%, transparent); filter: blur(7px); transition: fill .8s ease;
-  transform-box: fill-box; transform-origin: center; animation: pl-breathe 5s ease-in-out infinite; }
+.pl-glow { fill: url(#pl-glow); transform-box: fill-box; transform-origin: center; animation: pl-breathe 5s ease-in-out infinite; }
+.pl-glow-c { stop-color: color-mix(in srgb, var(--k) 26%, transparent); transition: stop-color .8s ease; }
 .planet.hot .pl-glow { animation-duration: 1.8s; }
 .pl-track { fill: none; stroke: #ffffff12; stroke-width: 1.5; }
 .pl-ring { fill: none; stroke: color-mix(in srgb, var(--k) 80%, #fff); stroke-width: 1.5; stroke-linecap: round; opacity: .75;
@@ -59,7 +59,8 @@ html.planet-root #root { height: 100vh; }
 .pl-dots circle { fill: #ffffff30; transition: fill .4s ease; }
 .pl-dots circle.on { fill: color-mix(in srgb, var(--k) 85%, #fff); }
 
-.planet.none .pl-glow { fill: #ffffff0d; animation: none; }
+.planet.none .pl-glow { animation: none; }
+.planet.none .pl-glow-c { stop-color: #ffffff0d; }
 .planet.none .pl-rim { stroke: #ffffff26; }
 .planet:focus-visible .pl-rim { stroke: #fff; stroke-width: 2; }
 
