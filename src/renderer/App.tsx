@@ -522,7 +522,8 @@ export default function App() {
           : tasks === null ? <div className="empty"><span className="loader" aria-label="Carregando tarefas" /></div>
           : !taskView ? <Home key={game} games={[game]} tag={ws && ws.id !== INBOX ? ws : null} siblings={folders} active={active} onOpen={g => transition(() => pick(g))} onAdd={addGame} lastGame={game} onTodoTask={(g, id, d) => { setDraft(d); openIn(g, id) }}
               below={<ProjectHome game={game} tasks={tasks} active={active} onOpenTask={openTask} onNewTask={create} onErr={setErr} />} />
-          : task ? <Chat key={task.id} task={task} accounts={accounts} providers={providers} onChange={() => loadTasks()} draft={draft?.taskId === task.id ? draft : undefined} onDraftUsed={() => setDraft(undefined)} />
+          : task ? <Chat key={task.id} task={task} accounts={accounts} providers={providers} onChange={() => loadTasks()} draft={draft?.taskId === task.id ? draft : undefined} onDraftUsed={() => setDraft(undefined)}
+            onOpenDraft={(g, id, d) => { setDraft(d); openIn(g, id); bump() }} />
           : <section className="empty">
               <h1>Nova tarefa em {name(game)}</h1>
               <p>Cada tarefa tem o próprio chat e histórico. Dá para trocar de provedor dentro dela sem perder as mensagens.</p>

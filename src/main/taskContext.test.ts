@@ -38,10 +38,10 @@ const call = (c: ToolCtx, name: string, args: any) => callTaskTool(db, DEFAULT_L
 
 test('ferramentas anunciadas por papel: filho nunca recebe delegar; operacoes locais so para filho', () => {
   const names = (r: 'parent' | 'child', d?: any) => toolsFor(r, d).map(t => t.name)
-  assert.deepEqual(names('parent'), ['read_task_context', 'record_task_memory', 'read_task_skill'])
-  assert.deepEqual(names('parent', { name: 'delegate_to_agent' }), ['delegate_to_agent', 'read_task_context', 'record_task_memory', 'read_task_skill'])
+  assert.deepEqual(names('parent'), ['read_task_context', 'record_task_memory', 'read_task_skill', 'ask_user', 'suggest_task'])
+  assert.deepEqual(names('parent', { name: 'delegate_to_agent' }), ['delegate_to_agent', 'read_task_context', 'record_task_memory', 'read_task_skill', 'ask_user', 'suggest_task'])
   assert.deepEqual(names('child'), ['read_task_context', 'record_task_memory', 'find_in_workspace', 'read_file_range', 'test_evidence', 'read_task_skill'])
-  assert.ok(!names('child').includes('delegate_to_agent'))
+  assert.ok(!names('child').some(n => ['delegate_to_agent', 'ask_user', 'suggest_task'].includes(n))) // filho responde ao pai, nao ao usuario
   assert.equal(call(parent, 'find_in_workspace', { pattern: 'x' }).isError, true) // mesmo sabendo o nome, o pai nao chama
   assert.equal(call(parent, 'delegate_to_agent', {}).isError, true) // delegar nao passa por aqui
   assert.match(call(child, 'apagar_tudo', {}).text, /desconhecida/)

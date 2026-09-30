@@ -5,7 +5,7 @@ import { api, name, onChat, type Active, type Task } from './api'
 import { Avatar, Icon, PROVIDER } from './icons'
 import './taskcol.css'
 
-export type Brief = { id: number; last: 'completed' | 'failed' | 'cancelled' | null; awaiting: boolean; permission: string | null; goal: string | null; result: string | null; next: string | null }
+export type Brief = { id: number; last: 'completed' | 'failed' | 'cancelled' | null; awaiting: boolean; permission: string | null; question: string | null; goal: string | null; result: string | null; next: string | null }
 
 // Recarrega quando a lista de tarefas ou os agentes ativos mudam (fim de execucao, pedido novo).
 export function useBriefs(game: string | null, tasks: Task[] | null, active: Active[]) {
@@ -17,7 +17,7 @@ export function useBriefs(game: string | null, tasks: Task[] | null, active: Act
     const load = () => api.taskBriefs(game).then((l: Brief[]) => { if (live) setMap(new Map(l.map(b => [b.id, b]))) }, () => {})
     load()
     // pedidos de permissao/contexto nao mudam a lista de tarefas: recarrega pelos eventos deles
-    const off = onChat((ev: any) => { if (ev?.permissionRequest || ev?.permissionResolved || ev?.contextRequest || ev?.contextResolved) load() })
+    const off = onChat((ev: any) => { if (ev?.permissionRequest || ev?.permissionResolved || ev?.questionRequest || ev?.questionResolved || ev?.contextRequest || ev?.contextResolved) load() })
     return () => { live = false; off() }
   }, [key])
   return map
@@ -36,7 +36,8 @@ const since = (ms: number) => { const m = Math.round(ms / 60000); return m < 1 ?
 
 // Uma linha curta: o que a tarefa precisa ou o que aconteceu por ultimo. tone colore so o que pede atencao.
 export function statusOf(t: Task, b: Brief | undefined, who: Active | undefined, ago: string): { text: string; tone: '' | 'live' | 'wait' | 'bad' } {
-  if (b?.permission) return { text: `Permitir: ${b.permission}`, tone: 'wait' } // agente parado esperando voce: vem antes de "trabalhando"
+  if (b?.question) return { text: `Responder: ${b.question}`, tone: 'wait' } // agente parado esperando voce: vem antes de "trabalhando"
+  if (b?.permission) return { text: `Permitir: ${b.permission}`, tone: 'wait' }
   if (who) return { text: `${PROVIDER[who.provider]?.label ?? who.provider} · ${doingText(who.doing) ?? 'trabalhando'} · ${since(Date.now() - who.startedAt)}`, tone: 'live' }
   if (b?.awaiting) return { text: 'Aprovar o contexto para continuar', tone: 'wait' }
   if (t.state === 'concluida') return { text: `Concluída · ${ago}`, tone: '' }
