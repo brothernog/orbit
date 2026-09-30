@@ -12,54 +12,39 @@ import { Workflow } from './Workflow'
 import { Checkpoints } from './Checkpoints'
 import { ProjectCommands } from './ProjectCommands'
 import { imageRefs, stripMarks } from './msgImages'
+import { loadRead } from './readCache'
+import { useCachedRead } from './useCachedRead'
+import { usageNote, type QuotaSnapshot } from './usageText'
 
 const parseSel = (s: string | null | undefined): Sel | null => {
   try { const v = JSON.parse(s ?? 'null'); return v && typeof v.provider === 'string' ? v : null } catch { return null }
 }
 
-// Estado de login das contas Claude (consulta gratuita), com cache curto para nao abrir a CLI a cada troca.
-const statusCache = new Map<number, { at: number; state: string }>()
+// Status/quotas compartilham o snapshot com Configuracoes e o popup de limites.
 function useClaudeStatus(accountId: number | undefined, enabled: boolean) {
-  const [state, setState] = useState<string>('unknown')
-  useEffect(() => {
-    if (!enabled || !accountId) return
-    const c = statusCache.get(accountId)
-    if (c && Date.now() - c.at < 60_000) return setState(c.state)
-    setState('unknown')
-    api.accountStatus(accountId).then(s => { statusCache.set(accountId, { at: Date.now(), state: s.state }); setState(s.state) }, () => setState('unknown'))
-  }, [accountId, enabled])
-  return state
+  const { data } = useCachedRead<{ state: string }>(enabled && accountId ? `accountStatus:${accountId}` : null, () => api.accountStatus(accountId), 60_000)
+  return data?.state ?? 'unknown'
 }
 
 // Cotas da conta Claude (5 horas e semana), com o mesmo cache curto; recarrega quando uma execucao termina.
-type Window_ = { utilization: number; resets_at: string } | null
-type Usage = { fiveHour?: Window_; sevenDay?: Window_; cached?: boolean; error?: string }
-const usageCache = new Map<number, { at: number; u: Usage }>()
-const USAGE_EVERY = 30_000 // o endpoint recusa excesso (429 cai no ultimo valor visto); 30 s mantem o medidor vivo
+type Usage = QuotaSnapshot
+const USAGE_EVERY = 30_000
 function useUsage(accountId: number | undefined, enabled: boolean, bump: unknown) {
-  const [u, setU] = useState<Usage | null>(null)
+  const key = enabled && accountId ? `accountUsage:${accountId}` : null
+  const { data, error, reload } = useCachedRead<Usage | null>(key, () => api.accountUsage(accountId), USAGE_EVERY)
   useEffect(() => {
-    if (!enabled || !accountId) return setU(null)
-    const load = () => api.accountUsage(accountId).then(v => { usageCache.set(accountId, { at: Date.now(), u: v }); setU(v) }, e => setU(p => p ?? { error: errText(e) }))
-    const c = usageCache.get(accountId)
-    if (c) setU(c.u)
-    if (!c || Date.now() - c.at >= USAGE_EVERY) load()
-    const t = setInterval(() => { if (document.visibilityState === 'visible') load() }, USAGE_EVERY)
+    if (!key) return
+    loadRead(key, () => api.accountUsage(accountId), USAGE_EVERY).catch(() => {})
+    const t = setInterval(() => { if (document.visibilityState === 'visible') reload().catch(() => {}) }, USAGE_EVERY)
     return () => clearInterval(t)
-  }, [accountId, enabled, bump])
-  return u
+  }, [key, bump, reload])
+  return data ?? (error ? { error: errText(error) } : null)
 }
 
 // Catalogo de modelos/esforcos do provedor (fonte nativa quando existe); falha aqui nao afeta login nem chat.
 function useCatalog(provider: string) {
-  const [cat, setCat] = useState<Catalog | null>(null)
-  useEffect(() => {
-    let live = true
-    setCat(null)
-    api.catalog(provider).then(c => live && setCat(c), e => live && setCat({ provider, source: 'manual', at: '', models: [], efforts: [], allowCustomModel: false, error: errText(e) }))
-    return () => { live = false }
-  }, [provider])
-  return cat
+  const { data, error } = useCachedRead<Catalog>(`catalog:${provider}`, () => api.catalog(provider), 600_000)
+  return data ?? (error ? { provider, source: 'manual' as const, at: '', models: [], efforts: [], allowCustomModel: false, error: errText(error) } : null)
 }
 
 const label = (m: Msg, accounts: Account[]) => {
@@ -145,7 +130,7 @@ function LimitRing({ u, provider }: { u: Usage | null; provider: string }) {
           : <>
               <Bar label="Limite de 5 horas" w={u.fiveHour ?? null} />
               <Bar label="Semanal" w={u.sevenDay ?? null} />
-              {u.cached && <small>Último valor visto.</small>}
+              {usageNote(u) && <small>{usageNote(u)}</small>}
             </>}
       </span>
     </span>
@@ -249,11 +234,12 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
   }, [hist, live])
 
   const provider = providers?.find(p => p.id === sel.provider)
-  const claudeState = useClaudeStatus(sel.accountId, sel.provider === 'claude')
+  const claudeEnabled = sel.provider === 'claude' && accounts.find(a => a.id === sel.accountId)?.login?.state !== 'connecting'
+  const claudeState = useClaudeStatus(sel.accountId, claudeEnabled)
   const conn = sel.provider === 'claude' ? claudeState : provider?.auth?.state ?? 'unknown'
   const missing = providers && provider && !provider.exe
   const running = hist?.running ?? false
-  const usage = useUsage(sel.accountId, sel.provider === 'claude', hist?.metric?.at)
+  const usage = useUsage(sel.accountId, claudeEnabled, hist?.metric?.at)
 
   const awaiting = !!hist?.awaitingContext || pkgs.sends.some(s => s.state === 'awaiting_context_approval')
   const send = () => {

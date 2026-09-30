@@ -17,6 +17,7 @@ test('planeta: 5 h ja reiniciada cai para a semanal; sem janela viva, sem numero
     { source: 'Codex', pct: 40, window: 'semana', resetsAt: '2026-10-02T00:00:00Z' })
   assert.deepEqual(planetUsage('Codex', { fiveHour: w(10, '2026-09-29T08:00:00Z') }, now), { source: 'Codex' })
   assert.deepEqual(planetUsage('Claude, B', null, now), { source: 'Claude, B' })
+  assert.deepEqual(planetUsage('Claude, B', { fiveHour: { utilization: 30, resets_at: null } }, now), { source: 'Claude, B' })
 })
 
 test('planeta: contas em uso = rodando agora (sem repetir); sem nada rodando, a da execucao mais recente', () => {

@@ -3,6 +3,7 @@ import { createCheckpoint as takeCheckpoint, listCheckpoints, previewRewind, rew
 import { addStep, activeStep, beginStep, bindStep, failStep, listSteps, reconcileSteps, reviewStep } from './workflows.ts'
 import { todoBoard, saveTodo, todoTask } from './planning.ts'
 import { createChatService } from './chatService.ts'
+import { createAccountUsageService } from './accountUsage.ts'
 import { createJarvisService } from './jarvisService.ts'
 import { createLinkedInService } from './linkedinService.ts'
 import { createProductionService } from './production.ts'
@@ -408,7 +409,7 @@ async function usageForPlanet() {
     planetFetched = Date.now()
     await Promise.allSettled(claude.map(id => accountUsage(id)))
   }
-  const cached = (id: number) => { try { return JSON.parse(getSetting(`usage:${id}`) ?? 'null') } catch { return null } }
+  const cached = (id: number) => accountUsageService.snapshot(id)
   return list.flatMap(u => {
     if (u.provider === 'codex') return [{ key: 'codex', ...planetUsage('Codex', codexLimits()) }]
     const name = accountRow(u.accountId)?.name
@@ -521,6 +522,7 @@ const { sendTask, decideSend: decideChatSend } = createChatService({
   db, active, guard, broker, asTask, taskCwd, checkSel, contextLimits, delegationSettings, permissionSettings,
   getMcp, mcpDir, nativeFor, envFor, emit, note, logFor, accountRow, setSetting, recordMetric, attachRoot, linkedinDir,
   workspaceBusy: commands.busy, onRunStart: runStart, summaryTitles,
+  accountUsageWriter: id => accountUsageService.writer(id),
   godotOrganizer: godotForProject,
   registerParent: (token, p, perm) => { tokens.set(token, { kind: 'parent', p, perm }) },
   unregisterToken: token => { tokens.delete(token) }
@@ -538,28 +540,43 @@ app.on('before-quit', () => {
   pulse.stop(); stopWatching()
 })
 
-// Uso da janela de 5h e semanal. Endpoint nao documentado usado pelo /usage do Claude Code.
-// Se o endpoint falhar, usa o ultimo valor visto (endpoint ou eventos do chat do Claude).
-async function accountUsage(accountId: number) {
-  try {
-    const u = await fetchUsage(accountId)
-    setSetting(`usage:${accountId}`, JSON.stringify(u))
-    return u
-  } catch (e) {
-    const cached = getSetting(`usage:${accountId}`)
-    if (cached) return { ...JSON.parse(cached), cached: true }
-    throw e
-  }
+// Snapshot persistido primeiro; refresh opcional compartilhado entre chat, limites e configuracoes.
+const accountUsageService = createAccountUsageService({
+  identity: id => {
+    const acc = accountRow(id)
+    return acc && loginState(dirKey(acc))?.state !== 'connecting' ? createHash('sha256').update(dirKey(acc)).digest('hex') : null
+  },
+  read: (id, identity) => {
+    const profile = getSetting(`usageProfile:${id}`)
+    if (profile && profile !== identity) return null
+    try { return JSON.parse(getSetting(`usage:${id}`) ?? 'null') } catch { return null }
+  },
+  write: (id, identity, usage) => {
+    setSetting(`usageProfile:${id}`, identity)
+    setSetting(`usage:${id}`, JSON.stringify(usage))
+  },
+  clear: id => { db.prepare('DELETE FROM settings WHERE key IN (?,?)').run(`usage:${id}`, `usageProfile:${id}`) },
+  request: fetchUsage,
+  emit: (accountId, usage) => emit({ accountUsage: { accountId, usage } }),
+  refreshGuard: work => backups.invoke(work)
+})
+const accountUsage = (accountId: number) => accountUsageService.get(accountId)
+// Perfis antigos podem compartilhar a mesma pasta: trocar login invalida todas essas contas.
+const invalidateAccountUsage = (account: any) => {
+  for (const acc of listAccounts()) if (dirKey(acc) === dirKey(account)) accountUsageService.invalidate(acc.id)
 }
 
-async function fetchUsage(accountId: number) {
-  const acc = db.prepare('SELECT * FROM accounts WHERE id=?').get(accountId) as any
+// Endpoint nao documentado usado pelo /usage do Claude Code; nao prova o estado do login.
+async function fetchUsage(accountId: number, signal: AbortSignal) {
+  const acc = accountRow(accountId) ?? fail('Conta inexistente.')
   const dir = acc.config_dir ?? path.join(os.homedir(), '.claude')
   const file = path.join(dir, '.credentials.json')
   if (!fs.existsSync(file)) throw new Error('Sem credencial local para consultar uso (recurso opcional; o chat nao depende dele).')
-  const token = JSON.parse(fs.readFileSync(file, 'utf8')).claudeAiOauth?.accessToken
+  let token: unknown
+  try { token = JSON.parse(fs.readFileSync(file, 'utf8')).claudeAiOauth?.accessToken } catch { throw Error('Credencial local invalida para consultar uso.') }
+  if (typeof token !== 'string' || !token) throw Error('Sem credencial local para consultar uso (recurso opcional; o chat nao depende dele).')
   const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
-    headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' }
+    headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' }, signal
   })
   // Endpoint nao documentado e opcional: recusa aqui NAO prova que o login falhou (veja o estado da conta).
   if (res.status === 401) throw new Error('Consulta de uso recusada (401). O estado do login e verificado a parte.')
@@ -846,11 +863,16 @@ const handlers: Record<string, (...a: any[]) => any> = {
   accountStatus: (id: number) => claudeStatus(accountEnv(asInt(id, 'conta'))),
   loginAccount: (id: number) => {
     const acc = accountRow(asInt(id, 'conta')) ?? fail('Conta inexistente.')
+    invalidateAccountUsage(acc)
     startLogin(dirKey(acc), accountEnv(acc.id), logFor('claude', acc.name))
   },
-  cancelLogin: (id: number) => cancelLogin(dirKey(accountRow(asInt(id, 'conta')) ?? fail('Conta inexistente.'))),
+  cancelLogin: (id: number) => {
+    const acc = accountRow(asInt(id, 'conta')) ?? fail('Conta inexistente.')
+    cancelLogin(dirKey(acc)); invalidateAccountUsage(acc)
+  },
   diagnose,
   accountUsage: (id: number) => accountUsage(accountRow(asInt(id, 'conta'))?.id ?? fail('Conta inexistente.')),
+  accountUsageSnapshot: (id: number) => accountUsageService.snapshot(accountRow(asInt(id, 'conta'))?.id ?? fail('Conta inexistente.')),
   codexUsage: () => codexLimits(), // lido das sessoes locais do Codex: sem rede, sem tokens
   projectIcon: (game: string) => projectIconData(asGame(game)),
   // Arquivos da tarefa ao vivo (fs.watch + git; sem IA, sem tokens). So a tarefa visivel e observada: abrir outra troca o observador.

@@ -18,6 +18,8 @@ import { LinkedIn } from './LinkedIn'
 import orbitMark from './orbit-mark.svg'
 import { Confirm, ContextMenu, GroupDialog, ProjectIcon, RenameInput, type MenuItem } from './Nav'
 import { groupOf, initials, moveTo, newGroup, placeBefore, type Group } from './groups'
+import { expireRead, loadRead, readSnapshot, setRead } from './readCache'
+import type { QuotaSnapshot } from './usageText'
 
 const ls = (k: string) => { try { return localStorage.getItem(k) } catch { return null } }
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch {} }
@@ -188,8 +190,22 @@ export default function App() {
   const req = useRef(0)
   const active = useActive()
 
-  const loadAccounts = () => api.listAccounts().then(setAccounts)
-  const refreshProviders = () => { setProviders(null); api.diagnose().then(setProviders, () => setProviders([])) }
+  const loadAccounts = () => api.listAccounts().then((list: Account[]) => {
+    setAccounts(list)
+    for (const a of list) {
+      if (a.login?.state === 'connecting') continue
+      const key = `accountUsage:${a.id}`, previous = readSnapshot<QuotaSnapshot | null>(key)
+      if (previous.data !== undefined) continue
+      api.accountUsageSnapshot(a.id).then((usage: QuotaSnapshot | null) => {
+        if (usage && readSnapshot(key) === previous) { setRead(key, usage); expireRead(key) }
+      }, () => {})
+    }
+  })
+  const refreshProviders = () => {
+    loadRead<Provider[]>('diagnose', () => api.diagnose()).then(setProviders, e => {
+      setProviders(p => p ?? []); setErr(errText(e))
+    })
+  }
   const loadAliases = () => api.projectNames().then((a: Record<string, string>) => { setAliases(a); setAliasVer(v => v + 1) }, () => {})
   const saveGroups = (n: Group[]) => { setGroups(n); api.setProjectGroups(n).catch((e: any) => setErr(errText(e))) }
   useEffect(() => {
@@ -197,7 +213,13 @@ export default function App() {
     load()
     return onChat(e => { if (e.groupsChanged) load() })
   }, [])
-  useEffect(() => { api.listGames().then(setGames); loadAccounts(); loadAliases(); api.diagnose().then(setProviders, () => setProviders([])) }, [])
+  useEffect(() => {
+    api.listGames().then(setGames); loadAccounts(); loadAliases()
+    loadRead<Provider[]>('diagnose', () => api.diagnose(), 600_000).then(setProviders, () => setProviders([]))
+    // So metadados locais; catalogos/CLIs e consulta de quotas continuam sob demanda.
+    for (const read of ['getContextLimits', 'getNotifySettings', 'getJarvisSettings', 'getDelegationSettings', 'getPermissionSettings', 'getAgentAliases', 'summaryTitles', 'backupInfo'])
+      loadRead(read, () => api[read]()).catch(() => {})
+  }, [])
   // Atalhos que dependem da pasta aberta: Ctrl+N nova tarefa, Ctrl+B mostra/oculta a gaveta, F2 renomeia a conversa aberta.
   const keys = useRef<(e: KeyboardEvent) => void>(() => {})
   useEffect(() => {

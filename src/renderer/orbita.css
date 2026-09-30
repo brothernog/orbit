@@ -104,7 +104,7 @@ button.task.active { background: linear-gradient(90deg, #7cc4ff17, #7cc4ff05 70%
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
 
 /* Troca de tela no centro: entrada curta, nunca bloqueia o clique */
-.center > main, .center > section, .center > .empty { animation: rise .35s var(--ease) both; }
+.center > main:not(.settings), .center > section, .center > .empty { animation: rise .35s var(--ease) both; }
 
 /* Modais */
 .modal-back { background: #04060acc; backdrop-filter: blur(8px) saturate(120%); }

@@ -486,7 +486,7 @@ form.inline input { flex: 1 1 200px; min-width: 0; }
   position: relative; overflow: hidden; min-width: 10px; border-radius: 999px; transform-origin: left;
   background: linear-gradient(90deg, color-mix(in srgb, var(--limit) 70%, #000), var(--limit) 70%, #ffd58a);
   box-shadow: 0 0 10px -1px #f2b45c88;
-  transition: width .8s var(--ease), background .4s; animation: bar-in .9s var(--ease) both;
+  transition: background .4s; animation: none;
 }
 .usage .bar div.hot { background: linear-gradient(90deg, #c8503f, var(--hot) 70%, #ffa596); box-shadow: 0 0 10px -1px #ff7b6b99; }
 .usage .bar div::after { /* brilho que varre o preenchimento */
@@ -494,8 +494,6 @@ form.inline input { flex: 1 1 200px; min-width: 0; }
   background: linear-gradient(90deg, transparent, #ffffff55, transparent); animation: bar-shine 2.8s ease-in-out 1s infinite;
 }
 .tip .usage .bar div { animation: none; } /* o balao vive escondido: a entrada toca a cada hover */
-.meter:hover .tip .usage .bar div, .meter:focus-visible .tip .usage .bar div { animation: bar-in .9s var(--ease) both; }
-@keyframes bar-in { from { transform: scaleX(0); opacity: .4; } to { transform: none; opacity: 1; } }
 @keyframes bar-shine { from { transform: translateX(-120%); } 60%, to { transform: translateX(260%); } }
 @media (prefers-reduced-motion: reduce) { .usage .bar div, .usage .bar div::after { animation: none; transition: none; } }
 .deleg { display: flex; flex-direction: column; gap: 10px; }

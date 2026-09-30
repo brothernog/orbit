@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, errText, name } from './api'
 import { Icon, PROVIDER } from './icons'
+import { useCachedRead } from './useCachedRead'
 import './permission.css'
 
 type Settings = { prompt: boolean; timeoutMin: number; codexSandbox: 'workspace-write' | 'danger-full-access'; codexNetwork: boolean; opencodeAuto: boolean; claudeAuto: boolean }
@@ -14,19 +15,22 @@ const AGENT_OPTS = ['claude', 'opencode'] // regras: o Claude as aplica no pop-u
 // nao tem prompt no modo headless, entao a escolha vira politica nativa (sandbox/rede, --auto). Componente isolado (so `api`).
 // Encaixe: <PermissionRules /> em uma secao/aba de Settings.tsx.
 export function PermissionRules() {
-  const [s, setS] = useState<Settings | null>(null)
-  const [rules, setRules] = useState<Rule[]>([])
-  const [recent, setRecent] = useState<Recent[]>([])
-  const [err, setErr] = useState('')
+  const settings = useCachedRead<Settings>('getPermissionSettings', () => api.getPermissionSettings())
+  const ruleRead = useCachedRead<Rule[]>('listPermissionRules', () => api.listPermissionRules())
+  const requestRead = useCachedRead<Recent[]>('listPermissionRequests', () => api.listPermissionRequests())
+  const s = settings.data, rules = ruleRead.data ?? []
+  const recent = (requestRead.data ?? []).filter(r => r.state !== 'pending').slice(0, 10)
+  const [writeErr, setErr] = useState('')
+  const readError = settings.error || ruleRead.error || requestRead.error
+  const err = writeErr || (readError ? errText(readError) : '')
   const [fullAck, setFullAck] = useState(false)
   const [form, setForm] = useState({ provider: 'claude', kind: 'bash', pattern: '', decision: 'allow', project: '' })
   const [assess, setAssess] = useState<Assess | null>(null)
   const [ack, setAck] = useState(false)
   const [games, setGames] = useState<string[]>([])
 
-  const load = () => Promise.all([api.getPermissionSettings(), api.listPermissionRules(), api.listPermissionRequests()]).then(
-    ([st, ru, rq]) => { setS(st); setRules(ru); setRecent(rq.filter((r: Recent) => r.state !== 'pending').slice(0, 10)) }, e => setErr(errText(e)))
-  useEffect(() => { load(); api.listGames().then(setGames, () => {}) }, [])
+  const load = () => Promise.all([ruleRead.reload(), requestRead.reload()]).catch(() => {})
+  useEffect(() => { api.listGames().then(setGames, () => {}) }, [])
   useEffect(() => { // risco do padrao digitado, para o aviso aparecer ANTES de salvar
     setAck(false)
     if (!form.pattern.trim()) { setAssess(null); return }
@@ -37,7 +41,7 @@ export function PermissionRules() {
   if (!s) return <small>{err || 'Carregando…'}</small>
   const save = (patch: Partial<Settings>, acknowledged = false) => {
     setErr('')
-    api.setPermissionSettings({ ...s, ...patch, acknowledged }).then((v: Settings) => setS(x => ({ ...x!, ...v })), (e: any) => setErr(errText(e)))
+    api.setPermissionSettings({ ...s, ...patch, acknowledged }).then((v: Settings) => settings.set({ ...s, ...v }), (e: any) => setErr(errText(e)))
   }
   const add = () => {
     setErr('')
@@ -81,7 +85,7 @@ export function PermissionRules() {
 
       <section>
         <h2>Regras</h2>
-        {rules.length === 0 && <small>Nenhuma regra. “Sempre permitir” no pop-up cria regras aqui.</small>}
+        {ruleRead.data === undefined ? <small>{ruleRead.error ? 'Não foi possível carregar as regras.' : 'Carregando regras…'}</small> : rules.length === 0 && <small>Nenhuma regra. “Sempre permitir” no pop-up cria regras aqui.</small>}
         <ul className="pr-rules">
           {rules.map(r => (
             <li key={r.id}>

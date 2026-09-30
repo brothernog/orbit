@@ -1,6 +1,27 @@
 // Ponte com o processo principal (ver src/preload/index.ts) e tipos compartilhados da interface.
+import { expireRead, invalidateRead, setRead } from './readCache.ts'
+
+const settingsReads: Record<string, string> = {
+  setContextLimits: 'getContextLimits', setNotifySettings: 'getNotifySettings', setJarvisSettings: 'getJarvisSettings',
+  setDelegationSettings: 'getDelegationSettings', setPermissionSettings: 'getPermissionSettings',
+  setAgentAliases: 'getAgentAliases', setSummaryTitles: 'summaryTitles'
+}
+const changedLists: Record<string, string[]> = {
+  addPermissionRule: ['listPermissionRules', 'listPermissionRequests'],
+  removePermissionRule: ['listPermissionRules', 'listPermissionRequests'],
+  resolvePermissionRequest: ['listPermissionRules', 'listPermissionRequests'],
+  hideGame: ['listHidden'], unhideGame: ['listHidden']
+}
 export const api = new Proxy({} as Record<string, (...a: any[]) => Promise<any>>, {
-  get: (_t, name: string) => (...args: any[]) => (window as any).invoke(name, ...args)
+  get: (_t, name: string) => (...args: any[]) => {
+    const read = settingsReads[name]
+    if (read) expireRead(read)
+    changedLists[name]?.forEach(expireRead)
+    return (window as any).invoke(name, ...args).then((value: any) => {
+      if (read && value !== undefined) setRead(read, value)
+      return value
+    })
+  }
 })
 
 export const AGENTS = ['claude', 'codex', 'gemini', 'opencode']
@@ -36,7 +57,16 @@ export type Metric = {
 
 // Eventos de streaming do chat: { taskId, text } enquanto executa e { taskId, done } ao terminar.
 const listeners = new Set<(ev: any) => void>()
-;(window as any).onChat?.((ev: any) => listeners.forEach(f => f(ev)))
+;(window as any).onChat?.((ev: any) => {
+  if (Number.isSafeInteger(ev.accountUsage?.accountId)) {
+    const key = `accountUsage:${ev.accountUsage.accountId}`
+    if (ev.accountUsage.usage === null) {
+      invalidateRead(key)
+      invalidateRead(`accountStatus:${ev.accountUsage.accountId}`)
+    } else setRead(key, ev.accountUsage.usage)
+  }
+  listeners.forEach(f => f(ev))
+})
 export const onChat = (f: (ev: any) => void) => {
   listeners.add(f)
   return () => { listeners.delete(f) }

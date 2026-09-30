@@ -6,9 +6,11 @@ import { BackupSettings } from './BackupSettings'
 import { effortLabel, modelName } from './Chat'
 import { Dropdown } from './Dropdown'
 import { Icon, PROVIDER } from './icons'
-import { compact, resetText, totalText } from './usageText'
+import { compact, resetText, totalText, usageNote, type QuotaSnapshot, type UsageWindow } from './usageText'
+import { invalidateRead } from './readCache'
+import { useCachedRead } from './useCachedRead'
 
-type Window_ = { utilization: number; resets_at: string } | null
+type Window_ = UsageWindow
 
 // Uma linha por limite, como no Claude Desktop: nome, renovacao e % na mesma linha; barra embaixo. Tambem usada no medidor do chat.
 export function Bar({ label, w }: { label: string; w: Window_ }) {
@@ -36,34 +38,34 @@ const CATEGORY_HINT: Record<string, string> = {
 }
 
 function AccountRow({ a, reload }: { a: Account; reload: () => void }) {
-  const [usage, setUsage] = useState<any>(null)
-  const [status, setStatus] = useState<Auth | null>(null)
   const [err, setErr] = useState('')
   const connecting = a.login?.state === 'connecting'
-  useEffect(() => {
-    if (connecting) return
-    api.accountStatus(a.id).then(setStatus, e => setStatus({ state: 'unknown', detail: errText(e) }))
-    api.accountUsage(a.id).then(setUsage, e => setUsage({ error: errText(e) }))
-  }, [a.id, a.login?.state])
+  const usageRead = useCachedRead<QuotaSnapshot | null>(connecting ? null : `accountUsage:${a.id}`, () => api.accountUsage(a.id), 30_000)
+  const statusRead = useCachedRead<Auth>(connecting ? null : `accountStatus:${a.id}`, () => api.accountStatus(a.id), 60_000)
+  const usage = usageRead.data, status = statusRead.data
   const state = connecting ? 'connecting' : a.login?.state === 'error' ? 'error' : status?.state ?? 'unknown'
-  const run = (f: Promise<any>) => f.then(reload, (e: any) => setErr(errText(e)))
+  const run = (f: () => Promise<any>) => {
+    invalidateRead(`accountStatus:${a.id}`); invalidateRead(`accountUsage:${a.id}`)
+    f().then(reload, (e: any) => { setErr(errText(e)); void statusRead.reload().catch(() => {}); void usageRead.reload().catch(() => {}) })
+  }
   return (
     <div className="account">
       <b>{a.name}</b> <span className={`state ${state}`}>{STATE[state]}</span>
       {status?.email && <small>{status.email}{status.plan ? ` · ${status.plan}` : ''}</small>}
       <div className="row">
         {connecting
-          ? <button onClick={() => run(api.cancelLogin(a.id))}>Cancelar login</button>
-          : <button onClick={() => { setErr(''); run(api.loginAccount(a.id)) }}>{state === 'connected' ? 'Refazer login' : 'Login'}</button>}
+          ? <button onClick={() => run(() => api.cancelLogin(a.id))}>Cancelar login</button>
+          : <button onClick={() => { setErr(''); run(() => api.loginAccount(a.id)) }}>{state === 'connected' ? 'Refazer login' : 'Login'}</button>}
       </div>
       {connecting && <small>Conclua o login no navegador que abriu (expira em 5 minutos).</small>}
       {a.login?.state === 'error' && <small className="err">{a.login.error}</small>}
       {err && <small className="err">{err}</small>}
       {a.collision && <small className="err">Mesma pasta de perfil de outra conta: os logins se sobrescrevem.</small>}
       {!connecting && (usage?.error ? <small className="err">Uso: {usage.error}</small> : <>
-        <Bar label="Limite de 5 horas" w={usage?.fiveHour} />
-        <Bar label="Semanal" w={usage?.sevenDay} />
-        {usage?.cached && <small>Último valor visto.</small>}
+        <Bar label="Limite de 5 horas" w={usage?.fiveHour ?? null} />
+        <Bar label="Semanal" w={usage?.sevenDay ?? null} />
+        {usageNote(usage) && <small>{usageNote(usage)}</small>}
+        {usageRead.error && <small className="err">Uso: {errText(usageRead.error)}</small>}
       </>)}
     </div>
   )
@@ -94,16 +96,16 @@ function ProviderRow({ p }: { p: Provider }) {
 
 type Deleg = { enabled: boolean; maxPerTask: number; timeoutMin: number; allowEdit: boolean; allowedProviders: string[]; readAgent: string; providers: string[]; mcpProviders: string[] }
 function Delegation() {
-  const [d, setD] = useState<Deleg | null>(null)
-  const [err, setErr] = useState('')
-  const [names, setNames] = useState<string[]>([])
-  useEffect(() => { api.getDelegationSettings().then(setD, e => setErr(errText(e))); api.getAgentAliases().then((v: any[]) => setNames(v.map(a => a.name)), () => {}) }, [])
+  const read = useCachedRead<Deleg>('getDelegationSettings', () => api.getDelegationSettings())
+  const aliases = useCachedRead<{ name: string }[]>('getAgentAliases', () => api.getAgentAliases())
+  const d = read.data, names = (aliases.data ?? []).map(a => a.name)
+  const [writeErr, setErr] = useState('')
+  const err = writeErr || (read.error ? errText(read.error) : '')
   if (!d) return <small>{err || 'Carregando…'}</small>
   const save = (patch: Partial<Deleg>) => {
     const next = { ...d, ...patch }
-    setD(next)
     api.setDelegationSettings({ enabled: next.enabled, maxPerTask: next.maxPerTask, timeoutMin: next.timeoutMin, allowEdit: next.allowEdit, allowedProviders: next.allowedProviders, readAgent: next.readAgent })
-      .then(v => setD(x => ({ ...x!, ...v })), e => setErr(errText(e)))
+      .then(v => read.set({ ...next, ...v }), e => setErr(errText(e)))
   }
   const toggle = (p: string) => save({ allowedProviders: d.allowedProviders.includes(p) ? d.allowedProviders.filter(x => x !== p) : [...d.allowedProviders, p] })
   return (
@@ -135,9 +137,9 @@ function Delegation() {
 
 // Ultimos 7 dias de delegacoes: so o que foi medido (tokens dos filhos e caracteres devolvidos ao pai). Nenhuma estimativa de economia.
 function DelegationReport() {
-  const [rows, setRows] = useState<any[] | null>(null)
-  useEffect(() => { api.delegationReport().then(setRows, () => setRows([])) }, [])
-  if (!rows) return <small>Carregando…</small>
+  const read = useCachedRead<any[]>('delegationReport', () => api.delegationReport())
+  const rows = read.data
+  if (!rows) return <small>{read.error ? errText(read.error) : 'Carregando…'}</small>
   if (!rows.length) return <small>Nenhuma delegação nos últimos 7 dias.</small>
   return (
     <ul className="deleg-report">
@@ -153,13 +155,14 @@ function DelegationReport() {
 
 // Modelo do Jarvis: sempre pela CLI do Claude, na conta escolhida (usa a assinatura dela, sem chave de API).
 function JarvisConfig({ accounts }: { accounts: Account[] }) {
-  const [j, setJ] = useState<{ accountId?: number; model: string; effort: string } | null>(null)
-  const [cat, setCat] = useState<any>(null)
-  const [err, setErr] = useState('')
+  const read = useCachedRead<{ accountId?: number; model: string; effort: string }>('getJarvisSettings', () => api.getJarvisSettings())
+  const catalog = useCachedRead<any>('catalog:claude', () => api.catalog('claude'), 600_000)
+  const j = read.data, cat = catalog.data
+  const [writeErr, setErr] = useState('')
+  const err = writeErr || (read.error ? errText(read.error) : '')
   const [ok, setOk] = useState(false)
-  useEffect(() => { api.getJarvisSettings().then(setJ, e => setErr(errText(e))); api.catalog('claude').then(setCat, () => setCat({ models: [], efforts: [] })) }, [])
   if (!j) return <small>{err || 'Carregando…'}</small>
-  const save = (patch: object) => { setErr(''); setOk(false); api.setJarvisSettings({ ...j, ...patch }).then(v => { setJ(v); setOk(true) }, e => setErr(errText(e))) }
+  const save = (patch: object) => { setErr(''); setOk(false); api.setJarvisSettings({ ...j, ...patch }).then(v => { read.set(v); setOk(true) }, e => setErr(errText(e))) }
   const models = (cat?.models ?? []).map((m: any) => ({ value: m.id, label: (m.label ?? modelName(m.id)) + (m.id === 'claude-sonnet-5-5' ? ' (recomendado)' : '') }))
   return (
     <div className="jcfg">
@@ -197,11 +200,12 @@ const LEVELS = [
 ]
 const levelOf = (l: Record<string, number>) => LEVELS.findIndex(x => Object.entries(x.v).every(([k, v]) => l[k] === v))
 function Limits() {
-  const [l, setL] = useState<Record<string, number> | null>(null)
-  const [err, setErr] = useState('')
-  useEffect(() => { api.getContextLimits().then(setL, e => setErr(errText(e))) }, [])
+  const read = useCachedRead<Record<string, number>>('getContextLimits', () => api.getContextLimits())
+  const l = read.data
+  const [writeErr, setErr] = useState('')
+  const err = writeErr || (read.error ? errText(read.error) : '')
   if (!l) return <small>{err || 'Carregando…'}</small>
-  const put = (patch: Record<string, number>) => api.setContextLimits({ ...l, ...patch }).then(setL, e => setErr(errText(e)))
+  const put = (patch: Record<string, number>) => api.setContextLimits({ ...l, ...patch }).then(read.set, e => setErr(errText(e)))
   const lv = levelOf(l)
   return (
     <div className="limits">
@@ -227,13 +231,14 @@ function Limits() {
 
 // Titulo-resumo do chat: o agente o escreve na propria 1a resposta (sem chamada extra); desligado, fica o comeco da mensagem.
 function SummaryTitles() {
-  const [on, setOn] = useState<boolean | null>(null)
-  const [err, setErr] = useState('')
-  useEffect(() => { api.summaryTitles().then(setOn, e => setErr(errText(e))) }, [])
-  if (on === null) return <small>{err || 'Carregando…'}</small>
+  const read = useCachedRead<boolean>('summaryTitles', () => api.summaryTitles())
+  const on = read.data
+  const [writeErr, setErr] = useState('')
+  const err = writeErr || (read.error ? errText(read.error) : '')
+  if (on === undefined) return <small>{err || 'Carregando…'}</small>
   return (
     <div className="deleg">
-      <label className="check"><input type="checkbox" checked={on} onChange={e => api.setSummaryTitles(e.target.checked).then(setOn, x => setErr(errText(x)))} /> O agente resume o pedido no nome do chat</label>
+      <label className="check"><input type="checkbox" checked={on} onChange={e => api.setSummaryTitles(e.target.checked).then(read.set, x => setErr(errText(x)))} /> O agente resume o pedido no nome do chat</label>
       <small>Vale para chats novos. Custa algumas palavras a mais só na primeira resposta; desligado, o nome é o começo da sua mensagem.</small>
       {err && <small className="err" role="alert">{err}</small>}
     </div>
@@ -250,11 +255,12 @@ const NOTIFY: [keyof Notify, string][] = [
   ['approval', 'Quando um agente pedir permissão ou aprovação de contexto'],
 ]
 function NotifySettings() {
-  const [n, setN] = useState<Notify | null>(null)
-  const [err, setErr] = useState('')
-  useEffect(() => { api.getNotifySettings().then(setN, e => setErr(errText(e))) }, [])
+  const read = useCachedRead<Notify>('getNotifySettings', () => api.getNotifySettings())
+  const n = read.data
+  const [writeErr, setErr] = useState('')
+  const err = writeErr || (read.error ? errText(read.error) : '')
   if (!n) return <small>{err || 'Carregando…'}</small>
-  const save = (patch: Partial<Notify>) => { const next = { ...n, ...patch }; setN(next); api.setNotifySettings(next).then(setN, e => setErr(errText(e))) }
+  const save = (patch: Partial<Notify>) => api.setNotifySettings({ ...n, ...patch }).then(read.set, e => setErr(errText(e)))
   return (
     <div className="deleg">
       <fieldset>
@@ -278,14 +284,14 @@ function NotifySettings() {
 
 // Pastas tiradas da lista de projetos: restaurar sem precisar achar a pasta de novo no seletor.
 function HiddenFolders({ onChange }: { onChange: () => void }) {
-  const [list, setList] = useState<string[] | null>(null)
-  const load = () => api.listHidden().then(setList, () => setList([]))
-  useEffect(() => { load() }, [])
-  if (!list?.length) return <small>Nenhuma pasta removida. Remover da lista nunca apaga nada; as removidas aparecem aqui para voltar.</small>
+  const read = useCachedRead<string[]>('listHidden', () => api.listHidden())
+  const list = read.data
+  if (!list) return <small>{read.error ? errText(read.error) : 'Carregando pastas…'}</small>
+  if (!list.length) return <small>Nenhuma pasta removida. Remover da lista nunca apaga nada; as removidas aparecem aqui para voltar.</small>
   return (
     <ul className="hidden-list">
       {list.map(p => <li key={p}><span className="mono-sm" title={p}>{p}</span>
-        <button className="mini" onClick={() => api.unhideGame(p).then(() => { load(); onChange() })}>Restaurar</button></li>)}
+        <button className="mini" onClick={() => api.unhideGame(p).then(() => { void read.reload().catch(() => {}); onChange() })}>Restaurar</button></li>)}
     </ul>
   )
 }
@@ -295,7 +301,6 @@ export function Settings({ accounts, reload, providers, refreshProviders, onGame
 }) {
   const [newName, setNewName] = useState('')
   const [tab, setTab] = useState<(typeof TABS)[number][0]>('contas')
-  useEffect(() => { refreshProviders() }, [])
   useEffect(() => { // acompanha logins em andamento
     if (!accounts.some(a => a.login?.state === 'connecting')) return
     const t = setInterval(reload, 2000)

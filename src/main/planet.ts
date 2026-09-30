@@ -4,12 +4,12 @@ import type { DatabaseSync } from 'node:sqlite'
 // se move); a semanal so entra quando nao ha 5 h viva e segue junto para a dica. Janela ja reiniciada (resets_at no passado)
 // nao conta: o valor visto era de antes do reinicio e nao vira 0 inventado.
 
-export type LimitWindow = { utilization: number; resets_at: string }
+export type LimitWindow = { utilization: number; resets_at: string | null }
 export type LimitRow = { fiveHour?: LimitWindow | null; sevenDay?: LimitWindow | null } | null | undefined
 export type PlanetUsage = { source: string; pct?: number; window?: '5h' | 'semana'; resetsAt?: string; week?: number }
 
 export function planetUsage(source: string, row: LimitRow, now = Date.now()): PlanetUsage {
-  const live = (w?: LimitWindow | null) => (w && Number.isFinite(w.utilization) && Date.parse(w.resets_at) > now ? w : null)
+  const live = (w?: LimitWindow | null) => (w && w.resets_at && Number.isFinite(w.utilization) && Date.parse(w.resets_at) > now ? { ...w, resets_at: w.resets_at } : null)
   const h5 = live(row?.fiveHour), wk = live(row?.sevenDay)
   const main = h5 ?? wk
   return {

@@ -26,6 +26,7 @@ import { readSkill } from './skills.ts'
 
 import { autoTitle, contextFor, DEFAULT_TITLE, getTask, profileOf, saveSel, saveSession, sessionOf, stripTitle, summaryTitle, titleIn, type TaskSel } from './tasks.ts'
 import type { LogEntry } from './providers.ts'
+import type { AccountUsage } from './accountUsage.ts'
 
 type Sel = TaskSel
 export type ActiveRun = { runId: number; cancel: (sync?: boolean) => void; text: string; workspace: string; provider?: string; model?: string; startedAt?: number; doing?: { tool: string; detail?: string } }
@@ -38,6 +39,7 @@ type ChatDeps = {
   envFor: (sel: Sel) => NodeJS.ProcessEnv; emit: (ev: object) => void; note: (taskId: number, text: string) => void
   logFor: (provider: string, profile?: string) => (e: Partial<LogEntry>) => void
   accountRow: (id?: number | null) => { name: string } | null; setSetting: (key: string, value: string) => unknown
+  accountUsageWriter?: (id: number) => (usage: AccountUsage) => void
   recordMetric: (taskId: number, sel: Sel, profile: string, session: string | undefined, metric: Metric | undefined) => void
   registerParent: (token: string, parent: ParentCtx, perm: boolean) => void; unregisterToken: (token: string) => void
   attachRoot: string; linkedinDir: string
@@ -173,9 +175,15 @@ export function createChatService(d: ChatDeps) {
       },
       // Medidor ao vivo: so o contexto ocupado (e a janela, se ja veio); a medida completa e gravada no fim (recordMetric).
       onMetric: m => { if (m.occupied != null) emit({ taskId: t.id, metric: { occupied: m.occupied, capacity: m.capacity ?? null, estimated: !!m.estimated, source: m.source } }) },
-      onUsage: data => {
-        if (data?.five_hour) setSetting(`usage:${sel.accountId}`, JSON.stringify({ fiveHour: pct(data.five_hour), sevenDay: pct(data.seven_day) }))
-      }
+      onUsage: (() => {
+        const writer = sel.provider === 'claude' && sel.accountId ? d.accountUsageWriter?.(sel.accountId) : undefined
+        return data => {
+          if (!data?.five_hour) return
+          const usage = { fiveHour: pct(data.five_hour), sevenDay: pct(data.seven_day) ?? null, seenAt: new Date().toISOString() }
+          if (writer) writer(usage)
+          else setSetting(`usage:${sel.accountId}`, JSON.stringify(usage))
+        }
+      })()
     })
     entry.cancel = sync => { for (const c of dctx.children) c.cancel(sync); run.cancel(sync) } // cancelar o pai cancela os filhos
     active.set(t.id, entry)
