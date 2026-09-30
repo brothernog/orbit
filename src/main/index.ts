@@ -6,6 +6,7 @@ import { createChatService } from './chatService.ts'
 import { createAutomations } from './automations.ts'
 import { createHandover, normalizeHandover } from './handover.ts'
 import { returnReads } from './settingsReads.ts'
+import { createDoc, editDoc } from './docs.ts'
 import { createAccountUsageService } from './accountUsage.ts'
 import { createJarvisService } from './jarvisService.ts'
 import { createLinkedInService } from './linkedinService.ts'
@@ -882,10 +883,9 @@ const handlers: Record<string, (...a: any[]) => any> = {
   },
   listDocs: (game: string) => listDocs(asGame(game)),
   readDoc: (game: string, rel: string) => fs.readFileSync(safeJoin(asGame(game), asStr(rel, 'arquivo', 500)), 'utf8'),
-  writeDoc: (game: string, rel: string, text: string) => {
-    if (!/\.md$/i.test(asStr(rel, 'arquivo', 500))) fail('So arquivos .md')
-    fs.writeFileSync(safeJoin(asGame(game), rel), asStr(text, 'texto', 200_000), { flag: 'wx' })
-  },
+  writeDoc: (game: string, rel: string, text: string) => createDoc(asGame(game), asStr(rel, 'arquivo', 500), asStr(text, 'texto', 200_000)), // so cria
+  editDoc: (game: string, rel: string, seen: string, text: string) =>
+    editDoc(asGame(game), asStr(rel, 'arquivo', 500), asStr(seen, 'texto lido', 200_000), asStr(text, 'texto', 200_000)),
   listPins: (game: string) => db.prepare('SELECT * FROM pins WHERE game=? ORDER BY id DESC').all(asGame(game)),
   addPin: (game: string, title: string, body: string) =>
     db.prepare('INSERT INTO pins (game,title,body) VALUES (?,?,?)').run(asGame(game), asStr(title, 'titulo', 300).trim() || fail('titulo vazio'), asStr(body ?? '', 'detalhes', 20_000)),

@@ -62,7 +62,7 @@ export function RoadmapCard({ games, initial, todo, onOpen, fixed }: { games: st
     ls[n] = ls[n].replace(LINE, (_, a, x, t) => `${a}[${x === ' ' ? 'x' : ' '}] ${t}`)
     const text = ls.join('\n')
     setDoc({ ...doc, text })
-    api.writeDoc(game, doc.path, text).catch((e: any) => { setErr(errText(e)); setDoc(doc) })
+    api.editDoc(game, doc.path, doc.text, text).catch((e: any) => { setErr(errText(e)); setDoc(doc) })
   }
 
   return (
