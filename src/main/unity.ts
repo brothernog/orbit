@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 // Credenciais de assinatura nunca são lidas, listadas nem varridas.
-export const CREDENTIAL = /\.(?:keystore|jks|p12|pfx)$|^credentials?(?:\.\w+)?$/i
+export const CREDENTIAL = /\.(?:keystore|jks|p12|pfx|p8|pem|mobileprovision|provisionprofile)$|^credentials?(?:\.\w+)?$|^\.env(?:\..*)?$/i
 
 // ---------- YAML Unity (Force Text) ----------
 export type UnityField = { key: string; line: number; end: number } // linhas 1-based, inclusivas
@@ -227,12 +227,14 @@ export const KNOWN_SCRIPTS: Record<string, string> = {
   '3245ec927659c4140ac4f8d17403cc18': 'UI.ContentSizeFitter', '306cc8c2b49d7114eaa3623786fc2126': 'UI.LayoutElement', f4688fdb7df04437aeb418b961361dc5: 'TMPro.TextMeshProUGUI',
   '9541d86e2fd84c1d9990edf0852d74ab': 'TMPro.TextMeshPro', '2da0c512f12947e489f739169773d7ca': 'TMPro.TMP_InputField', '7b743370ac3e4ec2a1668f5455a8ef8a': 'TMPro.TMP_Dropdown',
   a79441f348de89743a2939f4d699eac1: 'URP.UniversalAdditionalCameraData', '474bcb49853aa07438625e644c072ee6': 'URP.UniversalAdditionalLightData',
-  '01614664b831546d2ae94a42149d80ac': 'InputSystemUIInputModule', '62899f850307741f2a39c98a8b639597': 'InputSystem.PlayerInput'
+  '01614664b831546d2ae94a42149d80ac': 'InputSystemUIInputModule', '62899f850307741f2a39c98a8b639597': 'InputSystem.PlayerInput',
+  '172515602e62fb746b5d573b38a5fe58': 'Rendering.Volume', d7fd9488000d3734a9e00ee676215985: 'Rendering.VolumeProfile', d0353a89b1f911e48b9e16bdc9f2e058: 'URP.AssetVersion',
+  bf2edee5c58d82540a51f03df9d42094: 'URP.UniversalRenderPipelineAsset', de640fe3d0db1804a85f9fc8f5cadab6: 'URP.UniversalRendererData', f62c9c65cf3354c93be831c8bc075510: 'URP.ScreenSpaceAmbientOcclusion', '933532a4fcc9baf4fa0491de14d08ed7': 'shader URP/Lit'
 }
 export const BUILTIN_GUIDS: Record<string, string> = { '0000000000000000e000000000000000': 'built-in: unity default resources', '0000000000000000f000000000000000': 'built-in: unity_builtin_extra', '0000000000000000d000000000000000': 'built-in: editor resources' }
 
 // ---------- Índice do projeto: .meta (guid próprio) e citações de GUID por arquivo ----------
-export type FileRec = { size: number; mtimeMs: number; own?: string | null; refs?: Map<string, number> | null; why?: string }
+export type FileRec = { size: number; mtimeMs: number; own?: string | null; refs?: Map<string, number> | null; why?: string; lits?: string[] }
 export type UnityIndex = { at: number; files: Map<string, FileRec>; byGuid: Map<string, string>; truncated: boolean; links: number; hidden: string[]; usages: boolean }
 const BINARY = /\.(?:png|jpe?g|tga|psd|tiff?|exr|hdr|bmp|gif|webp|ico|fbx|obj|blend|max|mb|ma|dae|3ds|wav|mp3|ogg|aiff?|flac|mp4|mov|webm|avi|dll|so|dylib|a|lib|pdb|mdb|ttf|otf|bytes|zip|7z|gz|unitypackage|bank|pdf|jar|aar|bundle|dds|ktx|astc|cubemap|terraindata|lighting|bin)$/i
 export const MAX_SCAN = 32 * 1024 * 1024
@@ -272,9 +274,11 @@ export function unityIndex(root: string, internal: string[], usages = false): Un
       if (BINARY.test(rel)) { f.refs = null; f.why = 'binário' } else if (f.size > MAX_SCAN) { f.refs = null; f.why = '> 32 MiB' } else {
         const b = read(key, rel)
         if (!b || b.includes(0)) { f.refs = null; f.why = 'binário' } else {
-          const counts = new Map<string, number>()
-          for (const m of b.toString('latin1').matchAll(/(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])/g)) counts.set(m[0], (counts.get(m[0]) ?? 0) + 1)
+          const counts = new Map<string, number>(), t = b.toString('latin1')
+          for (const m of t.matchAll(/(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])/g)) counts.set(m[0], (counts.get(m[0]) ?? 0) + 1)
           f.refs = counts
+          // C#: literais curtos que parecem nome/caminho (Resources.Load, Addressables, AssetBundles citam assets por nome, não por GUID).
+          if (rel.endsWith('.cs')) f.lits = [...new Set([...t.matchAll(/"((?:[^"\\\n]|\\.){2,160})"/g)].map(m => m[1]).filter(x => /^[\w .\-/@()]+$/.test(x)))].slice(0, 2000)
         }
       }
     }
@@ -364,36 +368,84 @@ export type UnityDiag = { severity: 'error' | 'warning' | 'info'; kind: string; 
 // Caminhos absolutos de projeto (inclusive de outra máquina/CI) viram Assets/…, Packages/… ou Library/PackageCache/….
 export const projectRel = (p: string) => { const s = p.replace(/\\/g, '/'); return /^(?:[a-z]:\/|\/)/i.test(s) ? /\/((?:Assets|Packages|Library\/PackageCache)\/.*)$/.exec(s)?.[1] ?? s : s }
 // Em texto livre: o prefixo da máquina some antes de Assets/, Packages/ ou Library/PackageCache/ (o resto de caminhos absolutos é ocultado pelas ferramentas).
-export const projectPaths = (t: string) => t.replace(/(?<![\w.])(?:[a-z]:)?[\\/](?:[^:()"'<>|\\/\n]+[\\/])*?((?:Assets|Packages|Library[\\/]PackageCache)[\\/][^\s:()"'<>|]*)/gi, (_, rel: string) => rel.replace(/\\/g, '/'))
-const FRAME = /^\s*at .+|\(at .+:\d+\)\s*$|^[\w.<>`+$[\],]+:[\w.<>`+$|]+ ?\(.*\)|^Rethrow as \w+/
-const EXC = /^([\w.]*[A-Z]\w*Exception)(?:: ?(.*))?$/
-const CS = /^(?:\[[^\]]*\]\s*)*(.+?\.cs)\((\d+),(\d+)\): (error|warning) (\w+): (.*)$/i
-const LOC = /((?:[a-z]:)?[^\s()]*?(?:Assets|Packages)[/\\][^:()]+?):(\d+)\)?\s*$/i
+// Linear: acha a âncora e volta até 400 caracteres procurando o início do caminho (regex com segmentos opcionais era quadrática).
+const STOP = /[:()"'<>|\n]/, WORD = /[\w.]/, SLASH = (ch: string | undefined) => ch === '/' || ch === '\\'
+export function projectPaths(t: string): string {
+  let out = '', last = 0, floor = 0 // floor: abaixo dele já se sabe que não há início de caminho
+  for (const m of t.matchAll(/[\\/](?:Assets|Packages|Library[\\/]PackageCache)[\\/]/gi)) {
+    const at = m.index!
+    if (at < last) continue
+    let start = -1 // início mais próximo: barra após espaço encerra (texto "…/tmp/x e /Users/p/Assets/…" preserva o começo)
+    for (let i = at; i >= Math.max(last, floor, at - 400) && !STOP.test(t[i]); i--) {
+      if (!SLASH(t[i]) || WORD.test(t[i - 1] ?? '')) continue
+      start = i
+      if (/\s/.test(t[i - 1] ?? '')) break
+    }
+    if (start >= 2 && t[start - 1] === ':' && /[a-z]/i.test(t[start - 2]) && !WORD.test(t[start - 3] ?? '')) start -= 2
+    if (start < 0) { floor = at; continue }
+    let end = at + m[0].length
+    while (end < t.length && !/[\s:()"'<>|]/.test(t[end])) end++
+    out += t.slice(last, start) + t.slice(at + 1, end).replace(/\\/g, '/'); last = end
+  }
+  return out + t.slice(last)
+}
+// Raiz do projeto citada no log (-projectPath ou "changed project path"): caminhos sob ela viram relativos, inclusive Builds/ e ProjectSettings/.
+export function logPaths(raw: string): string {
+  const root = (/^Successfully changed project path to: (.+?)\s*$/m.exec(raw) ?? /^-projectPath\r?\n(.+?)\s*$/m.exec(raw))?.[1]?.replace(/[\\/]+$/, '')
+  let t = raw
+  if (root && /^(?:[a-z]:)?[\\/]./i.test(root)) for (const r of new Set([root, root.replace(/\\/g, '/'), root.replace(/\//g, '\\')])) t = t.split(r + '/').join('').split(r + '\\').join('').split('\n').map(l => l.trimEnd().endsWith(r) && /(?:^|[\s:'"])$/.test(l.trimEnd().slice(0, -r.length)) ? l.trimEnd().slice(0, -r.length) + '.' : l).join('\n')
+  return t.split('\n').map(l => l.length > 4000 ? l : projectPaths(l)).join('\n')
+}
+const MAX_LINE = 2000 // linhas maiores são cortadas antes das regex (logs patológicos não travam o processo principal)
+const FRAME = /^\s*at .+|\(at [^()]+:\d+\)\s*$|^[\w.<>`+$[\],/]+:[\w.<>`+$|]+ ?\(.*\)|^Rethrow as \w+/
+const EXC = /^((?:\w+\.)*[A-Z]\w*Exception)(?:: ?(.*))?$/
+const CS = /^(.+?\.cs)\((\d+),(\d+)\): (error|warning) (\w+): (.*)$/i
+const INFO_LOG = /^UnityEngine\.Debug:Log(?:Format)? ?\(/
+const SUSPECT = /\b(?:error|exception|fail(?:ed|ure|s)?|missing|does not exist|not found|invalid|cannot|can't|could not|unable to|leak(?:ed|s)?)\b/i
+// Arquivo:linha do frame (Assets/Packages): sem regex com dois quantificadores preguiçosos (quadrática em frames longos).
+function locOf(f: string): { path: string; line: number } | undefined {
+  const m = /:(\d+)\)?\s*$/.exec(f)
+  if (!m) return
+  const head = f.slice(0, m.index), re = /(?:Assets|Packages)[/\\]/gi
+  re.lastIndex = Math.max(head.lastIndexOf(':'), head.lastIndexOf('('), head.lastIndexOf(')')) + 1
+  const a = re.exec(head)
+  if (!a || a.index + a[0].length >= head.length) return
+  let s = a.index
+  while (s > 0 && !/[\s()]/.test(head[s - 1])) s--
+  return { path: head.slice(s), line: +m[1] }
+}
 function projectFrame(stack: string[]) {
-  const hits = stack.map(f => ({ f, m: LOC.exec(f) })).filter(x => x.m)
-  const best = hits.find(x => /(?:^|[/\\ (])Assets[/\\]/.test(x.m![1])) ?? hits.find(x => !/Packages[/\\]com\.unity\./.test(x.m![1])) ?? hits[0]
-  return best ? { frame: best.f.trim(), file: projectRel(best.m![1]), line: Number(best.m![2]) } : {}
+  const hits = stack.map(f => ({ f, m: locOf(f) })).filter(x => x.m)
+  const best = hits.find(x => /(?:^|[/\\ (])Assets[/\\]/.test(x.m!.path)) ?? hits.find(x => !/Packages[/\\]com\.unity\./.test(x.m!.path)) ?? hits[0]
+  return best ? { frame: best.f.trim(), file: projectRel(best.m!.path), line: best.m!.line } : {}
 }
 export function unityLog(raw: string): { items: UnityDiag[]; totalLines: number } {
-  const lines = raw.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/).map(l => projectPaths(l.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\|0x[0-9a-f]+\|/i, '')))
+  const lines = logPaths(raw.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')).split(/\r?\n/).map(l => { l = l.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\|0x[0-9a-f]+\|/i, ''); return l.length > MAX_LINE ? l.slice(0, MAX_LINE) + '…' : l })
   const found: UnityDiag[] = []
   const add = (d: Omit<UnityDiag, 'count' | 'stack'> & { stack?: string[] }) => found.push({ stack: [], count: 1, ...d })
+  const FILENAME = /^\(Filename: .* Line: -?\d+\)$/
+  let quiet: { start: number; block: string[] } | undefined // bloco anterior sem diagnóstico: vira aviso se o Unity o marcou com (Filename:) e o texto sugere problema
   for (let i = 0; i < lines.length;) {
     if (!lines[i].trim()) { i++; continue }
-    const start = i, block: string[] = [], used = new Set<number>()
+    const start = i, block: string[] = [], used = new Set<number>(), first = found.length
     while (i < lines.length && lines[i].trim()) block.push(lines[i++])
     const at = (k: number) => [start + k + 1]
+    if (block.length === 1 && FILENAME.test(block[0].trim())) {
+      const q = quiet, text = q?.block.map(x => x.trim()).join('\n') ?? ''
+      if (q && q.block.length <= 6 && !q.block.some(x => FRAME.test(x)) && SUSPECT.test(text)) add({ severity: 'warning', kind: /referenced script .*is missing/i.test(text) ? 'script ausente' : 'log', message: text, lines: [q.start + 1] })
+      quiet = undefined; continue
+    }
     for (let j = 0; j < block.length; j++) {
       const l = block[j].trim(), j0 = j, before = found.length
       let m: RegExpExecArray | null
-      if ((m = CS.exec(l))) add({ severity: m[4].toLowerCase() as 'error' | 'warning', kind: 'compilação', code: m[5], message: m[6], file: projectRel(m[1]), line: +m[2], col: +m[3], lines: at(j) })
+      if ((m = CS.exec(l))) add({ severity: m[4].toLowerCase() as 'error' | 'warning', kind: 'compilação', code: m[5], message: m[6], file: projectRel(m[1].replace(/^(?:\[[^\]]*\]\s*)+/, '')), line: +m[2], col: +m[3], lines: at(j) })
       else if ((m = /^Shader (error|warning) in '([^']+)': (.*)$/.exec(l))) add({ severity: m[1] as 'error' | 'warning', kind: 'shader', code: m[2], message: m[3], lines: at(j) })
       else if ((m = /Build Finished, Result: (\w+)|Build completed with a result of '(\w+)'/.exec(l))) add({ severity: /^Succe/.test(m[1] ?? m[2]) ? 'info' : 'error', kind: 'build', message: l, lines: at(j) })
       else if (/^Error building Player|^Build failed|BuildPlayerWindow\+BuildMethodException/.test(l)) add({ severity: 'error', kind: 'build', message: [l, ...block.slice(j + 1, j + 3).map(s => s.trim())].join(' '), lines: at(j) })
       else if (/^Scripts have compiler errors/.test(l)) add({ severity: 'error', kind: 'compilação', message: l, lines: at(j) })
       else if (/^Aborting batchmode due to failure/.test(l)) { add({ severity: 'error', kind: 'batchmode', message: [l, ...block.slice(j + 1, j + 2).map(s => s.trim())].join(' '), lines: at(j) }); used.add(++j) }
       else if (/^Exiting batchmode successfully|^Test run completed|Exiting with code \d+|^Saving results to:/.test(l)) add({ severity: /code [1-9]|Failed/.test(l) ? 'error' : 'info', kind: /results|Test run/.test(l) ? 'testes' : 'batchmode', message: l, lines: at(j) })
-      else if (/^An error occurred while resolving packages|^\[Package Manager\].*(?:error|fail)|^Cannot resolve package/i.test(l)) { add({ severity: 'error', kind: 'pacotes', message: [l, ...block.slice(j + 1, j + 6).map(s => s.trim())].join(' | '), lines: at(j) }); for (let k = 0; k < 5 && j + 1 < block.length; k++) used.add(++j) }
+      else if (/^An error occurred while resolving packages|^\[Package Manager\].*(?:error|fail)|^Cannot resolve package/i.test(l) && !/-noUpm\b/.test(l)) { add({ severity: 'error', kind: 'pacotes', message: [l, ...block.slice(j + 1, j + 6).map(s => s.trim())].join(' | '), lines: at(j) }); for (let k = 0; k < 5 && j + 1 < block.length; k++) used.add(++j) }
       else if (/licen[sc]/i.test(l) && /error|fail|no valid|not found|invalid|expired|could not/i.test(l)) add({ severity: 'error', kind: 'licença', message: l, lines: at(j) })
       if (found.length > before) used.add(j0)
     }
@@ -406,13 +458,16 @@ export function unityLog(raw: string): { items: UnityDiag[]; totalLines: number 
       const stack = block.slice(j, e + 1).map(x => x.trim()), h = block.slice(s, j).findIndex(x => EXC.test(x.trim())), log = /^UnityEngine\.Debug:Log(Error|Warning|Exception|Assertion)/.exec(stack[0])
       if (h >= 0) { const ex = EXC.exec(block[s + h].trim())!; add({ severity: 'error', kind: 'exceção', code: ex[1].split('.').pop(), message: [ex[2] ?? '', ...block.slice(s + h + 1, j)].join('\n').trim() || ex[1], stack, ...projectFrame(stack), lines: at(s + h) }) }
       else if (log && s < j) add({ severity: log[1] === 'Warning' ? 'warning' : 'error', kind: `Log${log[1]}`, message: block.slice(s, j).join('\n').trim(), stack, ...projectFrame(stack), lines: at(s) })
+      // Aviso nativo com pilha gerenciada (Animator.SetTrigger sem parâmetro, SendMessage sem receptor…): severidade não vem no log.
+      else if (!log && s < j && !INFO_LOG.test(stack[0])) add({ severity: 'warning', kind: 'log', message: block.slice(s, j).join('\n').trim(), stack, ...projectFrame(stack), lines: at(s) })
       for (let k = s; k <= e; k++) used.add(k)
       j = e
     }
     for (let j = 0; j < block.length; j++) {
-      const ex = used.has(j) ? null : EXC.exec(block[j].trim())
+      const ex = used.has(j) || !block[j].includes('Exception') ? null : EXC.exec(block[j].trim())
       if (ex) add({ severity: 'error', kind: 'exceção', code: ex[1].split('.').pop(), message: ex[2] || ex[1], lines: at(j) })
     }
+    quiet = found.length === first ? { start, block } : undefined
   }
   const grouped = new Map<string, UnityDiag>()
   for (const d of found) {
@@ -425,22 +480,31 @@ export function unityLog(raw: string): { items: UnityDiag[]; totalLines: number 
 
 type X = { tag: string; attrs: Record<string, string>; kids: X[]; text: string; line: number }
 const entity = (s: string) => s.replace(/&(?:#x([0-9a-f]+)|#(\d+)|(lt|gt|amp|quot|apos));/gi, (m, h, d, n) => h ? String.fromCodePoint(parseInt(h, 16)) : d ? String.fromCodePoint(+d) : ({ lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" } as Record<string, string>)[n.toLowerCase()] ?? m)
+// Varredura por indexOf: comentário/CDATA/DOCTYPE sem fechamento não reinicia busca a cada "<" (antes era quadrático).
+const TAG = /<(\/?)([\w:.-]+)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/y
 function xmlTree(s: string): X {
   const root: X = { tag: '#', attrs: {}, kids: [], text: '', line: 1 }, stack = [root]
-  let line = 1, last = 0
-  for (const m of s.matchAll(/<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!DOCTYPE[^>]*>|<(\/?)([\w:.-]+)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/g)) {
-    for (let i = last; i < m.index!; i++) if (s.charCodeAt(i) === 10) line++
-    last = m.index!
-    const top = stack[stack.length - 1]
-    if (m[1] !== undefined) top.text += m[1]
-    else if (m[6] !== undefined) top.text += entity(m[6])
-    else if (m[3] && m[2]) { const i = stack.map(x => x.tag).lastIndexOf(m[3]); if (i > 0) stack.length = i }
-    else if (m[3]) {
-      const el: X = { tag: m[3], attrs: {}, kids: [], text: '', line }
-      for (const a of m[4].matchAll(/([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) el.attrs[a[1]] = entity(a[2] ?? a[3])
+  let i = 0, line = 1
+  const to = (k: number) => { for (let n = i; n < k; n++) if (s.charCodeAt(n) === 10) line++; i = k }
+  const skip = (open: string, close: string) => { const e = s.indexOf(close, i + open.length); const body = s.slice(i + open.length, e < 0 ? s.length : e); to(e < 0 ? s.length : e + close.length); return body }
+  while (i < s.length) {
+    const top = stack[stack.length - 1], lt = s.indexOf('<', i)
+    if (lt !== i) { const end = lt < 0 ? s.length : lt; top.text += entity(s.slice(i, end)); to(end); continue }
+    if (s.startsWith('<![CDATA[', i)) { top.text += skip('<![CDATA[', ']]>'); continue }
+    if (s.startsWith('<!--', i)) { skip('<!--', '-->'); continue }
+    if (s.startsWith('<?', i)) { skip('<?', '?>'); continue }
+    if (s.startsWith('<!', i)) { skip('<!', '>'); continue }
+    TAG.lastIndex = i
+    const m = TAG.exec(s)
+    if (!m) { top.text += '<'; to(i + 1); continue }
+    if (m[1]) { const k = stack.map(x => x.tag).lastIndexOf(m[2]); if (k > 0) stack.length = k }
+    else {
+      const el: X = { tag: m[2], attrs: {}, kids: [], text: '', line }
+      for (const a of m[3].matchAll(/([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) el.attrs[a[1]] = entity(a[2] ?? a[3])
       top.kids.push(el)
-      if (!m[5]) stack.push(el)
+      if (!m[4]) stack.push(el)
     }
+    to(i + m[0].length)
   }
   return root
 }
@@ -462,6 +526,8 @@ export function unityTestResults(xml: string): UnityTests {
     }
   }
   walk(run)
+  const rank = { error: 0, warning: 1, info: 2 }
+  items.sort((a, b) => rank[a.severity] - rank[b.severity] || a.lines[0] - b.lines[0])
   const d = Number(run.attrs.duration)
   return { result: run.attrs.result ?? '?', total: n('total'), passed: n('passed'), failed: n('failed'), skipped: n('skipped'), inconclusive: n('inconclusive'), duration: Number.isFinite(d) && run.attrs.duration ? d : null, items }
 }

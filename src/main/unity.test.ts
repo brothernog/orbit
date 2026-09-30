@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fieldOf, fieldText, nodePath, parseUnityYaml, rawAt, refOf, unityIndex, unityLog, unityProject, unityTestResults, unityTree, valueOf, yamlValue } from './unity.ts'
+import { CREDENTIAL, fieldOf, fieldText, logPaths, nodePath, parseUnityYaml, projectPaths, rawAt, refOf, unityIndex, unityLog, unityProject, unityTestResults, unityTree, valueOf, yamlValue } from './unity.ts'
 
 const Y = '%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n'
 
@@ -156,6 +156,73 @@ ArgumentException: standalone header`)
     ['exceção', 'Tag: Foo is not defined.', 'Assets/Other.cs'],
     ['exceção', 'standalone header', null]
   ])
+})
+
+test('log real: avisos nativos com pilha, (Filename:) suspeitos, tipos aninhados, -noUpm e raiz do projeto relativa', () => {
+  const r = unityLog(`[Package Manager] Server::EnsureServerProcessIsRunning -- launch failed, reason: Unity was launched with the -noUpm command-line argument
+-projectPath
+/Users/marta/dev/skyhop
+Successfully changed project path to: /Users/marta/dev/skyhop
+
+Jump ignored: not grounded
+UnityEngine.Debug:LogWarning (object)
+Skyhop.PlayerController:TryJump () (at Assets/Scripts/PlayerController.cs:57)
+UnityEngine.InputSystem.LowLevel.NativeInputRuntime/<>c__DisplayClass7_0:<set_onUpdate>b__0 (UnityEngineInternal.Input.NativeInputUpdateType,UnityEngineInternal.Input.NativeInputEventBuffer*)
+
+(Filename: Assets/Scripts/PlayerController.cs Line: 57)
+
+Parameter 'Jump' does not exist.
+UnityEngine.Animator:SetTrigger (string)
+Skyhop.PlayerController:TryJump () (at Assets/Scripts/PlayerController.cs:61)
+
+(Filename: Assets/Scripts/PlayerController.cs Line: 61)
+
+Spawned wave 3
+UnityEngine.Debug:Log (object)
+Spawner:Next () (at Assets/Scripts/Spawner.cs:9)
+
+(Filename: Assets/Scripts/Spawner.cs Line: 9)
+
+The referenced script on this Behaviour (Game Object 'Enemy (2)') is missing!
+
+(Filename:  Line: 1740)
+
+Loaded scene Level01
+
+(Filename:  Line: 12)
+
+Saving results to: /Users/marta/dev/skyhop/Builds/test-results.xml`)
+  assert.deepEqual(r.items.map(d => [d.severity, d.kind, d.message, d.file ?? null, d.line ?? null]), [
+    ['warning', 'LogWarning', 'Jump ignored: not grounded', 'Assets/Scripts/PlayerController.cs', 57],
+    ['warning', 'log', "Parameter 'Jump' does not exist.", 'Assets/Scripts/PlayerController.cs', 61],
+    ['warning', 'script ausente', "The referenced script on this Behaviour (Game Object 'Enemy (2)') is missing!", null, null],
+    ['info', 'testes', 'Saving results to: Builds/test-results.xml', null, null]
+  ])
+  assert.equal(r.items[0].stack.length, 3)
+  assert.match(logPaths('-projectPath\nC:\\p\\x\nSuccessfully changed project path to: C:\\p\\x\nC:\\p\\x\\Builds\\a.log'), /^-projectPath\n\.\nSuccessfully changed project path to: \.\nBuilds\\a\.log$/)
+})
+
+test('caminhos em texto livre: início mais próximo, Windows com espaço, sem apagar texto vizinho', () => {
+  assert.equal(projectPaths('copied /tmp/cache and then /Users/m/My Game/Assets/A.cs:3 ok'), 'copied /tmp/cache and then Assets/A.cs:3 ok')
+  assert.equal(projectPaths('at C:\\Users\\John Doe\\proj\\Assets\\B.cs:4'), 'at Assets/B.cs:4')
+  assert.equal(projectPaths('(at /ci/x/Library/PackageCache/com.a@1/R.cs:1)'), '(at Library/PackageCache/com.a@1/R.cs:1)')
+  assert.equal(projectPaths('src/foo/Assets/x and Assets/y'), 'src/foo/Assets/x and Assets/y')
+})
+
+test('entradas patológicas não travam o processo principal (regex lineares, linhas longas cortadas)', () => {
+  const at = performance.now()
+  const L = (u: string) => Array.from({ length: 300 }, () => u.repeat(Math.floor(3000 / u.length))).join('\n')
+  for (const u of ['Assets/', ' /', '(at ', '[a]', 'a.cs(', 'Aa.', 'Foo:Bar (', ' in Assets/x']) unityLog(L(u))
+  unityLog('NullReferenceException: x\n  at ' + 'Assets/a'.repeat(5000))
+  for (const x of ['<!--', '<![CDATA[', '<!DOCTYPE', '<?', '<a b="']) unityTestResults('<test-run>' + x.repeat(60000))
+  assert.ok(performance.now() - at < 3000, `${Math.round(performance.now() - at)} ms`)
+})
+
+test('NUnit: falhas antes de pulados/inconclusivos; credenciais de assinatura iOS/Android e .env reconhecidas', () => {
+  const r = unityTestResults(`<test-run result="Failed" total="3" failed="1" skipped="1" inconclusive="1"><test-suite><test-case fullname="A" result="Skipped"><reason><message>later</message></reason></test-case><test-case fullname="B" result="Inconclusive"/><test-case fullname="C" result="Failed"><failure><message>boom</message></failure></test-case></test-suite></test-run>`)
+  assert.deepEqual(r.items.map(d => d.code), ['C', 'A', 'B'])
+  for (const f of ['dist.p12', 'AuthKey_X.p8', 'Dev.mobileprovision', 'user.keystore', 'key.pem', '.env', '.env.local', 'credentials.json']) assert.ok(CREDENTIAL.test(f), f)
+  for (const f of ['Player.prefab', 'environment.asset', 'Env.cs']) assert.ok(!CREDENTIAL.test(f), f)
 })
 
 test('NUnit: entidades fora de CDATA, suites sem falha própria ignoradas, XML inválido recusado', () => {

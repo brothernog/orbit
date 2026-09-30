@@ -335,7 +335,7 @@ const ctx = context()
 const call = (name: string, args: any = {}, c = ctx, chars = 6000, organizerId = 'unity') => callUnityTool(db, { ...DEFAULT_LIMITS, queryChars: chars }, c, organizerId, name, args)
 const ok = (name: string, args: any = {}, c = ctx, chars = 6000) => { const r = call(name, args, c, chars); assert.equal(r.isError, false, r.text); return r.text }
 const content = (response: string) => response.split('\n').slice(2).join('\n')
-const hash = (response: string) => /hash ([a-f0-9]{64})/.exec(response)![1]
+const hash = (response: string) => /hash ([a-f0-9]{16})/.exec(response)![1]
 const next = (response: string) => /próximo offset (\d+)/.exec(response)?.[1]
 
 test.after(() => {
@@ -388,8 +388,7 @@ test('object seleciona por caminho ou fileID; ambiguidade e ausência orientam o
   assert.match(t, /PlayerController &203 · speed, target, weaponPrefab, greeting/)
   assert.match(t, /Player\/Weapon &300 · GameObject \(inativo\)/)
   assert.match(t, /Player\/Enemy Boss &5000 · PrefabInstance ⇒ Assets\/Prefabs\/Enemy\.prefab/)
-  assert.match(t, /mod m_LocalPosition\.x = 3 \(alvo 400000\)/)
-  assert.match(t, /mod m_Materials\.Array\.data\[0\] → Assets\/Materials\/Red\.mat/)
+  assert.match(t, /overrides \(4\) por alvo na origem:\n {4}&100200: m_Name=Renamed Inner Child\n {4}Enemy: m_Name=Enemy Boss\n {4}Enemy · Transform: m_LocalPosition\.x=3\n {4}Enemy · MeshRenderer: m_Materials\.Array\.data\[0\]=→ Assets\/Materials\/Red\.mat/)
   assert.match(t, /m_AddedComponents: 1/)
   assert.doesNotMatch(t, /Main Camera|Spawner/)
   assert.equal(ok('unity_asset', { path: 'Assets/Scenes/Main.unity', object: '&203' }).split('\n')[2], t.split('\n')[2])
@@ -452,9 +451,8 @@ test('refs: path↔guid, referências de saída e usos com objeto/campo; Library
   const u = ok('unity_refs', { path: 'Assets/Prefabs/Enemy.prefab', usages: true }, ctx, 20000)
   assert.match(u, /usos: 2 arquivo\(s\)/)
   assert.match(u, /Assets\/Data\/Config\.asset ×1 · GameConfig &11400000\.levels/)
-  assert.match(u, /Assets\/Scenes\/Main\.unity ×\d+ · Player · PlayerController &203\.weaponPrefab; Player\/Enemy Boss · PrefabInstance &5000\.m_Modification\[m_Name\|m_LocalPosition\.x\|m_Materials\.Array\.data\[0\]\]/)
-  assert.match(u, /Spawner · Spawner &702\.prefab/)
-  assert.match(u, /não varridos: .*binário/); assert.match(u, /Zero usos não prova/)
+  assert.match(u, /Assets\/Scenes\/Main\.unity ×\d+ · Player · PlayerController &203\.weaponPrefab; Spawner · Spawner &702\.prefab; 1 instância\(s\) de prefab: Player\/Enemy Boss &5000\n/)
+  assert.match(u, /não varridos: .*binário/); assert.match(u, /Zero usos não prova segurança/)
   assert.doesNotMatch(u, /Library\/PackageCache\/com\.foo|Enemy\.prefab\.meta|&600[01]/)
   const s = ok('unity_refs', { path: 'Assets/Scripts/PlayerController.cs', usages: true })
   assert.match(s, /Assets\/Scenes\/Big\.unity ×360/); assert.match(s, /PlayerController &203\.m_Script/)
@@ -595,4 +593,123 @@ test('diagnostics: NUnit XML com totais, falhas, erro de setup e pulados', () =>
   assert.match(ok('unity_diagnostics', { path: 'Builds/empty.xml' }), /nenhum teste executado/)
   put('Builds/other.xml', '<root/>')
   assert.match(call('unity_diagnostics', { path: 'Builds/other.xml' }).text, /não é resultado NUnit/)
+})
+
+test('overrides por componente alvo (variante por fileID derivado), controller legível, LayerMask, nomes em C# e tipos repetidos', () => {
+  const x = (a: string, b: string) => ((BigInt(a) ^ BigInt(b)) & 0x7FFFFFFFFFFFFFFFn).toString()
+  const V = '8812345678901234567', vGo = x(V, '100100'), vMr = x(V, '2300000'), variant = 'a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9', created = ['Assets/Prefabs/EnemyVariant.prefab', 'Assets/Scenes/Arena.unity', 'Assets/Animations/P.controller', 'Assets/Scripts/Loader.cs', 'Assets/Data/Two.asset']
+  put('Assets/Prefabs/EnemyVariant.prefab', `${Y}--- !u!1001 &${V}
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 100100, guid: ${G.enemy}, type: 3}
+      propertyPath: m_Name
+      value: EnemyVariant
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${G.enemy}, type: 3}
+--- !u!1 &${vGo} stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 100100, guid: ${G.enemy}, type: 3}
+  m_PrefabInstance: {fileID: ${V}}
+  m_PrefabAsset: {fileID: 0}
+`); meta('Assets/Prefabs/EnemyVariant.prefab', variant, 'PrefabImporter')
+  put('Assets/Scenes/Arena.unity', `${Y}--- !u!1001 &7000
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: ${vGo}, guid: ${variant}, type: 3}
+      propertyPath: m_Name
+      value: Elite A
+      objectReference: {fileID: 0}
+    - target: {fileID: ${vMr}, guid: ${variant}, type: 3}
+      propertyPath: m_Materials.Array.data[0]
+      value: 
+      objectReference: {fileID: 2100000, guid: ${G.red}, type: 2}
+    - target: {fileID: ${vMr}, guid: ${variant}, type: 3}
+      propertyPath: m_RenderingLayers.m_Bits
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: ${variant}, type: 3}
+--- !u!114 &7001 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 11400000, guid: ${variant}, type: 3}
+  m_PrefabInstance: {fileID: 7000}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: ${G.player}, type: 3}
+${go('7100', 'Hero', ['7101', '7102'])}${tr('7101', '7100', '0', [])}${mb('7102', '7100', `{fileID: 11500000, guid: ${G.player}, type: 3}`, '  groundMask:\n    serializedVersion: 2\n    m_Bits: 256\n')}`)
+  const cond = (id: string, dst: string, p: string, mode = 1) => `--- !u!1101 &${id}\nAnimatorStateTransition:\n  m_ObjectHideFlags: 1\n  m_Name: \n  m_Conditions:\n  - m_ConditionMode: ${mode}\n    m_ConditionEvent: ${p}\n    m_EventTreshold: 0.1\n  m_DstStateMachine: {fileID: 0}\n  m_DstState: {fileID: ${dst}}\n  m_Mute: 0\n  m_IsExit: 0\n  serializedVersion: 3\n  m_ExitTime: 0.9\n  m_HasExitTime: 0\n`
+  const state = (id: string, name: string, trs: string[]) => `--- !u!1102 &${id}\nAnimatorState:\n  serializedVersion: 6\n  m_ObjectHideFlags: 1\n  m_Name: ${name}\n  m_Speed: 1\n  m_Transitions:\n${trs.map(t => `  - {fileID: ${t}}\n`).join('')}  m_StateMachineBehaviours: []\n  m_Motion: {fileID: 0}\n`
+  put('Assets/Animations/P.controller', `${Y}${cond('-11', '22', 'Jmp')}${cond('-12', '21', 'Speed', 4)}--- !u!91 &9100000
+AnimatorController:
+  m_ObjectHideFlags: 0
+  m_Name: P
+  serializedVersion: 5
+  m_AnimatorParameters:
+  - m_Name: Speed
+    m_Type: 1
+    m_DefaultFloat: 0
+  - m_Name: Jump
+    m_Type: 9
+    m_DefaultFloat: 0
+  m_AnimatorLayers:
+  - serializedVersion: 5
+    m_Name: Base Layer
+    m_StateMachine: {fileID: 30}
+    m_Mask: {fileID: 0}
+    m_BlendingMode: 0
+${state('21', 'Idle', ['-11'])}${state('22', 'Run', ['-12'])}--- !u!1107 &30
+AnimatorStateMachine:
+  serializedVersion: 6
+  m_ObjectHideFlags: 1
+  m_Name: Base Layer
+  m_ChildStates:
+  - serializedVersion: 1
+    m_State: {fileID: 21}
+    m_Position: {x: 0, y: 0, z: 0}
+  - serializedVersion: 1
+    m_State: {fileID: 22}
+    m_Position: {x: 0, y: 0, z: 0}
+  m_ChildStateMachines: []
+  m_AnyStateTransitions: []
+  m_EntryTransitions: []
+  m_DefaultState: {fileID: 21}
+`)
+  put('Assets/Scripts/Loader.cs', 'using UnityEngine;\npublic class Loader : MonoBehaviour { void Start() { Instantiate(Resources.Load<GameObject>("Enemies/EnemyVariant")); Debug.Log("EnemyVariantX"); } }\n')
+  put('Assets/Data/Two.asset', `${Y}--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: ${G.config}, type: 3}\n  m_Name: A\n  maxHealth: 1\n--- !u!114 &2\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: ${G.config}, type: 3}\n  m_Name: B\n  maxHealth: 2\n`)
+  const at = Date.now; Date.now = () => at() + 120_000
+  try {
+    const o = ok('unity_asset', { path: 'Assets/Scenes/Arena.unity', object: 'Elite A' })
+    assert.match(o, /Elite A &7000 · PrefabInstance ⇒ Assets\/Prefabs\/EnemyVariant\.prefab · linhas \d+-\d+ · overrides \(3\) por alvo na origem:\n {2}Enemy: m_Name=Elite A\n {2}Enemy · MeshRenderer: m_Materials\.Array\.data\[0\]=→ Assets\/Materials\/Red\.mat; m_RenderingLayers\.m_Bits=0 \(Nothing\)/)
+    assert.match(ok('unity_asset', { path: 'Assets/Scenes/Arena.unity', object: 'Hero', component: 'PlayerController', property: 'groundMask' }), /m_Bits: 256\nlayers: m_Bits 256 = Ground$/)
+    const c = ok('unity_asset', { path: 'Assets/Animations/P.controller' })
+    assert.match(c, /parâmetros: Speed:Float, Jump:Trigger\ncamada "Base Layer"\n {2}máquina "Base Layer" &30 · padrão Idle\n {4}Idle &21 \(sem motion\) → Run \[Jmp ⚠\] &-11\n {4}Run &22 \(sem motion\) → Idle \[Speed < 0\.1\] &-12\n⚠ condições usam parâmetro inexistente: Jmp/)
+    assert.ok(c.length < fs.statSync(path.join(cwd, 'Assets/Animations/P.controller')).size, 'resumo menor que o YAML')
+    assert.match(ok('unity_asset', { path: 'Assets/Data/Two.asset' }), /&1 GameConfig "A" · maxHealth\n&2 GameConfig "B" · campos como &1/)
+    const u = ok('unity_refs', { path: 'Assets/Prefabs/EnemyVariant.prefab', usages: true }, ctx, 20000)
+    assert.match(u, /Assets\/Scenes\/Arena\.unity ×\d+ · 1 instância\(s\) de prefab: Elite A &7000/)
+    assert.match(u, /nome "EnemyVariant" em strings C# \(1; [^)]*\): Assets\/Scripts\/Loader\.cs "Enemies\/EnemyVariant"/)
+    assert.match(ok('unity_refs', { path: 'Assets/Scripts/PlayerController.cs', usages: true }, ctx, 20000), /Arena\.unity ×2 · Elite A · PlayerController \(stripped\) &7001\.m_Script; Hero · PlayerController &7102\.m_Script/)
+    assert.match(call('unity_diagnostics', { path: 'Assets/Art/hero.png' }).text, /path deve ser log/)
+    const manifest = fs.readFileSync(path.join(cwd, 'Packages/manifest.json'), 'utf8')
+    put('Packages/manifest.json', JSON.stringify({ dependencies: { 'com.a.in': 'file:../Local/a', 'com.a.out': 'file:../../shared/b', 'com.a.abs': 'file:/opt/c' } }))
+    try { assert.match(ok('unity_project'), /com\.a\.abs@file:\[fora do projeto\] \[local\], com\.a\.in@file:\.\.\/Local\/a \[local\], com\.a\.out@file:\[fora do projeto\] \[local\]/) } finally { put('Packages/manifest.json', manifest) }
+  } finally { Date.now = at; for (const f of created) { fs.rmSync(path.join(cwd, f), { force: true }); fs.rmSync(path.join(cwd, f + '.meta'), { force: true }) } }
 })
