@@ -5,7 +5,9 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { openDb, MIGRATIONS } from './db.ts'
+import { checkpointDb, openDb, MIGRATIONS } from './db.ts'
+import { execFileSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 import { attachImages } from './attachments.ts'
 import { createTask } from './tasks.ts'
 import { createProductionService } from './production.ts'
@@ -286,5 +288,32 @@ test('recuperação manual: preservar instalação corrompida e restaurar numa i
       assert.equal(row(restored, "SELECT value FROM settings WHERE key='linkedinAuth'"), undefined)
     } finally { restored.close() }
     assert.equal(fs.readFileSync(path.join(preserved, 'dashboard.db'), 'utf8'), 'banco corrompido')
+  } finally { f.cleanup() }
+})
+
+test('WAL: backup com escritor aberto, queda com commits no -wal e troca offline sem misturar -wal antigo', () => {
+  const f = fixture(); f.db.close()
+  const file = path.join(f.data, 'dashboard.db')
+  try {
+    const live = openDb(file)
+    assert.equal(row(live, 'PRAGMA journal_mode').journal_mode, 'wal'); assert.equal(row(live, 'PRAGMA synchronous').synchronous, 1); assert.equal(row(live, 'PRAGMA busy_timeout').timeout, 5000)
+    live.prepare("INSERT INTO settings(key,value) VALUES ('orig','backup')").run()
+    const backup = createBackup(live, f.data, f.backups)
+    live.prepare("INSERT INTO settings(key,value) VALUES ('later','live')").run()
+    stageRestore(f.data, backup.path) // lê o banco vivo (somente leitura) com o escritor WAL aberto
+    live.close()
+    // Queda: outro processo grava e sai sem fechar; o commit fica só no -wal.
+    execFileSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', `const { openDb } = await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, 'db.ts')).href)}); openDb(${JSON.stringify(file)}).prepare("INSERT INTO settings(key,value) VALUES ('crash','wal')").run(); process.exit(0)`])
+    assert.ok(fs.statSync(file + '-wal').size > 0)
+    const applied = applyPendingRestore(f.data)!
+    const safety = new DatabaseSync(path.join(applied.safetyPath, 'dashboard.db'), { readOnly: true })
+    try { assert.equal(row(safety, "SELECT value FROM settings WHERE key='crash'").value, 'wal'); assert.equal(row(safety, "SELECT value FROM settings WHERE key='later'").value, 'live') } finally { safety.close() }
+    const restored = openDb(file)
+    try {
+      assert.equal(row(restored, "SELECT value FROM settings WHERE key='orig'").value, 'backup')
+      assert.equal(row(restored, "SELECT 1 x FROM settings WHERE key IN ('crash','later')"), undefined)
+      restored.prepare("INSERT INTO settings(key,value) VALUES ('next','x')").run(); checkpointDb(restored)
+      assert.equal(fs.statSync(file + '-wal').size, 0) // checkpoint ao sair: o .db sozinho está completo
+    } finally { restored.close() }
   } finally { f.cleanup() }
 })

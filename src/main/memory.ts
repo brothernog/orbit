@@ -115,7 +115,10 @@ export const todoReady = (db: DatabaseSync, m: MemoryRow) => m.kind === 'todo' &
 export type Validity = { validity: 'valid' | 'stale' | 'unknown' | 'superseded'; changed: string[] }
 // Confere os arquivos declarados como evidencia. Tamanho diferente prova mudanca sem ler; tamanho igual ainda exige o hash
 // (mtime/tamanho sozinhos nao fundamentam validade). Sem evidencia declarada a validade e desconhecida, nao "valida".
-export function validate(db: DatabaseSync, m: MemoryRow, workspace: string): Validity {
+// `seen`: tamanho/hash ja lidos NESTA passada (painel com ate 500 itens, selecao de contexto de um envio). Varios itens com a mesma
+// evidencia leem e hasheiam o arquivo uma vez; cada passada nova cria o seu, entao nada vale entre chamadas.
+export type EvidenceReads = Map<string, { size: number; hash?: string } | null>
+export function validate(db: DatabaseSync, m: MemoryRow, workspace: string, seen: EvidenceReads = new Map()): Validity {
   if (m.state === 'superseded') return { validity: 'superseded', changed: [] }
   const files = m.evidence.files ?? []
   if (!files.length) return { validity: m.state === 'stale' ? 'stale' : 'unknown', changed: [] }
@@ -123,8 +126,9 @@ export function validate(db: DatabaseSync, m: MemoryRow, workspace: string): Val
   for (const f of files) {
     try {
       const abs = safeJoin(workspace, f.path)
-      const st = fs.statSync(abs)
-      if (st.size !== f.size || sha(fs.readFileSync(abs)) !== f.hash) changed.push(f.path)
+      let read = seen.get(abs)
+      if (read === undefined) { try { read = { size: fs.statSync(abs).size } } catch { read = null } seen.set(abs, read) }
+      if (!read || read.size !== f.size || (read.hash ??= sha(fs.readFileSync(abs))) !== f.hash) changed.push(f.path)
     } catch { changed.push(f.path) } // sumiu ou saiu da area: nao ha como confirmar
   }
   if (changed.length && m.state === 'active') db.prepare("UPDATE memory_items SET state='stale', updated_at=strftime('%Y-%m-%d %H:%M:%f','now') WHERE id=?").run(m.id)

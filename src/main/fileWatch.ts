@@ -25,13 +25,15 @@ export function parseNumstat(out: string) {
 }
 
 // Lista unica: status do git + contagem de linhas + ultima gravacao vista. Arquivo novo (fora do Git) conta as proprias linhas.
+// A ordem so depende de lastWrite/caminho: ordena e corta antes, e so os arquivos exibidos tem as linhas lidas do disco.
 export function mergeChanges(status: FileChange[], numstat: ReturnType<typeof parseNumstat>, writes: Map<string, number>, linesOf: (rel: string) => number | null): ChangedFile[] {
-  const out = status.filter(f => !ignored(f.path) && !f.path.endsWith('/')).map(f => {
+  const kept = status.filter(f => !ignored(f.path) && !f.path.endsWith('/')).map(f => ({ f, lastWrite: writes.get(f.path) ?? null }))
+    .sort((a, b) => (b.lastWrite ?? 0) - (a.lastWrite ?? 0) || a.f.path.localeCompare(b.f.path)).slice(0, MAX)
+  return kept.map(({ f, lastWrite }) => {
     const n = numstat.get(f.path)
-    const lines = f.status === '?' ? linesOf(f.path) : null
-    return { ...f, added: n ? n.added : f.status === '?' ? lines : null, removed: n ? n.removed : f.status === '?' ? 0 : null, lastWrite: writes.get(f.path) ?? null }
+    const lines = !n && f.status === '?' ? linesOf(f.path) : null
+    return { ...f, added: n ? n.added : f.status === '?' ? lines : null, removed: n ? n.removed : f.status === '?' ? 0 : null, lastWrite }
   })
-  return out.sort((a, b) => (b.lastWrite ?? 0) - (a.lastWrite ?? 0) || a.path.localeCompare(b.path)).slice(0, MAX)
 }
 
 function countLines(file: string): number | null {

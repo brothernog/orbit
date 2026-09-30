@@ -42,8 +42,8 @@ test('worktree: previa valida os hashes, merge revisado sobrevive ao reinicio e 
     assert.equal(merge.pending?.owned, true); assert.equal(merge.pending?.mergeStarted, true)
     assert.deepEqual(merge.pending?.staged, ['feature.txt', 'second.txt'])
     assert.equal((await run(f.game, ['rev-parse', 'HEAD'])).trim(), fresh.target.head)
-    assert.throws(() => f.service.assertAvailable(f.game), /pendente|integracao/)
-    assert.doesNotThrow(() => f.service.assertAvailable(f.source))
+    await assert.rejects(f.service.assertAvailable(f.game), /pendente|integracao/)
+    await assert.doesNotReject(f.service.assertAvailable(f.source))
     const restarted = createWorktreeService(f.db), resumed = await restarted.view(f.game)
     const done = await restarted.finishMerge(f.game, resumed.pending!.token)
     assert.equal(done.pending, null)
@@ -165,7 +165,7 @@ test('worktree: reinicio reconhece apenas o commit com os dois pais esperados', 
     await f.service.beginMerge(f.game, f.source, p.token)
     await run(f.game, ['commit', '--no-edit'])
     const restarted = createWorktreeService(f.db)
-    assert.doesNotThrow(() => restarted.assertAvailable(f.game))
+    await assert.doesNotReject(restarted.assertAvailable(f.game))
     assert.equal((await restarted.view(f.game)).pending, null)
     await f.commit(f.source, 'second.txt', 'second')
     p = await restarted.previewMerge(f.game, f.source)
@@ -173,13 +173,13 @@ test('worktree: reinicio reconhece apenas o commit com os dois pais esperados', 
     await run(f.game, ['merge', '--abort'])
     await f.commit(f.game, 'unrelated.txt', 'unrelated')
     assert.equal((await createWorktreeService(f.db).view(f.game)).pending?.owned, false)
-    assert.throws(() => restarted.assertAvailable(f.game), /integracao/)
+    await assert.rejects(restarted.assertAvailable(f.game), /integracao/)
     await assert.rejects(restarted.abortMerge(f.game, (await restarted.view(f.game)).pending!.token), /nao pertence/)
     const head = (await run(f.game, ['rev-parse', 'HEAD'])).trim()
     assert.equal((await restarted.dismissMerge(f.game, (await restarted.view(f.game)).pending!.token)).pending, null)
     assert.equal((await run(f.game, ['rev-parse', 'HEAD'])).trim(), head)
     assert.equal(fs.readFileSync(path.join(f.game, 'unrelated.txt'), 'utf8'), 'unrelated')
-    assert.doesNotThrow(() => restarted.assertAvailable(f.game))
+    await assert.doesNotReject(restarted.assertAvailable(f.game))
   } finally { f.dispose() }
 })
 
@@ -247,15 +247,28 @@ test('worktree: pasta externa, repo aninhado, HEAD destacado e operacoes paralel
     const gitDir = path.resolve(f.source, (await run(f.source, ['rev-parse', '--git-dir'])).trim())
     fs.mkdirSync(path.join(gitDir, 'rebase-merge'))
     await assert.rejects(f.service.previewMerge(f.game, f.source), /pendente/)
-    assert.throws(() => f.service.assertAvailable(f.source), /pendente/)
+    await assert.rejects(f.service.assertAvailable(f.source), /pendente/)
     fs.rmdirSync(path.join(gitDir, 'rebase-merge'))
-    assert.doesNotThrow(() => f.service.assertAvailable(nested))
-    assert.doesNotThrow(() => f.service.assertAvailable(os.tmpdir()))
+    await assert.doesNotReject(f.service.assertAvailable(nested))
+    await assert.doesNotReject(f.service.assertAvailable(os.tmpdir()))
     const oldPath = process.env.PATH
     try {
       process.env.PATH = ''
-      assert.doesNotThrow(() => f.service.assertAvailable(os.tmpdir()))
-      assert.throws(() => f.service.assertAvailable(f.game), /verificar/)
+      await assert.doesNotReject(f.service.assertAvailable(os.tmpdir()))
+      await assert.rejects(f.service.assertAvailable(f.game), /verificar/)
     } finally { process.env.PATH = oldPath }
+  } finally { f.dispose() }
+})
+
+test('assertAvailable: Git roda fora da thread principal; o event loop segue durante a verificação', async () => {
+  const f = await fixture()
+  try {
+    let ticked = false
+    setImmediate(() => { ticked = true })
+    const pending = f.service.assertAvailable(f.game)
+    assert.ok(pending instanceof Promise)
+    assert.equal(ticked, false) // nada de execFileSync bloqueando até aqui
+    await pending
+    assert.equal(ticked, true)
   } finally { f.dispose() }
 })

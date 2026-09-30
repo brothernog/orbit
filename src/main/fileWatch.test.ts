@@ -52,3 +52,14 @@ test('pasta real com git: mudancas, diff do arquivo, caminho de fora recusado e 
   assert.equal(await fileDiff(dir, 'save/slot.gd'), '+x\n+y')
   await assert.rejects(fileDiff(dir, '../fora.txt'), /fora da pasta/)
 })
+
+test('lista de arquivos: corta em 200 antes de contar linhas; so os arquivos exibidos sao lidos', () => {
+  const status = Array.from({ length: 1000 }, (_, i) => ({ path: `novo${String(i).padStart(4, '0')}.gd`, status: '?' as const }))
+  const writes = new Map([['novo0999.gd', 50], ['novo0500.gd', 40]])
+  const read: string[] = []
+  const list = mergeChanges(status, new Map(), writes, rel => { read.push(rel); return 3 })
+  assert.equal(list.length, 200); assert.equal(read.length, 200)
+  assert.deepEqual(list.slice(0, 3).map(f => [f.path, f.lastWrite]), [['novo0999.gd', 50], ['novo0500.gd', 40], ['novo0000.gd', null]])
+  assert.deepEqual(read.sort(), list.map(f => f.path).sort())
+  assert.ok(list.every(f => f.added === 3 && f.removed === 0))
+})

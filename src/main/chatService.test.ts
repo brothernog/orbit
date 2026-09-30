@@ -18,7 +18,7 @@ test('chat: comando iniciado durante preparação assíncrona do MCP impede o sp
   const waiting=new Promise<{url:string}>(r=>release=r),ready=new Promise<void>(r=>entered=r)
   const forbidden=()=>{throw Error('Não deveria iniciar execução/entrega.')}
   const service=createChatService({db,active:new Map(),guard:new WorkspaceGuard(),broker:{} as any,
-    asTask:id=>getTask(db,id),taskCwd:()=>process.cwd(),checkSel:async()=>{},workspaceBusy:()=>busy,
+    asTask:id=>getTask(db,id),taskCwd:async()=>process.cwd(),checkSel:async()=>{},workspaceBusy:()=>busy,
     contextLimits:()=>DEFAULT_LIMITS,delegationSettings:()=>({...DEFAULT_SETTINGS,enabled:true}),permissionSettings:()=>normalizePermissionSettings(null),
     getMcp:()=>{entered();return waiting},mcpDir:()=>process.cwd(),nativeFor:forbidden,envFor:forbidden,
     emit:()=>{},note:()=>{},logFor:()=>()=>{},accountRow:()=>null,setSetting:()=>{},recordMetric:()=>{},registerParent:forbidden,unregisterToken:()=>{},attachRoot:process.cwd(),linkedinDir:process.cwd()+'/linkedin'
@@ -37,7 +37,7 @@ test('chat: Godot prepara MCP mesmo sem delegação; revogação durante preparo
   const ready = new Promise<void>(r => entered = r), waiting = new Promise<{ url: string }>(r => release = r)
   const forbidden = () => { throw Error('Não deveria iniciar execução.') }
   const service = createChatService({ db, active: new Map(), guard: new WorkspaceGuard(), broker: {} as any,
-    asTask: id => getTask(db, id), taskCwd: () => process.cwd(), checkSel: async () => {}, workspaceBusy: () => false,
+    asTask: id => getTask(db, id), taskCwd: async () => process.cwd(), checkSel: async () => {}, workspaceBusy: () => false,
     contextLimits: () => DEFAULT_LIMITS, delegationSettings: () => ({ ...DEFAULT_SETTINGS, enabled: false }), permissionSettings: () => normalizePermissionSettings(null),
     engineGrants: () => organizer ? { godot: organizer } : {}, getMcp: () => { entered(); return waiting }, mcpDir: () => process.cwd(), nativeFor: forbidden, envFor: forbidden,
     emit: () => {}, note: () => {}, logFor: () => () => {}, accountRow: () => null, setSetting: () => {}, recordMetric: () => {}, registerParent: forbidden, unregisterToken: () => {}, attachRoot: process.cwd(), linkedinDir: process.cwd() + '/linkedin'

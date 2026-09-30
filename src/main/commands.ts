@@ -32,28 +32,32 @@ export function saveCommands(db: DatabaseSync, game: string, raw: unknown) {
 export const listCommandRuns = (db: DatabaseSync, taskId: number) => db.prepare(`SELECT ${summaryColumns} FROM command_runs WHERE task_id=? ORDER BY id DESC LIMIT 20`).all(taskId) as CommandRunSummary[]
 export const commandRun = (db: DatabaseSync, taskId: number, id: number) => db.prepare('SELECT * FROM command_runs WHERE task_id=? AND id=?').get(taskId, id) as CommandRun | undefined
 // Offsets em unidades UTF-16, como String.length/slice no renderer. Não aceitamos avançar além da saída persistida.
-export function commandOutput(db: DatabaseSync, taskId: number, id: number, offset = 0) {
+// `live`: saída em memória de uma execução ativa desta tarefa; o SQLite só é lido quando ela já terminou.
+export function commandOutput(db: DatabaseSync, taskId: number, id: number, offset = 0, live?: { output: string; truncated: number }) {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1_000_000) throw Error('Offset de saída inválido.')
-  const run = commandRun(db, taskId, id)
+  const run = live ?? commandRun(db, taskId, id)
   if (!run) throw Error('Comando de outra tarefa ou inexistente.')
   if (offset > run.output.length) throw Error('Offset além da saída disponível.')
   return { offset, output: run.output.slice(offset), total: run.output.length, truncated: run.truncated }
 }
+// Enquanto o comando roda, a saída acumulada (até 1.000.000 caracteres) fica em memória e é servida dali;
+// o SQLite recebe uma cópia a cada PERSIST_MS (recuperação após queda) e sempre no fim, antes do evento de conclusão.
+export const PERSIST_MS = 5000
 export function reconcileCommands(db: DatabaseSync) {
   db.prepare("UPDATE command_runs SET status='failed',error='Execução interrompida pelo fechamento do app.',ended_at=CURRENT_TIMESTAMP WHERE status='running'").run()
 }
 export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, agentsBusy: (cwd: string) => boolean, emit: (ev: object) => void, checks: {
-  beforeSpawn?: (taskId: number, game: string, cwd: string, command: ProjectCommand) => void
+  beforeSpawn?: (taskId: number, game: string, cwd: string, command: ProjectCommand) => void | Promise<void>
   resultError?: (command: ProjectCommand, output: string, truncated: boolean, cwd: string) => string | undefined
 } = {}) {
-  const active = new Map<number, { cwd: string; taskId: number; cancel: (sync?: boolean) => void }>()
+  const active = new Map<number, { cwd: string; taskId: number; cancel: (sync?: boolean) => void; live: () => { output: string; truncated: number } }>()
   const busy = (cwd: string) => [...active.values()].some(r => same(r.cwd,cwd))
   async function start(taskId: number, game: string, cwd: string, name: string) {
     const task = db.prepare('SELECT game FROM tasks WHERE id=?').get(taskId) as any
     if (!task || !same(task.game,game)) throw Error('Comando de outro projeto ou tarefa inexistente.')
     const cmd = projectCommands(db,game).find(c => c.name === name)
     if (!cmd) throw Error('Salve o comando antes de executar.')
-    checks.beforeSpawn?.(taskId, game, cwd, cmd)
+    await checks.beforeSpawn?.(taskId, game, cwd, cmd)
     if (busy(cwd) || agentsBusy(cwd)) throw Error('Pare a execução atual nesta pasta antes de executar um comando local.')
     const lockId = -taskId
     const blocked = guard.acquireEdit(cwd,taskId,lockId,false)
@@ -61,17 +65,20 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
     let id: number
     try { id = Number(db.prepare('INSERT INTO command_runs(task_id,workspace,name,program,args) VALUES (?,?,?,?,?)').run(taskId,cwd,cmd.name,cmd.program,JSON.stringify(cmd.args)).lastInsertRowid) }
     catch(e) { guard.release(cwd,lockId); throw e }
-    const started=Date.now(); let child: ChildProcess | undefined, output='', truncated=false, stopped=false, finished=false, timer: NodeJS.Timeout | undefined, timeoutError: string | undefined, flushTimer: NodeJS.Timeout | undefined, flushedLength=0, flushedTruncated=false
+    const started=Date.now(); let child: ChildProcess | undefined, output='', truncated=false, stopped=false, finished=false, timer: NodeJS.Timeout | undefined, timeoutError: string | undefined, flushTimer: NodeJS.Timeout | undefined, flushedLength=0, flushedTruncated=false, persistedLength=0, persistedTruncated=false, persistedAt=started
     const notify=()=>emit({ taskId, game, commandChanged: true, commandRun: db.prepare(`SELECT ${summaryColumns} FROM command_runs WHERE id=?`).get(id) as CommandRunSummary })
-    const flush=()=>{
+    const flush=(final=false)=>{
       if(flushTimer)clearTimeout(flushTimer);flushTimer=undefined
+      if((final||Date.now()-persistedAt>=PERSIST_MS)&&(output.length!==persistedLength||truncated!==persistedTruncated)){
+        db.prepare('UPDATE command_runs SET output=?,truncated=? WHERE id=?').run(output,truncated?1:0,id)
+        persistedLength=output.length;persistedTruncated=truncated;persistedAt=Date.now()
+      }
       if(output.length===flushedLength&&truncated===flushedTruncated)return
-      db.prepare('UPDATE command_runs SET output=?,truncated=? WHERE id=?').run(output,truncated?1:0,id)
       flushedLength=output.length;flushedTruncated=truncated
       emit({taskId,game,commandOutput:{id,outputLength:output.length,truncated}})
     }
     const finish=(code: number|null,error?: string)=>{
-      if(finished)return;finished=true;if(timer)clearTimeout(timer);flush()
+      if(finished)return;finished=true;if(timer)clearTimeout(timer);flush(true)
       if (!stopped && !error) try { error = checks.resultError?.(cmd, output, truncated, cwd) } catch { error = 'Não foi possível verificar a saída do comando.' }
       db.prepare('UPDATE command_runs SET status=?,exit_code=?,duration_ms=?,error=?,ended_at=CURRENT_TIMESTAMP WHERE id=?').run(stopped?'cancelled':error||code!==0?'failed':'completed',code,Date.now()-started,error??null,id)
       active.delete(id);guard.release(cwd,lockId);notify()
@@ -79,7 +86,7 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
       emit({ taskId, game, commandDone: { id, name: cmd.name, purpose: cmd.purpose, status: stopped ? 'cancelled' : error || code !== 0 ? 'failed' : 'completed', exitCode: code, durationMs: Date.now() - started, error: error ?? null, output: output.slice(-20_000) } })
     }
     const cancel=(sync=false)=>{stopped=true;if(child){killTree(child,sync);if(sync)finish(null)}else finish(null)}
-    active.set(id,{cwd,taskId,cancel});notify()
+    active.set(id,{cwd,taskId,cancel,live:()=>({output,truncated:truncated?1:0})});notify()
     // A resolução não bloqueia o IPC; o cancelamento antes do spawn continua efetivo.
     void (async()=>{
       try {
@@ -87,7 +94,8 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
         if(finished)return
         if(!exe)throw Error('Executável não encontrado no PATH.')
         normalizeCommand({...cmd,program:exe})
-        checks.beforeSpawn?.(taskId, game, cwd, cmd) // resolução assíncrona: revalidar destino e arquivos imediatamente antes de executar
+        await checks.beforeSpawn?.(taskId, game, cwd, cmd) // resolução assíncrona: revalidar destino e arquivos imediatamente antes de executar
+        if(finished)return // cancelado durante a revalidação
         // Dentro do Electron, node.exe pode resolver para o próprio runtime: permitir scripts locais sem abrir outra janela do app.
         child=cliSpawn(exe,cmd.args,{cwd,env:{...process.env,PWD:cwd,ELECTRON_RUN_AS_NODE:'1'}}) // PWD: o Blender resolve caminhos relativos por $PWD, não pelo cwd
         child.stdin?.on('error',()=>{});child.stdin?.end()
@@ -104,5 +112,6 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
     })()
     return id
   }
-  return {start,busy,hasTask:(id:number)=>[...active.values()].some(r=>r.taskId===id),cancel:(id:number)=>active.get(id)?.cancel(),stopAll:()=>{for(const r of active.values())r.cancel(true)}}
+  const output=(taskId:number,id:number,offset=0)=>{const run=active.get(id);return commandOutput(db,taskId,id,offset,run?.taskId===taskId?run.live():undefined)}
+  return {start,busy,output,hasTask:(id:number)=>[...active.values()].some(r=>r.taskId===id),cancel:(id:number)=>active.get(id)?.cancel(),stopAll:()=>{for(const r of active.values())r.cancel(true)}}
 }

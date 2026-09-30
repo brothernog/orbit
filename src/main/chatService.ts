@@ -22,7 +22,7 @@ import { toolsFor } from './taskContext.ts'
 import { grantedEngines, grantedTools } from './engineMcp.ts'
 import { ENGINE_LABELS, sameGrants, type EngineGrants } from './engines.ts'
 import { recordUsage } from './usage.ts'
-import { finishRun, savePartial, startRun } from './runs.ts'
+import { finishRun, partialSaver, startRun } from './runs.ts'
 import { readSkill } from './skills.ts'
 
 import { autoTitle, contextFor, DEFAULT_TITLE, getTask, profileOf, saveSel, saveSession, sessionOf, stripTitle, summaryTitle, titleIn, type TaskSel } from './tasks.ts'
@@ -33,7 +33,7 @@ type Sel = TaskSel
 export type ActiveRun = { runId: number; cancel: (sync?: boolean) => void; text: string; workspace: string; provider?: string; model?: string; startedAt?: number; doing?: { tool: string; detail?: string } }
 type ChatDeps = {
   db: DatabaseSync; active: Map<number, ActiveRun>; guard: WorkspaceGuard; broker: PermissionBroker; workspaceBusy: (cwd: string) => boolean
-  asTask: (id: number) => ReturnType<typeof getTask>; taskCwd: (t: ReturnType<typeof getTask>) => string
+  asTask: (id: number) => ReturnType<typeof getTask>; taskCwd: (t: ReturnType<typeof getTask>) => Promise<string>
   checkSel: (sel: Sel) => Promise<void>; contextLimits: () => ReturnType<typeof normalizeLimits>
   delegationSettings: () => ReturnType<typeof normalizeSettings>; permissionSettings: () => ReturnType<typeof normalizePermissionSettings>
   getMcp: () => Promise<{ url: string }>; mcpDir: () => string; nativeFor: (provider: string) => ReturnType<typeof nativePolicy>
@@ -62,11 +62,11 @@ export function createChatService(d: ChatDeps) {
     const t = asTask(taskId)
     if (active.has(t.id)) throw new Error('O agente ainda esta respondendo nesta tarefa.')
     if (!fromSend && awaitingSend(db, t.id)) throw new Error(AWAITING_MSG)
-    taskCwd(t) // falha cedo se o projeto nao for permitido
+    await taskCwd(t) // falha cedo se o projeto nao for permitido
     await checkSel(sel)
-    if (active.has(t.id)) throw new Error('O agente ainda esta respondendo nesta tarefa.') // outra mensagem entrou durante a consulta ao catalogo
+    const cwd = await taskCwd(t)
+    if (active.has(t.id)) throw new Error('O agente ainda esta respondendo nesta tarefa.') // outra mensagem entrou durante a consulta ao catalogo/Git
     if (!fromSend && awaitingSend(db, t.id)) throw new Error(AWAITING_MSG)
-    const cwd = taskCwd(t)
     const requireIdle = () => {
       if (active.has(t.id)) throw Error('O agente ainda esta respondendo nesta tarefa.')
       if (d.workspaceBusy(cwd)) throw Error('Aguarde ou cancele o comando local nesta pasta antes de enviar ao agente.')
@@ -159,7 +159,7 @@ export function createChatService(d: ChatDeps) {
     const entry = { runId, cancel: (_sync?: boolean) => {}, text: '', workspace: cwd, provider: sel.provider, model: sel.model, startedAt: Date.now(), doing: undefined as { tool: string; detail?: string } | undefined }
     dctx.runId = runId
     if (wire) registerParent(token, dctx, perm)
-    let lastSave = 0
+    const savePartial = partialSaver(db, runId)
     const acts: Act[] = [] // ferramenta + alvo (+ resultado dos testes informado pela CLI), para o resumo do aviso
     try { d.onRunStart?.(t.id, runId, cwd) } catch {}
     const run = runChat({
@@ -173,7 +173,7 @@ export function createChatService(d: ChatDeps) {
         if (titleTag) full = stripTitle(full)
         entry.text = full
         emit({ taskId: t.id, text: full })
-        if (Date.now() - lastSave > 1000) { lastSave = Date.now(); savePartial(db, runId, full) }
+        savePartial(full)
       },
       // Medidor ao vivo: so o contexto ocupado (e a janela, se ja veio); a medida completa e gravada no fim (recordMetric).
       onMetric: m => { if (m.occupied != null) emit({ taskId: t.id, metric: { occupied: m.occupied, capacity: m.capacity ?? null, estimated: !!m.estimated, source: m.source } }) },

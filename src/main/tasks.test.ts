@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { openDb } from './db.ts'
+import type { DatabaseSync } from 'node:sqlite'
 import { finishRun, startRun } from './runs.ts'
 import { agentBody, autoTitle, contextFor, createTask, DEFAULT_TITLE, deleteTask, getTask, listTasks, profileOf, renameTask, resetSession, saveMetric, getMetric, saveSession, sessionOf, setArchived, stripTitle, summaryTitle, taskForPin, taskMessages, titleIn } from './tasks.ts'
 
@@ -200,4 +201,44 @@ test('excluir tarefa apaga tudo dela (inclusive entregas de pacote) e nada das o
   assert.equal(count('SELECT COUNT(*) n FROM context_deliveries WHERE package_id=?', pkg), 0)
   assert.equal(withTask(b), bBefore) // a outra tarefa fica intacta
   assert.equal(getTask(db, b).title, 'manter')
+})
+
+test('historico: chat so recebe as colunas exibidas; contexto le so a janela e conta as omitidas como antes', () => {
+  const t = createTask(db, 'C:/g/historico')
+  const put = db.prepare('INSERT INTO messages (chat_key, role, text, task_id, provider, status, clean, clean_parts) VALUES (?,?,?,?,?,?,?,?)')
+  for (let i = 0; i < 400; i++) {
+    put.run('', 'user', `pergunta ${i} ` + 'u'.repeat(i % 7 * 300), t, null, null, null, null)
+    if (i % 11 === 0) put.run('', 'agent', '`> Edit a.ts`\n_Execucao cancelada._', t, 'codex', 'cancelled', null, null) // so atividade: corpo vazio, nao conta
+    else if (i % 13 === 0) put.run('', 'agent', `falhou ${i}`, t, 'codex', 'failed', null, null)
+    else put.run('', 'agent', `bruto ${i}`, t, 'claude', 'completed', `limpo ${i} ` + 'c'.repeat(i % 5 * 900), JSON.stringify([`fala a ${i} ` + 'x'.repeat(2000), `fala b ${i} ` + 'y'.repeat(1500)]))
+  }
+  const [first] = taskMessages(db, t)
+  assert.deepEqual(Object.keys(first).sort(), ['account_id', 'created_at', 'effort', 'id', 'model', 'provider', 'role', 'status', 'text'])
+  // Referencia: a implementacao anterior (historico inteiro em memoria).
+  const reference = (maxChars: number) => {
+    const rows = db.prepare("SELECT id, role, provider, text, clean, clean_parts FROM messages WHERE task_id=? AND id>? AND role IN ('user','agent') AND text<>'' AND NOT (role='agent' AND status='failed') ORDER BY id").all(t, 0) as any[]
+    const lines: string[] = []; let size = 0, considered = 0, full = false
+    for (const m of rows.reverse()) {
+      const body = m.role === 'agent' ? agentBody(m) : m.text
+      if (!body) continue
+      considered++
+      if (full) continue
+      const line = `${m.role === 'user' ? 'Usuario' : `Agente (${m.provider ?? 'desconhecido'})`}: ${body.length > 3000 ? body.slice(0, 3000) : body}`
+      if (size + line.length > maxChars && lines.length) { full = true; continue }
+      lines.unshift(line); size += line.length + 2
+    }
+    return { count: lines.length, omitted: considered - lines.length }
+  }
+  for (const max of [500, 12_000, 60_000, 10_000_000]) {
+    const got = contextFor(db, t, 'claude', null, false, max)!
+    assert.deepEqual({ count: got.count, omitted: got.omitted }, reference(max), `maxChars ${max}`)
+  }
+  // Carga limitada: com a janela padrao, so as mensagens da janela (+1, a que nao coube) vem com clean_parts.
+  let loaded = 0
+  const spy = new Proxy(db, { get(target, prop) {
+    if (prop !== 'prepare') { const v = (target as any)[prop]; return typeof v === 'function' ? v.bind(target) : v }
+    return (sql: string) => { const st = target.prepare(sql); return /clean_parts/.test(sql) ? { iterate: function* (...a: any[]) { for (const r of st.iterate(...a)) { loaded++; yield r } } } : st }
+  } }) as DatabaseSync
+  const window = contextFor(spy, t, 'claude', null, false)!
+  assert.ok(window.omitted > 500); assert.ok(loaded > window.count && loaded < 40, `linhas completas lidas: ${loaded} de ~780`) // janela + a que nao coube + vazias no meio
 })

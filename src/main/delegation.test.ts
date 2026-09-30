@@ -90,15 +90,15 @@ test('escopo: caminhos relativos dentro da area; .., absolutos, unidade e juncti
   assert.throws(() => scopePaths(ws, ['atalho/x']), /fora do jogo|fora da area/)
 })
 
-test('instantaneos apontam arquivos alterados, criados e removidos e o escopo', () => {
-  const a = snapshot(ws)!
+test('instantaneos apontam arquivos alterados, criados e removidos e o escopo', async () => {
+  const a = (await snapshot(ws))!
   fs.writeFileSync(path.join(ws, 'src', 'novo.gd'), 'n')
   fs.writeFileSync(path.join(ws, 'README.md'), 'mudou de tamanho')
-  const b = snapshot(ws)!
+  const b = (await snapshot(ws))!
   assert.deepEqual(diffSnap(a, b), ['README.md', 'src/novo.gd'])
   fs.rmSync(path.join(ws, 'src', 'novo.gd'))
-  assert.deepEqual(diffSnap(b, snapshot(ws)!), ['src/novo.gd'])
-  assert.equal(snapshot(ws, 1), null) // pasta grande demais: nao finge acompanhar
+  assert.deepEqual(diffSnap(b, (await snapshot(ws))!), ['src/novo.gd'])
+  assert.equal(await snapshot(ws, 1), null) // pasta grande demais: nao finge acompanhar
   assert.ok(inScope('src/a.gd', ['src']) && !inScope('README.md', ['src']) && inScope('README.md', []) && !inScope('srcx/a', ['src']))
   fs.writeFileSync(path.join(ws, 'README.md'), 'x')
 })
@@ -737,3 +737,20 @@ test('trechos: orcamento total fixo; o que nao cabe e cortado com rotulo e sem r
 })
 
 test.after(() => { try { db.close(); fs.rmSync(tmp, { recursive: true, force: true }) } catch {} })
+
+test('instantaneo assincrono: mesmo mapa e mesmo corte da varredura sincrona, sem parar o event loop', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-snap-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  for (const d of ['a', 'a/b', 'node_modules/x', 'c']) fs.mkdirSync(path.join(root, d), { recursive: true })
+  for (let i = 0; i < 150; i++) fs.writeFileSync(path.join(root, ['a', 'a/b', 'c'][i % 3], `f${i}.txt`), 'x'.repeat(i))
+  fs.writeFileSync(path.join(root, 'node_modules/x/ignorado.js'), 'x')
+  const expected = new Map<string, string>()
+  const walk = (dir: string) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const abs = path.join(dir, e.name); if (e.isDirectory()) { if (e.name !== 'node_modules') walk(abs) } else { const st = fs.statSync(abs); expected.set(path.relative(root, abs).split(path.sep).join('/'), `${st.size}:${Math.round(st.mtimeMs)}`) } } }
+  walk(root)
+  let ticks = 0
+  const timer = setInterval(() => ticks++, 0)
+  try { assert.deepEqual(await snapshot(root), expected) } finally { clearInterval(timer) }
+  assert.ok(ticks > 0) // a versao sincrona bloqueava ate terminar
+  assert.equal((await snapshot(root, 150))?.size, 150) // exatamente no limite: acompanha
+  assert.equal(await snapshot(root, 149), null) // um a mais: pasta grande demais
+})

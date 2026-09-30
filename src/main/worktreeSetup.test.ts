@@ -12,7 +12,7 @@ test('lista: relativa, sem sair da pasta, sem .git/.worktrees, sem repetidos', (
   assert.throws(() => normalizeCopyList('x'))
 })
 
-test('copia arquivo e pasta ignorados sem sobrescrever o versionado; sugere o que o git ignora', () => {
+test('copia arquivo e pasta ignorados sem sobrescrever o versionado; sugere o que o git ignora', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wtcopy-'))
   const game = path.join(root, 'jogo'), wt = path.join(root, 'wt')
   fs.mkdirSync(path.join(game, '.godot', 'imported'), { recursive: true })
@@ -21,10 +21,10 @@ test('copia arquivo e pasta ignorados sem sobrescrever o versionado; sugere o qu
   fs.writeFileSync(path.join(game, '.gitignore'), '.env\n.godot/\n')
   fs.writeFileSync(path.join(game, 'versionado.txt'), 'original')
   execFileSync('git', ['init', '-q'], { cwd: game })
-  assert.deepEqual(copySuggestions(game), ['.env', '.godot'])
+  assert.deepEqual(await copySuggestions(game), ['.env', '.godot'])
   fs.mkdirSync(wt); fs.writeFileSync(path.join(wt, 'versionado.txt'), 'da branch')
   fs.writeFileSync(path.join(game, 'versionado.txt'), 'mudado')
-  const r = copyIntoWorktree(game, wt, ['.env', '.godot', 'versionado.txt', 'sumiu.txt'])
+  const r = await copyIntoWorktree(game, wt, ['.env', '.godot', 'versionado.txt', 'sumiu.txt'])
   assert.deepEqual(r, { copied: ['.env', '.godot/', 'versionado.txt'], missing: ['sumiu.txt'], failed: [] })
   assert.equal(fs.readFileSync(path.join(wt, '.env'), 'utf8'), 'SEGREDO=1')
   assert.ok(fs.existsSync(path.join(wt, '.godot', 'imported', 'a.ctex')))

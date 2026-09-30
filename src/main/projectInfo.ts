@@ -54,8 +54,8 @@ export function detectKind(dir: string): { kind: 'game' | 'app'; stack: string }
 }
 
 // `o.env` troca variaveis (ex.: indice temporario); `o.timeout` maior para rede (push, pull, fetch).
-export const run = (cwd: string, args: string[], o: { env?: Record<string, string>; timeout?: number } = {}) => new Promise<string>((ok, fail) =>
-  execFile('git', args, { cwd, encoding: 'utf8', timeout: o.timeout ?? 8000, windowsHide: true, maxBuffer: 4 << 20, env: o.env ? { ...process.env, ...o.env } : undefined }, (e, out) => (e ? fail(e) : ok(out))))
+export const run = (cwd: string, args: string[], o: { env?: Record<string, string>; timeout?: number; maxBuffer?: number } = {}) => new Promise<string>((ok, fail) =>
+  execFile('git', args, { cwd, encoding: 'utf8', timeout: o.timeout ?? 8000, windowsHide: true, maxBuffer: o.maxBuffer ?? 4 << 20, env: o.env ? { ...process.env, ...o.env } : undefined }, (e, out) => (e ? fail(e) : ok(out))))
 
 const MAX_FILES = 200 // a interface mostra poucos; o total vem do tamanho da lista antes do corte
 

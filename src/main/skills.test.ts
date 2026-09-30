@@ -10,6 +10,7 @@ import { DEFAULT_LIMITS, estimateTokens } from './limits.ts'
 import { runtimeBrief } from './prompt.ts'
 import { dropSkillSession, readSkill, setSkillRoots, SKILLS, SKILL_NAMES, skillsFor, skillTool, SkillError } from './skills.ts'
 import { callTaskTool, toolsFor, type ToolCtx } from './taskContext.ts'
+import type { ToolResult } from './mcp.ts'
 import { createTask } from './tasks.ts'
 
 const REAL = path.resolve(import.meta.dirname, '..', '..', 'resources', 'skills') // a pasta empacotada de verdade (a mesma que o app usa)
@@ -20,7 +21,7 @@ const ctx = (role: 'parent' | 'child', session: string): ToolCtx => ({
   taskId: T, lineage: role === 'parent' ? 'chat:1:codex:' : 'del:1', role, cwd: tmp, scope: [],
   auth: openGrant(db, { taskId: T, recipient: { logicalId: role === 'parent' ? 'chat:1:codex:' : 'del:1', provider: 'codex', profile: '', model: null, effort: null, workspace: tmp, scope: [] }, sessionId: session })
 })
-const call = (c: ToolCtx, args: any) => callTaskTool(db, DEFAULT_LIMITS, c, 'read_task_skill', args)
+const call = (c: ToolCtx, args: any) => callTaskTool(db, DEFAULT_LIMITS, c, 'read_task_skill', args) as ToolResult
 
 test('os recursos empacotados existem e a skill geral NAO e carregavel por esta ferramenta', () => {
   setSkillRoots([REAL])

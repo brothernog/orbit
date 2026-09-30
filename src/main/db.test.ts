@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { MIGRATIONS, migrate, openDb } from './db.ts'
-import { composeReply, finishRun, reconcileRuns, savePartial, startRun } from './runs.ts'
+import { composeReply, finishRun, partialSaver, reconcileRuns, savePartial, startRun } from './runs.ts'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-db-'))
 const version = (db: DatabaseSync) => (db.prepare('PRAGMA user_version').get() as any).user_version
@@ -283,3 +283,27 @@ test('v20 migra catálogo v19 preservando snapshots, aprovações e vínculos co
 })
 
 test.after(() => { try { fs.rmSync(tmp, { recursive: true, force: true }) } catch {} }) // handles SQLite ainda abertos no Windows
+
+test('parcial da execucao: grava no intervalo longo, so quando mudou, e nunca depois de terminar', () => {
+  const db = openDb(':memory:')
+  db.prepare("INSERT INTO tasks (game, title) VALUES ('C:/g', 't')").run()
+  const id = startRun(db, { taskId: 1, provider: 'claude' }, 'pergunta')
+  let clock = 0, writes = 0
+  const partial = () => (db.prepare('SELECT partial FROM runs WHERE id=?').get(id) as any).partial
+  const save = partialSaver({ prepare: (sql: string) => { if (/SET partial=/.test(sql)) writes++; return db.prepare(sql) } } as any, id, 10_000, () => clock)
+  for (let i = 1; i <= 100; i++) { clock = i * 100; save('x'.repeat(i)) } // 10 s de fragmentos a cada 100 ms
+  assert.equal(writes, 1); assert.equal(partial(), 'x'.repeat(100))
+  clock = 30_000; save('x'.repeat(100)); assert.equal(writes, 1) // sem mudanca, sem regravar
+  finishRun(db, id, { status: 'completed', text: 'fim', notes: [] })
+  save('depois'); assert.equal(partial(), '') // terminado: o UPDATE exige status running
+  db.close()
+})
+
+test('v22: consultas de execucoes por tarefa usam o indice runs(task_id,id)', () => {
+  const db = openDb(':memory:')
+  const plan = (q: string) => (db.prepare('EXPLAIN QUERY PLAN ' + q).all(1) as any[]).map(r => r.detail).join(' | ')
+  assert.match(plan("SELECT status FROM runs WHERE task_id=? AND status<>'running' ORDER BY id DESC LIMIT 1"), /USING INDEX runs_task/) // briefs.ts
+  assert.match(plan("SELECT 1 FROM runs WHERE task_id=? AND status='running'"), /USING INDEX runs_task/) // worktreeTasks.ts
+  assert.doesNotMatch(plan("SELECT status FROM runs WHERE task_id=? ORDER BY id DESC LIMIT 1"), /TEMP B-TREE/)
+  db.close()
+})
