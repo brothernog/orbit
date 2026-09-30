@@ -7,7 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { q } from './adapters.ts'
 
-export type Category = 'auth' | 'permission' | 'command' | 'config' | 'protocol' | 'unknown'
+export type Category = 'auth' | 'permission' | 'command' | 'config' | 'protocol' | 'limit' | 'unknown' // limit: cota da conta esgotada (sinal da CLI, nao do texto)
 
 // Remove URLs (podem carregar codigos de login), tokens e chaves antes de exibir ou gravar.
 export const sanitize = (s: string) =>

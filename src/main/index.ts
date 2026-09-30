@@ -3,6 +3,8 @@ import { createCheckpoint as takeCheckpoint, listCheckpoints, previewRewind, rew
 import { addStep, activeStep, beginStep, bindStep, failStep, listSteps, reconcileSteps, reviewStep } from './workflows.ts'
 import { todoBoard, saveTodo, todoTask } from './planning.ts'
 import { createChatService } from './chatService.ts'
+import { createAutomations } from './automations.ts'
+import { createHandover, normalizeHandover } from './handover.ts'
 import { createAccountUsageService } from './accountUsage.ts'
 import { createJarvisService } from './jarvisService.ts'
 import { createLinkedInService } from './linkedinService.ts'
@@ -526,6 +528,7 @@ const { sendTask, decideSend: decideChatSend } = createChatService({
   workspaceBusy: commands.busy, onRunStart: runStart, summaryTitles,
   accountUsageWriter: id => accountUsageService.writer(id),
   engineGrants: (game, cwd) => engineGrants(db, game, cwd),
+  onFinished: o => handover(o),
   registerParent: (token, p, perm) => { tokens.set(token, { kind: 'parent', p, perm }) },
   unregisterToken: token => { tokens.delete(token) }
 })
@@ -563,6 +566,15 @@ const accountUsageService = createAccountUsageService({
   refreshGuard: work => backups.invoke(work)
 })
 const accountUsage = (accountId: number) => accountUsageService.get(accountId)
+const automations = createAutomations({
+  getSetting, setSetting, usage: id => accountUsageService.snapshot(id), accountName: id => accountRow(id)?.name ?? `conta ${id}`,
+  peers: id => { const me = accountRow(id); return listAccounts().filter(a => a.id !== id && (!me || dirKey(a) !== dirKey(me))).map(a => a.id) } // mesma pasta = mesmo login
+})
+const handoverSettings = () => { try { return normalizeHandover(JSON.parse(getSetting('handover') ?? 'null')) } catch { return normalizeHandover(null) } }
+const handover = createHandover({
+  db, mode: () => handoverSettings().mode, itemChars: () => contextLimits().itemChars, note, emit, sendTask: (id, s, text) => sendTask(id, s, text),
+  peers: id => automations.peers(id), usage: id => accountUsageService.snapshot(id), accountName: id => accountRow(id)?.name ?? `conta ${id}`
+})
 // Perfis antigos podem compartilhar a mesma pasta: trocar login invalida todas essas contas.
 const invalidateAccountUsage = (account: any) => {
   for (const acc of listAccounts()) if (dirKey(acc) === dirKey(account)) accountUsageService.invalidate(acc.id)
@@ -992,7 +1004,8 @@ const handlers: Record<string, (...a: any[]) => any> = {
   setTaskState: (id: number, state: string) => setTaskState(db, asTask(id).id, TASK_STATES.includes(state) ? state : fail('Estado invalido.')),
   taskChat: (id: number, sel: any) => taskChat(asTask(id).id, asSel(sel)),
   sendTask: async (id: number, sel: any, text: string, images?: unknown, stepId?: unknown) => {
-    const t = asTask(id), s = asSel(sel)
+    const t = asTask(id), auto = automations.beforeSend(asSel(sel)), s = auto.sel
+    for (const n of auto.notes) note(t.id, n)
     const input = attachImages(path.join(attachRoot, String(t.id)), asStr(text, 'mensagem', 200_000).trim(), images) || fail('mensagem vazia')
     reconcileSteps(db)
     const step = stepId == null ? null : asInt(stepId, 'etapa')
@@ -1147,6 +1160,10 @@ const handlers: Record<string, (...a: any[]) => any> = {
     try { cwd = taskCwd(t) } catch {}
     return readImage(asStr(p, 'caminho', 2000), [...(cwd ? [cwd] : []), path.join(attachRoot, String(t.id))])
   },
+  getAutomations: () => automations.rules(),
+  setAutomations: (raw: unknown) => automations.setRules(raw),
+  getHandover: () => handoverSettings(),
+  setHandover: (raw: unknown) => { const n = normalizeHandover(raw); setSetting('handover', JSON.stringify(n)); return n },
   getContextLimits: () => contextLimits(),
   setContextLimits: (raw: any) => {
     const n = normalizeLimits(raw)

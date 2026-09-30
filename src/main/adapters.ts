@@ -28,6 +28,7 @@ export type Ev =
   | { kind: 'context'; metric: Metric; accumulate?: boolean; key?: string } // accumulate: somar consumo ao anterior (eventos por passo); key: id do passo, repetido = ignorado
   | { kind: 'note'; text: string } // aviso nao fatal (ex.: acao negada pela protecao do provedor)
   | { kind: 'error'; message: string; fatal: boolean }
+  | { kind: 'limit' } // a CLI recusou por cota da conta esgotada (Claude: rate_limit_event rejected / mensagem com error rate_limit)
   | { kind: 'done'; text?: string } // conclusao explicita; text = resposta final quando nao houve texto antes
 
 // Modelo/esforco escolhidos para a execucao; ausentes = padrao da propria CLI (nada e substituido em silencio).
@@ -106,6 +107,7 @@ export const AGENTS: Record<string, Agent> = {
         const output = typeof c.content === 'string' ? c.content : Array.isArray(c.content) ? c.content.map((x: any) => (x?.type === 'text' ? x.text : '')).join('\n') : ''
         out.push({ kind: 'toolResult', ref: c.tool_use_id, ok: typeof c.is_error === 'boolean' ? !c.is_error : null, output: output.slice(-20_000) })
       }
+      if ((ev.type === 'rate_limit_event' && ev.rate_limit_info?.status === 'rejected') || (ev.type === 'assistant' && (ev.error ?? ev.message?.error) === 'rate_limit')) out.push({ kind: 'limit' })
       if (ev.type === 'rate_limit_event' && ev.rate_limit_info?.unifiedWindows) out.push({ kind: 'usage', data: ev.rate_limit_info.unifiedWindows })
       if (ev.type === 'result') {
         // Em headless a CLI nao pergunta: o que exigiria permissao e negado e listado aqui.

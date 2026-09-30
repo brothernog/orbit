@@ -68,7 +68,7 @@ export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; resu
     let rawOut = '' // linhas nao-JSON do stdout (avisos, erros em texto)
     const notes: string[] = []
     const messages: string[] = [], tools: string[] = []
-    let lastWasText = false, retries = 0, paused = false
+    let lastWasText = false, retries = 0, paused = false, limited = false
     const seenKeys = new Set<string>() // passos de consumo ja contados (evento repetido nao soma duas vezes)
     const t0 = Date.now()
     const finish = (code: number | null): ChatResult => {
@@ -79,11 +79,11 @@ export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; resu
       // Erro generico do proprio provedor ("Unexpected server error"): a causa real, quando a CLI a escreve no stderr, e mais util que ele.
       const cause = fatal && GENERIC_ERROR.test(fatal) ? CAUSE.exec(stderrHead) : null
       const detail = (cause ? `${cause[1]}: ${cause[2].trim()}` : fatal) ?? spawnError ?? (code ? soft || tail(stderr).trim() || tail(rawOut).trim() || `A CLI terminou com codigo ${code}.` : undefined)
-      if (detail) return { ...base, status: 'failed', error: sanitize(detail), category: categorize(detail), code }
+      if (detail) return { ...base, status: 'failed', error: sanitize(detail), category: limited ? 'limit' : categorize(detail), code }
       // Codigo 0 sem conclusao explicita nem resposta: nao e sucesso (protocolo inesperado ou erro so no stderr).
       if (!done && !text) {
         const e = tail(stderr).trim() || 'A CLI terminou sem produzir resposta (saida em formato inesperado).'
-        return { ...base, status: 'failed', error: sanitize(e), category: tail(stderr).trim() ? categorize(e) : 'protocol', code }
+        return { ...base, status: 'failed', error: sanitize(e), category: limited ? 'limit' : tail(stderr).trim() ? categorize(e) : 'protocol', code }
       }
       return { ...base, status: 'completed' }
     }
@@ -116,6 +116,7 @@ export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; resu
           metric = mergeMetric(metric, e.metric, e.accumulate); o.onMetric?.(metric)
         }
         else if (e.kind === 'note') notes.push(e.text)
+        else if (e.kind === 'limit') limited = true
         else if (e.kind === 'error') { if (e.fatal) fatal = e.message; else { soft = e.message; retries++ } }
         else if (e.kind === 'done') { done = true; doneText = e.text }
       }

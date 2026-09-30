@@ -52,6 +52,13 @@ if (mode === 'claude-explicit') done(() => {
   out({ type: 'assistant', session_id: 's1', message: { content: [{ type: 'text', text: 'comentario intermediario' }, { type: 'tool_use', name: 'Read' }], usage: { input_tokens: 10 } } })
   out({ type: 'result', session_id: 's1', result: 'RESPOSTA FINAL EXPLICITA', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 90 } })
 })
+// Cota esgotada no meio da resposta (formato do stream do claude 2.1.x; nao exercitado com cota real).
+if (mode === 'claude-limit') done(() => {
+  out({ type: 'assistant', session_id: 's1', message: { content: [{ type: 'text', text: 'comecando' }] } })
+  out({ type: 'rate_limit_event', session_id: 's1', rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: 1790000000 } })
+  out({ type: 'assistant', session_id: 's1', error: 'rate_limit', message: { content: [{ type: 'text', text: "You've hit your limit" }] } })
+  out({ type: 'result', session_id: 's1', is_error: true, result: "You've hit your limit" }); process.exit(1)
+})
 if (mode === 'opencode-dup-step') done(() => {
   const step = { type: 'step_finish', sessionID: 's2', part: { id: 'prt_1', reason: 'tool-calls', tokens: { input: 100, output: 10, reasoning: 2, cache: { read: 50, write: 5 } } } }
   out({ type: 'text', sessionID: 's2', part: { text: 'passo 1' } })
@@ -275,4 +282,13 @@ test('ferramenta do Claude traz o alvo curto (arquivo sem pasta, comando) para "
   assert.equal(tool({ file_path: String.raw`C:\proj\src\Chat.tsx` }).detail, 'Chat.tsx')
   assert.equal(tool({ command: 'npm   test' }).detail, 'npm test')
   assert.equal(tool({}).detail, undefined)
+})
+
+test('claude: cota esgotada (rejected/rate_limit) vira categoria limit; outros erros nao', async () => {
+  const c = await run('claude-limit', { agent: 'claude' }).result
+  assert.equal(c.status, 'failed')
+  assert.equal(c.category, 'limit')
+  const p = AGENTS.claude.parse
+  assert.deepEqual(p({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning' } }), [])
+  assert.equal((await run('stdout-error').result).category === 'limit', false)
 })

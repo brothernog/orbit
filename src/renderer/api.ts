@@ -4,7 +4,7 @@ import { expireRead, invalidateRead, setRead } from './readCache.ts'
 const settingsReads: Record<string, string> = {
   setContextLimits: 'getContextLimits', setNotifySettings: 'getNotifySettings', setJarvisSettings: 'getJarvisSettings',
   setDelegationSettings: 'getDelegationSettings', setPermissionSettings: 'getPermissionSettings',
-  setAgentAliases: 'getAgentAliases', setSummaryTitles: 'summaryTitles'
+  setAgentAliases: 'getAgentAliases', setSummaryTitles: 'summaryTitles', setAutomations: 'getAutomations', setHandover: 'getHandover'
 }
 const changedLists: Record<string, string[]> = {
   addPermissionRule: ['listPermissionRules', 'listPermissionRequests'],
