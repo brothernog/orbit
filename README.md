@@ -18,7 +18,7 @@ npm install
 npm run dist    # instalador do sistema atual em dist/: .dmg no macOS, .AppImage e .deb no Linux (.exe no Windows)
 ```
 
-Os instaladores nao sao assinados. Um `.dmg` baixado dos artefatos do CI chega em quarentena e o Gatekeeper bloqueia a primeira abertura: clique com o botao direito no app > Abrir, ou rode `xattr -dr com.apple.quarantine /Applications/Orbita.app`. Um `.dmg` gerado localmente com `npm run dist` nao fica em quarentena.
+Windows e Linux nao sao assinados; o macOS so e assinado e notarizado quando o CI tem as credenciais da Apple (ver `build/macos-signing.md`). Um `.dmg` sem assinatura baixado dos artefatos do CI chega em quarentena e o Gatekeeper bloqueia a primeira abertura: tente abrir uma vez e depois use Ajustes do Sistema > Privacidade e Seguranca > Abrir Mesmo Assim (no macOS 15+ o botao direito > Abrir nao basta), ou rode `xattr -dr com.apple.quarantine /Applications/Orbita.app`. Um `.dmg` gerado localmente com `npm run dist` nao fica em quarentena.
 
 ## Como funciona
 
@@ -148,7 +148,7 @@ O E2E tambem grava capturas de tela (1400x900, 1024x768, 768x1024) em `%TEMP%\gp
 - **Economia deste ciclo não foi medida com provedores reais.** A única mudança de tokens deste ciclo aplica queryChars ao conteúdo de read_file_range, com corte explícito e continuação por linhas. Cabeçalho descritivo é adicional; corte não emite recibo de leitura completa. Os numeros de `src/main/fixtures/reference.json` sao caracteres de payload em cenarios simulados; nao sao tokens do provedor, nem quota de assinatura, nem qualidade. Os scripts e resultados de scripts/bench são experimentos separados, com suas próprias condições e limites; não foram executados neste ciclo. Medir o ganho desta mudança exige um benchmark autorizado, com o mesmo modelo, esforço, tarefa e condição de cache.
 - A interface de aprovacao (cartao de decisao acima do compositor), o painel de memoria/uso/contexto e as mensagens nao enviadas existem na tela, e os limites de contexto ficam em Configuracoes.
 - Leitor de tela nao foi testado; contraste e foco foram verificados por calculo/inspecao.
-- Sistemas: Windows, macOS e Linux (terminal: `cmd.exe` no Windows, Terminal.app no macOS, x-terminal-emulator/gnome-terminal/konsole/xterm no Linux; cancelamento: `taskkill` no Windows, SIGKILL no grupo de processos nos demais). O CI roda typecheck e testes unitarios nos tres; o e2e (`npm run e2e`, com CLIs falsas `.cmd`) e a `dev:sandbox` chamam `node_modules/electron/dist/electron.exe`, entao por enquanto so rodam no Windows. No macOS/Linux o app ainda nao tem teste automatizado de ponta a ponta.
+- Sistemas: Windows, macOS e Linux (terminal: `cmd.exe` no Windows, Terminal.app no macOS, x-terminal-emulator/gnome-terminal/konsole/xterm no Linux; cancelamento: `taskkill` no Windows, SIGKILL no grupo de processos nos demais). O CI roda typecheck, testes unitarios e o e2e (`npm run e2e`, Electron real com CLIs falsas e PATH isolado; no Linux sob `xvfb-run`) nos tres; `dev:sandbox` tambem roda nos tres.
 
 ## Organização do código
 
