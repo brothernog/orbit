@@ -32,7 +32,8 @@ export function attentionOf(t: Task, b: Brief | undefined, who: Active | undefin
   if (who) return 'working'
   if (b?.awaiting) return 'wait'
   if (t.state === 'concluida') return 'done'
-  if (b?.last === 'failed') return 'error'
+  // Falha ja vista (ou antiga, sem registro de visto) nao pede mais voce: some da fila em todas as telas.
+  if (b?.last === 'failed') return (seenAt != null ? ts(t.updated_at) > seenAt : Date.now() - ts(t.updated_at) < 86_400_000) ? 'error' : 'idle'
   // Sem registro de visto (tarefas antigas, primeira abertura) nao inventa pendencia.
   if (b?.last === 'completed' && seenAt != null && ts(t.updated_at) > seenAt) return 'unseen'
   return 'idle'

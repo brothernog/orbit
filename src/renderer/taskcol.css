@@ -1,16 +1,8 @@
-/* Coluna de conversas: titulo + linha de estado; "Esperando voce" e a unica linha com cor forte. */
-.task-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.task-sub { font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-sub.live { color: var(--accent); }
-.task-sub.bad { color: var(--hot); }
-.task-sub.wait { color: var(--limit); }
-button.task.wait { background: color-mix(in srgb, var(--limit) 10%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--limit) 45%, transparent); }
-button.task.wait .task-title { color: var(--text); }
-button.task.wait .task-dot { border-color: var(--limit); background: var(--limit); }
-.task-row:has(.task-sub.bad) .task-dot { border-color: var(--hot); }
-.also-running { border-top: 1px solid var(--line-soft); padding: 0 8px 8px; }
-.also-running .chats-group { padding-top: 10px; }
-.brief-card { position: fixed; z-index: 45; width: 270px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); box-shadow: 0 18px 40px #000a; animation: tip-in .12s var(--ease); pointer-events: none; }
+/* Gaveta: "Tambem rodando" (outros projetos) e o resumo ao passar o mouse numa conversa. As linhas ficam em styles.css. */
+.also-running { border-top: 1px solid var(--line-soft); padding: 4px 8px 8px; }
+.also-running .chats-group { padding: 8px 8px 2px; }
+.also-running button.task { align-items: center; }
+.brief-card { position: fixed; z-index: 45; width: 280px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--r); box-shadow: 0 18px 40px -12px #000c; transform-origin: top left; animation: pop-in var(--dur-2) var(--ease-out); pointer-events: none; }
 .brief-card p { display: flex; gap: 8px; margin: 0; font-size: 12.5px; line-height: 1.4; color: var(--text); }
 .brief-card p svg { flex: none; margin-top: 2px; color: var(--muted); }
 .brief-card p.ok svg { color: var(--ok); }

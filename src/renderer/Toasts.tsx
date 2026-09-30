@@ -3,7 +3,7 @@ import { onChat } from './api'
 import { NoticeCard, NoticeGroup, type Notice } from './NoticeCard'
 import { groupNotices } from './noticeGroups'
 
-const MAX = 3
+const MAX = 2 // no maximo dois cartoes; o resto vira uma linha com contagem
 
 // Cartoes de aviso dentro do app (canto superior direito). So "terminou" some sozinho; falha, pausa, revisao e aprovacao ficam ate
 // voce abrir ou fechar. Pedido de permissao nao vira cartao: o pop-up global ja aparece. A tarefa aberta na tela nao gera cartao.

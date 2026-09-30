@@ -61,7 +61,6 @@ function useQueue(games: string[], active: Active[], on: boolean) {
     for (const t of d.tasks) {
       const b = bs.get(t.id), who = active.find(a => a.taskId === t.id), att = attentionOf(t, b, who, seen[t.id])
       // falha antiga ja vista (ou de mais de um dia, sem registro) nao ocupa a fila para sempre
-      if (att === 'error' && (seen[t.id] != null ? ts(t.updated_at) <= seen[t.id] : Date.now() - ts(t.updated_at) > 86_400_000)) continue
       if (!needsYou(att) && att !== 'working') continue
       const why = att === 'wait' ? (b?.permission ? `Permitir: ${b.permission}` : 'Aprovar o contexto para continuar')
         : att === 'error' ? 'A última execução falhou'

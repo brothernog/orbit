@@ -3,7 +3,8 @@ import { flushSync } from 'react-dom'
 import { api, errText, name, onChat, setAliases, type Account, type Active, type Provider, type Task } from './api'
 import { Chat } from './Chat'
 import type { TodoDraft } from './Todo'
-import { AlsoRunning, statusOf, useBriefCard, useBriefs } from './TaskBrief'
+import { AlsoRunning, doingText, statusOf, useBriefCard, type Brief } from './TaskBrief'
+import { ATTENTION_LABEL, attentionOf, markSeen, needsYou, RANK, useSeen, type Attention } from './attention'
 import { Home } from './Home'
 import { ProjectHome } from './ProjectHome'
 import { Avatar, Icon, PROVIDER } from './icons'
@@ -68,8 +69,14 @@ const elapsed = (from: number) => {
 }
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
-// Dock no canto superior direito: quem esta trabalhando agora, em que e ha quanto tempo.
-function AgentDock({ active, onOpen }: { active: Active[]; onOpen: (a: Active) => void }) {
+// Uma conversa que pede voce (fila do Ctrl+J, do dock e do Ctrl+K).
+export type QueueItem = { t: Task; a: Attention }
+
+// Dock no canto superior direito: primeiro o que precisa de voce, depois quem esta trabalhando e ha quanto tempo.
+// O numero ambar conta so "precisa de voce" (mesma regra do trilho e da gaveta).
+function AgentDock({ active, queue, onOpen, onOpenTask, onNext }: {
+  active: Active[]; queue: QueueItem[]; onOpen: (a: Active) => void; onOpenTask: (t: Task) => void; onNext: () => void
+}) {
   const [open, setOpen] = useState(false)
   const [, tick] = useState(0)
   const ref = useRef<HTMLDivElement>(null)
@@ -82,28 +89,45 @@ function AgentDock({ active, onOpen }: { active: Active[]; onOpen: (a: Active) =
     document.addEventListener('keydown', esc)
     return () => { clearInterval(t); document.removeEventListener('mousedown', out); document.removeEventListener('keydown', esc) }
   }, [open])
-  const shown = active.slice(0, 4)
+  const shown = active.slice(0, 3)
+  const waits = queue.filter(q => q.a === 'wait').length
+  const flag = queue.find(q => q.a !== 'wait')?.a // falhou ou pronto: ponto, sem numero
+  const label = [waits && `${waits} precisa(m) de você`, active.length && `${active.length} agente(s) trabalhando`].filter(Boolean).join(', ') || (queue.length ? `${queue.length} para revisar` : 'Nenhum agente trabalhando')
   return (
     <div className="dock" ref={ref}>
-      <button className={`dock-btn ${active.length ? 'busy' : ''}`} aria-expanded={open} aria-haspopup="dialog"
-        aria-label={active.length ? `${active.length} agente(s) trabalhando` : 'Nenhum agente trabalhando'} onClick={() => setOpen(!open)}>
+      <button className={`dock-btn ${active.length ? 'busy' : ''} ${queue.length ? 'ask' : ''}`} aria-expanded={open} aria-haspopup="dialog"
+        aria-label={label} title={`${label}. Próxima que precisa de você: Ctrl+J`} onClick={() => setOpen(!open)}>
+        {waits > 0 && <span className="att-count">{waits}</span>}
+        {!waits && flag && <span className="att" data-att={flag} />}
         {active.length
-          ? <span className="stack">{shown.map(a => <Avatar key={`${a.kind}${a.id}`} provider={a.provider} live size="sm" />)}{active.length > 4 && <span className="more">+{active.length - 4}</span>}</span>
-          : <span className="idle-dot" />}
-        <span className="dock-count">{active.length || 'Ocioso'}</span>
+          ? <span className="stack">{shown.map(a => <Avatar key={`${a.kind}${a.id}`} provider={a.provider} live size="sm" />)}<span className="dock-count">{active.length}</span></span>
+          : !queue.length && <span className="att" data-att="idle" />}
       </button>
       {open && (
-        <div className="dock-pop" role="dialog" aria-label="Agentes trabalhando">
-          <div className="dock-head">{active.length ? `${active.length} ${active.length === 1 ? 'agente trabalhando' : 'agentes trabalhando'}` : 'Nenhum agente trabalhando'}</div>
-          {active.length === 0 && <p className="dock-empty">Quando você enviar uma mensagem, o agente aparece aqui com a tarefa e o tempo de execução.</p>}
+        <div className="dock-pop" role="dialog" aria-label="Agentes e pendências">
+          {queue.length > 0 && <>
+            <div className="dock-head">Precisa de você<button className="text-btn" onClick={() => { setOpen(false); onNext() }}>Próxima<kbd>Ctrl J</kbd></button></div>
+            <ul>
+              {queue.map(q => (
+                <li key={q.t.id}>
+                  <button onClick={() => { setOpen(false); onOpenTask(q.t) }}>
+                    <span className="att" data-att={q.a} />
+                    <span className="dock-body"><span className="dock-task">{q.t.title}</span><span className="dock-meta">{name(q.t.game)}</span></span>
+                    <span className={`dock-state s-${q.a}`}>{ATTENTION_LABEL[q.a]}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>}
+          {(active.length > 0 || !queue.length) && <div className="dock-head">{active.length ? 'Trabalhando' : 'Nenhum agente trabalhando'}</div>}
           <ul>
             {active.map(a => (
               <li key={`${a.kind}${a.id}`}>
                 <button onClick={() => { setOpen(false); onOpen(a) }}>
-                  <Avatar provider={a.provider} live />
+                  <Avatar provider={a.provider} live size="sm" />
                   <span className="dock-body">
                     <span className="dock-task">{a.title}</span>
-                    <span className="dock-meta">{PROVIDER[a.provider]?.label ?? a.provider}{a.model ? ` ${a.model}` : ''} em {name(a.game)}{a.kind === 'delegation' ? ', delegação' : ''}</span>
+                    <span className="dock-meta">{doingText(a.doing) ?? `${PROVIDER[a.provider]?.label ?? a.provider}${a.model ? ` ${a.model}` : ''}`} · {name(a.game)}{a.kind === 'delegation' ? ', delegação' : ''}</span>
                   </span>
                   <span className="dock-time">{a.startedAt ? elapsed(a.startedAt) : ''}</span>
                 </button>
@@ -116,17 +140,23 @@ function AgentDock({ active, onOpen }: { active: Active[]; onOpen: (a: Active) =
   )
 }
 
-// Conversas das outras pastas do workspace (a pasta atual vem de loadTasks). ponytail: recarrega todas a cada evento; cache por pasta se pesar.
-function useFolderTasks(folders: string[], ver: unknown[]) {
-  const [map, setMap] = useState<Record<string, Task[]>>({})
-  const key = folders.join('|')
+// Conversas e resumos de TODAS as pastas: alimentam o modelo de atencao (gaveta, trilho, dock, Ctrl+J, Ctrl+K).
+// Leituras locais do SQLite; recarrega em lote quando um agente termina, pede permissao ou contexto.
+type Folder = { tasks: Task[]; briefs: Map<number, Brief> }
+function useWorld(games: string[], deps: unknown[]) {
+  const [map, setMap] = useState<Record<string, Folder>>({})
+  const key = games.join('|')
   useEffect(() => {
-    let live = true
-    const load = () => folders.forEach(g => api.listTasks(g, {}).then((l: Task[]) => { if (live) setMap(m => ({ ...m, [g]: l })) }, () => {}))
+    let live = true, t: ReturnType<typeof setTimeout> | undefined
+    const load = () => games.forEach(g => Promise.all([api.listTasks(g, {}), api.taskBriefs(g)]).then(([l, b]: [Task[], Brief[]]) => {
+      if (live) setMap(m => ({ ...m, [g.toLowerCase()]: { tasks: l, briefs: new Map(b.map(x => [x.id, x])) } }))
+    }, () => {}))
     load()
-    const off = onChat(ev => { if (ev.done || ev.refresh) load() })
-    return () => { live = false; off() }
-  }, [key, ...ver])
+    const off = onChat((ev: any) => {
+      if (ev?.done || ev?.refresh || ev?.permissionRequest || ev?.permissionResolved || ev?.contextRequest || ev?.contextResolved) { clearTimeout(t); t = setTimeout(load, 120) }
+    })
+    return () => { live = false; clearTimeout(t); off() }
+  }, [key, ...deps])
   return map
 }
 
@@ -324,6 +354,7 @@ export default function App() {
   const task = tasks?.find(t => t.id === taskId) ?? null
   keys.current = e => {
     const typing = (e.target as HTMLElement)?.closest?.('input, textarea, [contenteditable]')
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'j') { e.preventDefault(); goNext(); return } // de qualquer tela
     if (!game || home || settings || li) return
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); create() }
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); setChats(c => !c) }
@@ -335,29 +366,67 @@ export default function App() {
   const loose = games.filter(g => !groupOf(groups, g)).sort((a, b) => (recent[b] ?? 0) - (recent[a] ?? 0))
   const inbox: Group = { id: INBOX, name: 'Sem organizador', color: '#8791a3', games: loose, open: true }
   const shownGroups = [...groups, ...(loose.length ? [inbox] : [])].map(x => ({ ...x, list: games.filter(g => x.games.includes(g)) }))
-  const isLive = (t: Task) => active.some(a => a.taskId === t.id)
   const ws = game ? groupOf(groups, game) ?? inbox : null
   const drawer = inProject && chats
   const folders = ws ? ws.games.filter(g => games.includes(g)) : []
-  const folderTasks = useFolderTasks(drawer ? folders.filter(g => g !== game) : [], [tasks, ver])
-  const briefs = useBriefs(game, tasks, active)
-  const briefCard = useBriefCard(briefs)
-  // Esperando voce: pedido de contexto pendente. E o unico grupo com cor forte (o que fazer agora).
-  const waits = (t: Task) => !!briefs.get(t.id)?.permission || (!isLive(t) && !!briefs.get(t.id)?.awaiting)
+  // Modelo unico de atencao (attention.ts): o mesmo estado na gaveta, no trilho, no dock, no Ctrl+K e no Ctrl+J.
+  const seen = useSeen()
+  const world = useWorld(games, [tasks, ver, active.map(a => a.taskId).join(',')])
+  const tasksOf = (g: string) => (game && same(g, game) && tasks) || world[g.toLowerCase()]?.tasks || null
+  const briefOf = (t: Task) => world[t.game.toLowerCase()]?.briefs.get(t.id)
+  const attOf = (t: Task) => attentionOf(t, briefOf(t), active.find(a => a.taskId === t.id), seen[t.id])
+  const allBriefs = new Map<number, Brief>()
+  for (const f of Object.values(world)) f.briefs.forEach((b, id) => allBriefs.set(id, b))
+  const briefCard = useBriefCard(allBriefs)
+  // Fila "precisa de voce": esperando > falhou > pronto; dentro de cada estado, quem espera ha mais tempo primeiro.
+  const queue: QueueItem[] = games.flatMap(g => (tasksOf(g) ?? []).map(t => ({ t, a: attOf(t) })))
+    .filter(q => needsYou(q.a)).sort((x, y) => RANK[x.a] - RANK[y.a] || x.t.updated_at.localeCompare(y.t.updated_at))
+  const sumOf = (list: string[]) => {
+    const q = queue.filter(x => list.some(g => same(g, x.t.game)))
+    return { wait: q.filter(x => x.a === 'wait').length, flag: q.find(x => x.a !== 'wait')?.a, live: list.some(g => active.some(a => same(a.game, g))) }
+  }
+  // Ctrl+J / "Proxima": a primeira da fila depois da conversa aberta (volta ao inicio no fim).
+  const openQueued = (t: Task, animate = true) => { briefCard.hide(); if (animate) transition(() => openIn(t.game, t.id)); else openIn(t.game, t.id) }
+  const goNext = () => {
+    if (!queue.length) return
+    const i = queue.findIndex(q => q.t.id === task?.id && inProject && taskView)
+    openQueued(queue[(i + 1) % queue.length].t, false) // atalho de teclado: troca na hora
+  }
+  // Conversa aberta na tela = vista. Ao terminar com ela aberta (updated_at muda) continua vista; so conta com a janela em foco.
+  const onScreen = inProject && taskView && task ? task.id : null
+  const onScreenAt = task && world[task.game.toLowerCase()]?.tasks.find(t => t.id === task.id)?.updated_at
+  useEffect(() => {
+    if (onScreen == null) return
+    const f = () => { if (document.hasFocus()) markSeen(onScreen) }
+    f()
+    window.addEventListener('focus', f)
+    return () => { window.removeEventListener('focus', f); f() }
+  }, [onScreen, task?.updated_at, onScreenAt, active.some(a => a.taskId === onScreen)])
+
+  const when = (t: Task) => {
+    const who = active.find(x => x.taskId === t.id)
+    if (who?.startedAt) return elapsed(who.startedAt)
+    return ago(t.updated_at)
+  }
   const taskRow = (t: Task) => {
     const sel = inProject && t.id === taskId && taskView && t.game === game
     const who = active.find(a => a.taskId === t.id)
-    const st = statusOf(t, briefs.get(t.id), who, ago(t.updated_at))
+    const a = attOf(t)
+    const st = statusOf(t, briefOf(t), who, ago(t.updated_at))
+    // Segunda linha so quando diz algo: o que o agente faz agora, o que ele pede ou que falhou.
+    const sub = a === 'working' ? doingText(who?.doing) : a === 'wait' ? st.text : a === 'error' ? ATTENTION_LABEL.error : null
     return (
       <li key={t.id} className="task-row" onContextMenu={e => { e.preventDefault(); taskMenu(t, e.clientX, e.clientY) }}>
         {renaming === t.id
-          ? <div className="task editing"><span className="task-dot" aria-hidden="true" /><RenameInput value={t.title} label="Novo nome da conversa" onDone={v => renameTask(t, v)} /></div>
-          : <button className={`task ${sel ? 'active' : ''} s-${t.state} ${st.tone === 'wait' ? 'wait' : ''}`} aria-current={sel} aria-label={`${t.title}: ${st.text}${t.worktree ? `, branch ${t.branch}` : ''}`}
+          ? <div className="task editing"><span className="att" data-att={a} aria-hidden="true" /><RenameInput value={t.title} label="Novo nome da conversa" onDone={v => renameTask(t, v)} /></div>
+          : <button className={`task ${sel ? 'active' : ''} s-${t.state} a-${a}`} data-att={a} aria-current={sel} aria-label={`${t.title}: ${a === 'idle' || a === 'done' ? st.text : ATTENTION_LABEL[a]}${sub && a !== 'error' ? `, ${sub}` : ''}${t.worktree ? `, branch ${t.branch}` : ''}`}
               onClick={() => { briefCard.hide(); if (t.game !== game || !inProject) return openIn(t.game, t.id); setTaskId(t.id); setTaskView(true) }} onDoubleClick={() => setRenaming(t.id)}
               onMouseEnter={e => briefCard.show(e, t.id)} onMouseLeave={briefCard.hide}>
-              {who ? <Avatar provider={who.provider} live size="sm" /> : <span className="task-dot" aria-hidden="true" />}
-              <span className="task-text"><span className="task-title">{t.title}</span><span className={`task-sub ${st.tone}`}>{st.text}</span>
-                {t.worktree && <span className="task-branch"><Icon n="branch" size={11} />{t.branch}</span>}</span>
+              <span className="att" data-att={a} aria-hidden="true" />
+              <span className="task-text">
+                <span className="task-line"><span className="task-title">{t.title}</span><span className="task-when">{when(t)}</span></span>
+                {(sub || t.worktree) && <span className={`task-sub ${a}`}>{t.worktree && <span className="task-branch"><Icon n="branch" size={11} />{t.branch}</span>}{sub}</span>}
+              </span>
             </button>}
         {renaming !== t.id && <button className="row-more icon sm" aria-label={`Opções de ${t.title}`} title="Renomear, arquivar ou excluir"
           onClick={e => { const r = e.currentTarget.getBoundingClientRect(); taskMenu(t, r.left, r.bottom + 4) }}><Icon n="more" size={16} /></button>}
@@ -365,20 +434,21 @@ export default function App() {
     )
   }
 
-  // Uma pasta na gaveta: cabecalho (abre a visao geral, + cria conversa ali) e as conversas dela.
-  // Esperando voce e trabalhando sobem; concluidas ficam recolhidas. Arraste a pasta para um organizador do trilho.
+  // Uma pasta na gaveta: cabecalho (abre a visao geral, + cria conversa ali) e as conversas dela, ordenadas por atencao
+  // (precisa de voce > falhou > pronto > trabalhando > resto; depois as mais recentes). Concluidas ficam recolhidas.
+  // Arraste a pasta para um organizador do trilho.
   const folderSection = (g: string) => {
     const cur = g === game
-    const list = cur ? tasks : folderTasks[g] ?? null
+    const list = tasksOf(g)
     const open = folderOpen[g] ?? cur
-    const rank = (t: Task) => (cur && waits(t) ? 0 : isLive(t) ? 1 : 2)
-    const sorted = [...(list ?? [])].sort((a, b) => rank(a) - rank(b) || b.updated_at.localeCompare(a.updated_at))
-    const openList = sorted.filter(t => t.state !== 'concluida' || rank(t) < 2)
-    const done = sorted.filter(t => !openList.includes(t))
-    const liveN = active.filter(a => same(a.game, g)).length
+    const rows = (list ?? []).map(t => ({ t, a: attOf(t) }))
+    const sorted = rows.sort((x, y) => RANK[x.a] - RANK[y.a] || y.t.updated_at.localeCompare(x.t.updated_at))
+    const openList = sorted.filter(x => x.a !== 'done').map(x => x.t)
+    const done = sorted.filter(x => x.a === 'done').map(x => x.t)
+    const sum = sumOf([g])
     const body = (
       <ul className="tasklist">
-        {list === null ? <li><span className="loader sm" aria-label="Carregando conversas" /></li> : openList.map(taskRow)}
+        {list === null ? <li className="chats-empty"><span className="loader sm" aria-label="Carregando conversas" /></li> : openList.map(taskRow)}
         {list?.length === 0 && <li className="chats-empty">Nenhuma conversa ainda.</li>}
         {done.length > 0 && <li className="chats-group" role="presentation">
           <button className="group-toggle" aria-expanded={!!doneOpen[g]} onClick={() => setDoneOpen(m => ({ ...m, [g]: !m[g] }))}><Icon n="chevron" size={12} />Concluídas <span>{done.length}</span></button>
@@ -397,7 +467,10 @@ export default function App() {
             ? <RenameInput value={name(g)} label="Novo nome do projeto (vazio volta ao nome da pasta)" onDone={v => renameProject(g, v)} />
             : <button className="folder-name" data-path={g} aria-current={cur && inProject && !taskView} title={`${g}\nClique: visão geral. Arraste para um organizador do trilho`} draggable
                 onDragStart={e => { e.dataTransfer.setData('text/plain', g); e.dataTransfer.effectAllowed = 'move'; setDrag(g) }} onDragEnd={endDrag} onClick={() => { pick(g); toggleFolder(g, true) }} onDoubleClick={() => setRenaming(g)}>
-                <ProjectIcon game={g} size={18} /><span>{name(g)}</span>{liveN > 0 && <span className="folder-live" title={`${liveN} agente(s) trabalhando`}>{liveN}</span>}
+                <ProjectIcon game={g} size={18} /><span>{name(g)}</span>
+                {sum.wait > 0 ? <span className="att-count" title={`${sum.wait} precisa(m) de você`}>{sum.wait}</span>
+                  : sum.flag ? <span className="att" data-att={sum.flag} title={ATTENTION_LABEL[sum.flag]} />
+                  : sum.live && !open ? <span className="att" data-att="working" title="Agente trabalhando" /> : null}
               </button>}
           <button className="icon sm folder-add" aria-label={`Nova tarefa em ${name(g)}`} title="Nova tarefa nesta pasta" onClick={() => createIn(g)}><Icon n="plus" size={15} /></button>
           <button className="icon sm folder-more" aria-label={`Opções de ${name(g)}`} onClick={e => { const r = e.currentTarget.getBoundingClientRect(); projectMenu(g, r.left, r.bottom + 4) }}><Icon n="more" size={15} /></button>
@@ -428,7 +501,7 @@ export default function App() {
     { label: 'Desfazer organizador', hint: 'As pastas vão para "Sem organizador"; nada é apagado', run: () => saveGroups(groups.filter(y => y.id !== x.id)) },
   ] })
   const groupItem = (x: Group & { list: string[] }) => {
-    const live = x.list.some(g => active.some(a => same(a.game, g)))
+    const sum = sumOf(x.list), live = sum.live
     return (
       <li key={x.id} className={`${dropOn === x.id ? 'drop' : ''} ${dropOn === `w:${x.id}` ? 'drop-before' : ''}`}
         onDragOver={e => {
@@ -441,12 +514,13 @@ export default function App() {
           else dropHere(x.id)
         }}>
         <button className={`rail-ws ${live ? 'live' : ''} ${x.id === INBOX ? 'inbox' : ''} ${dragWs === x.id ? 'dragging' : ''}`} draggable={x.id !== INBOX}
-          onDragStart={e => { e.dataTransfer.setData('text/plain', x.name); e.dataTransfer.effectAllowed = 'move'; setTip(null); setDragWs(x.id) }} onDragEnd={endDrag} aria-current={inProject && ws?.id === x.id} aria-label={`${x.name}, ${x.list.length} pasta(s)`}
+          onDragStart={e => { e.dataTransfer.setData('text/plain', x.name); e.dataTransfer.effectAllowed = 'move'; setTip(null); setDragWs(x.id) }} onDragEnd={endDrag} aria-current={inProject && ws?.id === x.id} aria-label={`${x.name}, ${x.list.length} pasta(s)${sum.wait ? `, ${sum.wait} precisa(m) de você` : ''}`}
           style={{ '--g': x.color } as CSSProperties}
           onClick={() => { setTip(null); openGroup(x) }}
           onContextMenu={e => { e.preventDefault(); setTip(null); groupMenu(x, e.clientX, e.clientY) }}
           onMouseEnter={e => showTip(e, { group: x })} onFocus={e => showTip(e, { group: x })} onMouseLeave={() => setTip(null)} onBlur={() => setTip(null)}>
           <span className="ws-tile">{x.id === INBOX ? <Icon n="folder" size={17} /> : initials(x.name)}</span>
+          {sum.wait > 0 ? <span className="att-count rail-badge" aria-hidden="true">{sum.wait}</span> : sum.flag && <span className={`rail-pip ${sum.flag}`} aria-hidden="true" />}
         </button>
       </li>
     )
@@ -466,10 +540,10 @@ export default function App() {
     <div className={`app ${(panel && inProject) || showFiles ? 'panel-open' : ''} ${drawer ? 'chats-open' : ''}`}>
       <nav className="rail" aria-label="Projetos">
         <button className="rail-btn rail-logo" aria-label="Início" aria-current={home && !settings && !li} onClick={goHome}><img src={orbitMark} alt="" width={30} height={30} draggable={false} /><span className="rail-tip">Início</span></button>
-        <button className={`rail-btn rail-li ${active.some(a => /[\\/]linkedin$/i.test(a.game)) ? 'live' : ''}`} aria-label="LinkedIn" aria-current={li && !settings} onClick={goLi}><span className="li-glyph" aria-hidden="true">in</span><span className="rail-tip">LinkedIn</span></button>
         <button className="rail-btn rail-new" aria-label="Novo organizador" onClick={() => setGroupDlg({ games: [] })}><Icon n="plus" /><span className="rail-tip">Novo organizador</span></button>
         <ul className={`projects ${drag ? 'dragging' : ''}`}>{shownGroups.map(groupItem)}</ul>
         {tipCard()}
+        <button className={`rail-btn rail-li ${active.some(a => /[\\/]linkedin$/i.test(a.game)) ? 'live' : ''}`} aria-label="LinkedIn" aria-current={li && !settings} onClick={goLi}><span className="li-glyph" aria-hidden="true">in</span><span className="rail-tip">LinkedIn</span></button>
         <PlanetToggle />
         <button className="rail-btn" aria-label="Configurações" aria-current={settings} onClick={goSettings}><Icon n="gear" /><span className="rail-tip">Configurações</span></button>
       </nav>
@@ -484,34 +558,37 @@ export default function App() {
             <button className="icon sm" aria-label={`Adicionar pasta em ${ws!.name}`} title="Adicionar pasta (de qualquer lugar do Windows)" onClick={() => addGame(ws!.id)}><Icon n="folder" size={16} /></button>
             <button className="icon sm" aria-label={`Opções de ${ws!.name}`} onClick={e => { const r = e.currentTarget.getBoundingClientRect(); groupMenu(ws!, r.left, r.bottom + 4) }}><Icon n="more" size={16} /></button>
           </header>
+          {game && <div className="drawer-new">
+            <button className="new-task" title={`Nova tarefa em ${name(game)} (Ctrl+N)`} onClick={() => create()}><Icon n="plus" size={15} /><span>Nova tarefa</span><kbd>Ctrl N</kbd></button>
+            <button className="icon sm" aria-label="Buscar ou ver arquivadas" title="Buscar conversas ou ver arquivadas (Ctrl+K)" onClick={() => setPalette(true)}><Icon n="search" size={15} /></button>
+          </div>}
           <ul className="tree">{folders.map(g => folderSection(g))}</ul>
           {inProject && game && <AlsoRunning active={active} game={game} onOpen={openActive} />}
           {briefCard.view}
-          <button className="chats-foot" onClick={() => setPalette(true)}><Icon n="search" size={14} />Buscar ou ver arquivadas<kbd>Ctrl K</kbd></button>
         </nav>
       )}
 
       <div className="center">
         <header className="topbar">
-          {inProject && <button className={`icon ${chats ? 'on' : ''}`} aria-label={chats ? 'Ocultar conversas' : 'Mostrar conversas'} aria-expanded={chats} title="Conversas do projeto" onClick={() => setChats(!chats)}><Icon n="sidebar" /></button>}
+          {inProject && <button className={`icon ${chats ? 'on' : ''}`} aria-label={chats ? 'Ocultar conversas' : 'Mostrar conversas'} aria-expanded={chats} title="Conversas do projeto (Ctrl+B)" onClick={() => setChats(!chats)}><Icon n="sidebar" /></button>}
           <div className="crumb">
-            {settings ? <b>Configurações</b> : li ? null : home ? <b>Início</b> : game && !chats ? <b>{name(game)}</b> : null}
+            {settings ? <b>Configurações</b> : li ? null : home ? <b>Início</b>
+              : game && !chats ? <>{ws && ws.id !== INBOX && <><span className="crumb-ws">{ws.name}</span><Icon n="chevron" size={12} /></>}<b>{name(game)}</b></> : null}
           </div>
-          <button className="jump-btn" aria-label="Ir para tarefa, projeto ou ação (Ctrl+K)" onClick={() => setPalette(true)}><Icon n="search" size={15} /><kbd>Ctrl K</kbd></button>
-          {inProject && <div className="top-actions">
-            {task?.worktree && taskView && <span className="tag" title={`Isolada na branch ${task.branch}`}><Icon n="branch" size={13} />{task.branch}</span>}
+          <button className="jump-btn" aria-label="Ir para tarefa, projeto ou ação (Ctrl+K)" title="Ir para tarefa, projeto ou ação" onClick={() => setPalette(true)}><Icon n="search" size={15} /><span>Buscar</span><kbd>Ctrl K</kbd></button>
+          {inProject && task?.worktree && taskView && <span className="tag" title={`Isolada na branch ${task.branch}`}><Icon n="branch" size={13} />{task.branch}</span>}
+          {inProject && <div className="top-actions" role="group" aria-label="Projeto">
             <button className="icon" aria-label="Pasta e terminal do projeto" title="Pasta e terminal do projeto" aria-haspopup="menu"
               onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom + 6, items: [
                 { label: 'Abrir pasta do projeto', run: () => api.openFolder(game).catch((e: any) => setErr(errText(e))) },
                 { label: 'Terminal no projeto', hint: 'Claude, conta principal', run: () => api.launchGame(game, { provider: 'claude', accountId: accounts[0]?.id }).catch((e: any) => setErr(errText(e))) },
-              ] }) }}><Icon n="folder" /></button>
+              ] }) }}><Icon n="terminal" /></button>
             {taskView && task && <button className={`icon ${showFiles ? 'on' : ''}`} aria-label={showFiles ? 'Ocultar arquivos alterados' : 'Mostrar arquivos alterados'} aria-expanded={showFiles} title="Arquivos alterados, ao vivo"
               onClick={() => { setFiles(!showFiles); if (!showFiles) setPanel(false) }}><Icon n="files" /></button>}
             <button className={`icon ${panel ? 'on' : ''}`} aria-label={panel ? 'Recolher painel do projeto' : 'Abrir painel do projeto'} aria-expanded={panel} title="Roadmap, problemas e documentos" onClick={() => setPanel(!panel)}><Icon n="panel" /></button>
           </div>}
           <Limits accounts={accounts} />
-          <AgentDock active={active} onOpen={openActive} />
-          <PermissionPrompt taskId={inProject && taskView ? task?.id : undefined} />
+          <AgentDock active={active} queue={queue} onOpen={openActive} onOpenTask={openQueued} onNext={goNext} />
         </header>
         {err && <div className="banner" role="alert">{err}<button className="icon sm" aria-label="Fechar aviso" onClick={() => setErr('')}><Icon n="close" size={14} /></button></div>}
         {settings
@@ -520,7 +597,7 @@ export default function App() {
           : home ? <Home games={games} active={active} onOpen={pick} onAdd={addGame} lastGame={game} onTodoTask={(g, id, d) => { setDraft(d); openIn(g, id) }} />
           : !game ? <div className="empty"><h1>Escolha um projeto</h1><p>Selecione um projeto no trilho à esquerda ou adicione a pasta de um jogo ou app.</p></div>
           : tasks === null ? <div className="empty"><span className="loader" aria-label="Carregando tarefas" /></div>
-          : !taskView ? <Home key={game} games={[game]} tag={ws && ws.id !== INBOX ? ws : null} siblings={folders} active={active} onOpen={g => transition(() => pick(g))} onAdd={addGame} lastGame={game} onTodoTask={(g, id, d) => { setDraft(d); openIn(g, id) }}
+          : !taskView ? <Home key={game} games={[game]} tag={ws && ws.id !== INBOX ? ws : null} siblings={folders} active={active} onOpen={g => transition(() => pick(g))} onAdd={addGame} lastGame={game} onNewTask={() => create()} onTodoTask={(g, id, d) => { setDraft(d); openIn(g, id) }}
               below={<ProjectHome game={game} tasks={tasks} active={active} onOpenTask={openTask} onNewTask={create} onErr={setErr} />} />
           : task ? <Chat key={task.id} task={task} accounts={accounts} providers={providers} onChange={() => loadTasks()} draft={draft?.taskId === task.id ? draft : undefined} onDraftUsed={() => setDraft(undefined)} />
           : <section className="empty">
@@ -535,8 +612,9 @@ export default function App() {
 
       {showFiles && <FilesPanel key={task!.id} task={task!} provider={active.find(a => a.taskId === task!.id)?.provider} onClose={() => setFiles(false)} />}
       {inProject && panel && <ProjectPanel key={game} game={game} accounts={accounts} onOpenTask={openTask} onClose={() => setPanel(false)} />}
-      {palette && <Palette game={game} games={games} active={active} onClose={() => setPalette(false)} onProject={pick} onTask={openTask}
-        onNewTask={() => create()} onHome={goHome} onSettings={goSettings} />}
+      {palette && <Palette game={game} games={games} active={active} queue={queue} attOf={attOf} onClose={() => setPalette(false)} onProject={pick} onTask={openTask}
+        onOpenTask={t => openQueued(t, false)} onNewTask={() => create()} onHome={goHome} onSettings={goSettings} />}
+      <PermissionPrompt taskId={inProject && taskView ? task?.id : undefined} />
       <Toasts openTaskId={inProject && taskView ? task?.id : undefined} onOpen={(g, id, f) => { openIn(g, id); if (f) { setFiles(true); setPanel(false) } }} />
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
       {groupDlg && <GroupDialog edit={groupDlg.edit} count={groupDlg.games.length} onClose={() => setGroupDlg(null)}
