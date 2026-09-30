@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { migrate } from './db.ts'
 import { createTask } from './tasks.ts'
 import { WorkspaceGuard } from './delegation.ts'
-import { createCommandService, listCommandRuns, type ProjectCommand } from './commands.ts'
+import { commandRun, createCommandService, type ProjectCommand } from './commands.ts'
 import { engineCommandError, engineRecipe, prepareEngine, validatePreparedEngine } from './engineFlow.ts'
 import { methodSources, unityCommand, unityOutputs, unityProbe, unityRunDiagnostics, unityVersionOf } from './unityFlow.ts'
 
@@ -166,7 +166,7 @@ test('Unity falso: compilar, testar (exit 2), build e método pelo serviço de c
     beforeSpawn: (_t, game, cwd, command) => validatePreparedEngine(f.db, game, cwd, command),
     resultError: (command, output, truncated, cwd) => engineCommandError(command, output, truncated, cwd)
   })
-  const wait = async (id: number) => { for (let i = 0; i < 500; i++) { const row = listCommandRuns(f.db, f.task).find(r => r.id === id)!; if (row.status !== 'running') return row; await new Promise(r => setTimeout(r, 20)) } throw Error('timeout') }
+  const wait = async (id: number) => { for (let i = 0; i < 500; i++) { const row = commandRun(f.db, f.task, id)!; if (row.status !== 'running') return row; await new Promise(r => setTimeout(r, 20)) } throw Error('timeout') }
   const run = async (action: string, args: object) => wait(await service.start(f.task, f.cwd, f.cwd, f.prepare(action, args).command.name))
   try {
     const compile = await run('compile', { log: 'Reports/c.log' })

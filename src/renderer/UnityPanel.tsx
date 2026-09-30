@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { CommandRun, ProjectCommand } from '../main/commands'
+import type { CommandRunSummary, ProjectCommand } from '../main/commands'
 import type { UnityAction, UnityDetails, UnityTarget } from '../main/unityFlow'
 import { EnginePanel } from './EnginePanel'
 
@@ -9,7 +9,7 @@ const targets: Record<UnityTarget, string> = { Win64: 'Windows 64 bits (.exe)', 
 const mismatch = (project: string | null, probed?: string) => !!project && !!probed && /^\d/.test(probed) && project !== probed
 const stamp = () => new Date().toISOString().slice(0, 19).replace(/\D/g, '')
 
-export function UnityPanel(props: { taskId: number; game: string; disabled: boolean; commands: ProjectCommand[]; runs: CommandRun[]; onPrepared: () => Promise<void> }) {
+export function UnityPanel(props: { taskId: number; game: string; disabled: boolean; commands: ProjectCommand[]; runs: CommandRunSummary[]; onPrepared: () => Promise<void> }) {
   const [action, setAction] = useState<UnityAction>('compile'), [platform, setPlatform] = useState('EditMode'), [filter, setFilter] = useState(''), [results, setResults] = useState('')
   const [target, setTarget] = useState<UnityTarget>('Win64'), [output, setOutput] = useState(''), [method, setMethod] = useState(''), [log, setLog] = useState('')
   return <EnginePanel<UnityDetails> {...props} engine="unity" label="Unity"

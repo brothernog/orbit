@@ -804,7 +804,8 @@ try {
   await ev("[...document.querySelectorAll('.command-list button')].find(b=>b.textContent==='Executar')?.click()")
   let commandResult
   for(let i=0;i<60;i++){commandResult=(await inv(ev,'listCommandRuns',productionId)).value[0];if(commandResult&&commandResult.status!=='running')break;await sleep(100)}
-  check('comandos: processo local retorna saída/exit/duração na pasta correta, sem IA', commandResult?.status==='completed' && commandResult.exit_code===0 && commandResult.duration_ms>=0 && commandResult.output.includes('build local verificado') && commandResult.workspace.toLowerCase()===gameArg.toLowerCase() && argvLog().length===beforePlan+2)
+  const commandLog=commandResult && (await inv(ev,'commandOutput',productionId,commandResult.id)).value
+  check('comandos: processo local retorna saída/exit/duração na pasta correta, sem IA', commandResult?.status==='completed' && commandResult.exit_code===0 && commandResult.duration_ms>=0 && !('output' in commandResult) && commandLog.output.includes('build local verificado') && commandResult.workspace.toLowerCase()===gameArg.toLowerCase() && argvLog().length===beforePlan+2)
   const savedCommands=(await inv(ev,'projectCommands',gameArg)).value
   await inv(ev,'saveProjectCommands',gameArg,[...savedCommands,{name:'Espera local',purpose:'run',program:process.execPath,args:['-e','console.log("esperando");setInterval(()=>{},1000)']}])
   const waiting=(await inv(ev,'runProjectCommand',productionId,'Espera local')).value
@@ -1247,7 +1248,7 @@ try {
   }
   const godotCommandDone = async id => {
     const end = Date.now() + 120000
-    while (Date.now() < end) { const r = (await inv(ev, 'listCommandRuns', godotTask)).value.find(r => r.id === id); if (r && r.status !== 'running') return r; await sleep(200) }
+    while (Date.now() < end) { const r = (await inv(ev, 'listCommandRuns', godotTask)).value.find(r => r.id === id); if (r && r.status !== 'running') return { ...r, output: (await inv(ev, 'commandOutput', godotTask, id)).value.output }; await sleep(200) }
     throw Error('Tempo limite do comando Godot ' + id)
   }
   const godotCalls = argvLog().length

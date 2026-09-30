@@ -2,7 +2,7 @@
 // prévia do comando preparado para revisão humana e execuções com diagnóstico. Mesmo modelo do GodotPanel.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, errText, onChat } from './api'
-import type { CommandRun, ProjectCommand } from '../main/commands'
+import type { CommandRun, CommandRunSummary, ProjectCommand } from '../main/commands'
 import type { EngineConfig } from '../main/engines'
 import type { EngineDiagnostic, EngineProbe, EngineReview, FlowEngine } from '../main/engineFlow'
 import './godot.css'
@@ -14,7 +14,7 @@ type Diagnostics = { run: CommandRun; items: EngineDiagnostic[]; errorCount: num
 const statusText: Record<string, string> = { running: 'Executando', completed: 'Concluído', failed: 'Falhou', cancelled: 'Cancelado' }
 const sameCommand = (a?: ProjectCommand | null, b?: ProjectCommand | null) => !!a && !!b && a.name === b.name && a.program === b.program && a.purpose === b.purpose && JSON.stringify(a.args) === JSON.stringify(b.args)
 
-type Props = { taskId: number; game: string; disabled: boolean; commands: ProjectCommand[]; runs: CommandRun[]; onPrepared: () => Promise<void> }
+type Props = { taskId: number; game: string; disabled: boolean; commands: ProjectCommand[]; runs: CommandRunSummary[]; onPrepared: () => Promise<void> }
 // O painel da engine só fornece os fatos do projeto e o formulário; tudo o mais é comum.
 export function EnginePanel<D>({ engine, label, taskId, game, disabled, commands, runs, onPrepared, facts, form, footer }: Props & {
   engine: FlowEngine; label: string
@@ -78,10 +78,15 @@ export function EnginePanel<D>({ engine, label, taskId, game, disabled, commands
   </details>
 }
 
-export function EngineRun({ taskId, engine, label, run }: { taskId: number; engine: FlowEngine; label: string; run: CommandRun }) {
+export function EngineRun({ taskId, engine, label, run }: { taskId: number; engine: FlowEngine; label: string; run: CommandRunSummary }) {
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const request = useRef(0)
-  useEffect(() => { ++request.current; setDiagnostics(null); return () => { ++request.current } }, [taskId, run.output, run.status, run.truncated])
+  useEffect(() => {
+    const invalidate = () => { ++request.current; setDiagnostics(null) }
+    invalidate()
+    const off = onChat(e => { if (e.taskId === taskId && e.commandOutput?.id === run.id) invalidate() })
+    return () => { ++request.current; off() }
+  }, [taskId, run.id, run.status, run.truncated])
   const act = async (f: () => Promise<void>) => { setBusy(true); setError(''); try { await f() } catch (e) { setError(errText(e)) } finally { setBusy(false) } }
   const shown = diagnostics?.items.filter(i => i.severity !== 'info') ?? []
   return <details className="godot-run"><summary>#{run.id} {run.name} · {statusText[run.status]} · exit {run.exit_code ?? '—'}</summary><div className="godot-run-body">

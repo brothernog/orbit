@@ -1,4 +1,4 @@
-import { createCommandService, listCommandRuns, projectCommands, reconcileCommands, saveCommands } from './commands.ts'
+import { commandOutput, commandRun, createCommandService, listCommandRuns, projectCommands, reconcileCommands, saveCommands } from './commands.ts'
 import { createCheckpoint as takeCheckpoint, listCheckpoints, previewRewind, rewindCheckpoint } from './checkpoints.ts'
 import { addStep, activeStep, beginStep, bindStep, failStep, listSteps, reconcileSteps, reviewStep } from './workflows.ts'
 import { todoBoard, saveTodo, todoTask } from './planning.ts'
@@ -770,10 +770,12 @@ const handlers: Record<string, (...a: any[]) => any> = {
     const probe = await godotProbe(organizer.config.executable, cwd)
     if (!samePath(taskCwd(asTask(taskId)), cwd) || godotOrganizer(db, t.game)?.id !== organizer.id || godotOrganizer(db, t.game)?.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Prepare novamente.')
     const command = prepareGodot(db, t.game, cwd, action, args, probe)
-    emit({ taskId, commandChanged: true }); return command
+    emit({ taskId, game: t.game, commandConfigChanged: true }); return command
   },
   godotDiagnostics: (taskId: number, commandId: unknown) => {
-    const t = asTask(taskId), run = listCommandRuns(db, t.id).find(r => r.id === asInt(commandId, 'comando')) ?? fail('Comando de outra tarefa ou fora do histórico disponível.')
+    const t = asTask(taskId), id = asInt(commandId, 'comando')
+    if (!listCommandRuns(db, t.id).some(r => r.id === id)) fail('Comando de outra tarefa ou fora do histórico disponível.')
+    const run = commandRun(db, t.id, id) ?? fail('Comando de outra tarefa ou inexistente.')
     if (!run.name.startsWith('Godot · ')) fail('Selecione um comando Godot.')
     return { run, ...godotDiagnostics(run.output) }
   },
@@ -791,10 +793,12 @@ const handlers: Record<string, (...a: any[]) => any> = {
   prepareEngineCommand: async (taskId: number, engine: unknown, action: unknown, args: unknown) => {
     const { t, cwd, probe } = await engineProbeChecked(taskId, engine)
     const result = prepareEngine(db, t.game, cwd, engine, action, args, probe)
-    emit({ taskId, commandChanged: true }); return result
+    emit({ taskId, game: t.game, commandConfigChanged: true }); return result
   },
   engineDiagnostics: (taskId: number, engine: unknown, commandId: unknown) => {
-    const e = flowEngine(engine), t = asTask(taskId), run = listCommandRuns(db, t.id).find(r => r.id === asInt(commandId, 'comando')) ?? fail('Comando de outra tarefa ou fora do histórico disponível.')
+    const e = flowEngine(engine), t = asTask(taskId), id = asInt(commandId, 'comando')
+    if (!listCommandRuns(db, t.id).some(r => r.id === id)) fail('Comando de outra tarefa ou fora do histórico disponível.')
+    const run = commandRun(db, t.id, id) ?? fail('Comando de outra tarefa ou inexistente.')
     if (!isEngineCommand(e, run.name)) fail('Selecione um comando desta engine.')
     const command = { name: run.name, purpose: 'test' as const, program: run.program, args: JSON.parse(run.args) }
     return { run, ...engineRecipe(e).diagnostics(run.output, { command, cwd: run.workspace }) }
@@ -828,8 +832,9 @@ const handlers: Record<string, (...a: any[]) => any> = {
   }), true),
   openWorktreeFolder: async (game: string, dir: unknown) => shell.openPath(await worktreeFolder(game, dir)),
   openWorktreeTerminal: async (game: string, dir: unknown) => openTerminal(await worktreeFolder(game, dir), 'Resolver integração', process.platform === 'linux' ? ':' : '', host.env),
-  saveProjectCommands: (game: string, raw: unknown) => { const c = saveCommands(db, asGame(game), raw); emit({ commandChanged: true }); return c },
+  saveProjectCommands: (game: string, raw: unknown) => { const g = asGame(game), c = saveCommands(db, g, raw); emit({ game: g, commandConfigChanged: true }); return c },
   listCommandRuns: (taskId: number) => listCommandRuns(db, asTask(taskId).id),
+  commandOutput: (taskId: number, id: number, offset: number = 0) => commandOutput(db, asTask(taskId).id, asInt(id, 'execução'), offset),
   runProjectCommand: (taskId: number, name: string) => { const t = asTask(taskId); return commands.start(t.id,t.game,taskCwd(t),asStr(name,'comando',100)) },
   cancelProjectCommand: (taskId: number, id: number) => { const t = asTask(taskId), n = asInt(id,'execução'); if (!listCommandRuns(db,t.id).some(r => r.id===n)) fail('Comando de outra tarefa.'); commands.cancel(n) },
   listSteps: (taskId: number) => listSteps(db, asTask(taskId).id),

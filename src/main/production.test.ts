@@ -102,9 +102,11 @@ test('builds: só comando concluído do projeto/worktree, aceite humano e histó
     const task = createTask(db, game, 'Build local'), otherTask = createTask(db, other, 'Outro')
     const command = (taskId: number, workspace: string, status = 'completed', exit = 0) => Number(db.prepare('INSERT INTO command_runs(task_id,workspace,name,program,args,status,exit_code,duration_ms,ended_at) VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)').run(taskId, workspace, 'Empacotar', process.execPath, '["build.js"]', status, exit, 10).lastInsertRowid)
     const id = command(task, game), otherId = command(otherTask, other), failed = command(task, game, 'failed', 2), running = command(task, game, 'running', 0)
+    db.prepare('UPDATE command_runs SET output=? WHERE id=?').run('x'.repeat(1_000_000),id)
     const raw = { title: 'Demo', version: '0.1', platform: 'Windows', path: 'demo.zip', notes: 'Testar antes da publicação', commandId: id }
     fs.writeFileSync(path.join(game, 'demo.zip'), 'versão inicial')
     assert.deepEqual(s.listBuildCommands(game).map(c => c.id), [id])
+    assert.deepEqual(Object.keys(s.listBuildCommands(game)[0]).sort(), ['id', 'name', 'task_title', 'workspace'])
     for (const commandId of [otherId, failed, running, 999]) await assert.rejects(s.registerBuild(game, { ...raw, commandId }), /comando concluído/)
     const badWorkspace = command(task, other)
     await assert.rejects(s.registerBuild(game, { ...raw, commandId: badWorkspace }), /Workspace/)
