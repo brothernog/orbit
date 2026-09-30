@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { AGENTS } from './adapters.ts'
-import { claudeModels, claudeName, parseClaudeHelp, parseOpencodeProviders, parseOpencodeVerbose, validateSelection, type Catalog } from './catalog.ts'
+import { claudeModels, claudeName, getCatalog, parseClaudeHelp, parseOpencodeProviders, parseOpencodeVerbose, validateSelection, type Catalog } from './catalog.ts'
 import { codexContextFromRollout, codexLimits, findRollout } from './codexSession.ts'
 import { openDb } from './db.ts'
 import { mergeMetric } from './runner.ts'
@@ -189,4 +189,13 @@ test('codex: contexto vem do arquivo de sessao; formato diferente vira indisponi
   fs.writeFileSync(file, line({ type: 'event_msg', payload: { type: 'token_count', info: { formato: 'novo' } } }) + '\n')
   assert.equal(codexContextFromRollout(file), null) // divergencia: sem numero inventado
   try { fs.rmSync(home, { recursive: true, force: true }) } catch {}
+})
+
+test('catalogo: consultas simultaneas compartilham a mesma em andamento (inclusive forcadas); depois do fim, nova consulta', async () => {
+  const a = getCatalog('gemini', undefined, true), b = getCatalog('gemini'), c = getCatalog('gemini', undefined, true)
+  assert.equal(a, b); assert.equal(a, c) // uma unica consulta a CLI, nao tres
+  const cat = await a
+  assert.equal(await getCatalog('gemini'), cat) // cache
+  const again = getCatalog('gemini', undefined, true)
+  assert.notEqual(again, a); assert.notEqual(await again, cat)
 })
