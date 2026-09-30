@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { openDb } from './db.ts'
 import { finishRun, startRun } from './runs.ts'
-import { agentBody, autoTitle, contextFor, createTask, DEFAULT_TITLE, deleteTask, getTask, listTasks, profileOf, renameTask, resetSession, saveMetric, getMetric, saveSession, sessionOf, setArchived, taskForPin, taskMessages } from './tasks.ts'
+import { agentBody, autoTitle, contextFor, createTask, DEFAULT_TITLE, deleteTask, getTask, listTasks, profileOf, renameTask, resetSession, saveMetric, getMetric, saveSession, sessionOf, setArchived, stripTitle, summaryTitle, taskForPin, taskMessages, titleIn } from './tasks.ts'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-tasks-'))
 const db = openDb(path.join(tmp, 't.db'))
@@ -127,6 +127,21 @@ test('criar, renomear, buscar, ordenar por atividade e arquivar sem apagar nada'
   assert.equal(getTask(db, c).title, 'Corrigir a camera tremendo')
   autoTitle(db, a, 'nao deve trocar') // so titulo padrao vira automatico
   assert.equal(getTask(db, a).title, 'Chefe final')
+  // resumo do agente: substitui o provisorio; renomeado pelo usuario, nao troca
+  const d = createTask(db, game), prov = autoTitle(db, d, 'C:\\Users\\u\\jogo arruma isso')!
+  const reply = 'Pronto, arrumei.\n<titulo>Corrigir colisão do jogador</titulo>'
+  assert.equal(titleIn(reply), 'Corrigir colisão do jogador')
+  assert.equal(stripTitle(reply), 'Pronto, arrumei.')
+  assert.equal(stripTitle('Pronto.\n<titu'), 'Pronto.') // tag ainda chegando no streaming
+  assert.equal(stripTitle('Pronto.\n<titulo>Corr'), 'Pronto.')
+  assert.equal(titleIn('sem tag'), null)
+  summaryTitle(db, d, 'Corrigir colisão do jogador', prov)
+  assert.equal(getTask(db, d).title, 'Corrigir colisão do jogador')
+  const e = createTask(db, game), prov2 = autoTitle(db, e, 'oi')!
+  renameTask(db, e, 'Meu nome')
+  summaryTitle(db, e, 'Outro', prov2)
+  assert.equal(getTask(db, e).title, 'Meu nome')
+  assert.equal(autoTitle(db, e, 'x'), null)
   turn(a, 'claude', 1, 'ajustar dificuldade', 'ok') // atividade mais recente
   assert.equal(listTasks(db, game)[0].id, a)
   renameTask(db, b, 'Menu principal')

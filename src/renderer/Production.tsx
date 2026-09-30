@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { api, errText, onChat } from './api'
 import { shrink, Thumbs } from './Todo'
-import type { Asset, AssetVersion, Build, BuildCommand, ReviewState } from '../main/production'
+import type { Asset, AssetVersion, Build, BuildCommand, RetentionPreview, ReviewState } from '../main/production'
 import type { Playtest } from '../main/playtests'
 import './production.css'
 
 type Records = { assets: Asset[]; builds: Build[]; playtests: Playtest[]; commands: BuildCommand[] }
-type Action = (f: () => Promise<unknown>) => Promise<boolean>
+type Action = (f: () => Promise<unknown>, reload?: boolean) => Promise<boolean>
 type Tools = { game: string; busy: boolean; action: Action; preview: (images: string[]) => void }
 
 const reviewText: Record<ReviewState, string> = { pending: 'Aguardando revisão', approved: 'Aprovado', rejected: 'Rejeitado' }
@@ -17,6 +17,31 @@ const dateText = (s: string) => new Date(s.includes('T') ? s : s.replace(' ', 'T
 const assetDraft = { title: '', path: '', kind: '', license: '', source: '', tags: '', note: '' }
 const buildDraft = { title: '', version: '', platform: '', path: '', notes: '', commandId: '' }
 const playtestDraft = { title: '', scenario: '', expected: '', observed: '', outcome: 'fail' as Playtest['outcome'], notes: '', severity: 'medium' as Playtest['severity'], buildId: '' }
+
+type ArchiveView = 'active' | 'archived' | 'all'
+const inArchiveView = (record: { archived_at: string | null }, view: ArchiveView) => view === 'all' || (view === 'archived') === !!record.archived_at
+
+function ArchiveFilter({ value, onChange, label }: { value: ArchiveView; onChange: (value: ArchiveView) => void; label: string }) {
+  return <label>Catálogo<select aria-label={`Arquivamento de ${label}`} value={value} onChange={e => onChange(e.target.value as ArchiveView)}><option value="active">Ativos</option><option value="archived">Arquivados</option><option value="all">Todos</option></select></label>
+}
+
+type MetadataField = { name: string; label: string; max?: number; required?: boolean; rows?: number; options?: Record<string, string> }
+function MetadataEditor({ label, initial, revision, fields, save, ...tools }: Tools & { label: string; initial: Record<string, string>; revision: number; fields: MetadataField[]; save: (values: Record<string, string>, revision: number) => Promise<unknown> }) {
+  const [draft, setDraft] = useState<Record<string, string> | null>(null), [editingRevision, setEditingRevision] = useState(revision)
+  if (!draft) return <button disabled={tools.busy} onClick={() => { setDraft(initial); setEditingRevision(revision) }}>Editar metadados</button>
+  const patch = (name: string, value: string) => setDraft(d => ({ ...d, [name]: value }))
+  return <form className="production-form production-editor" aria-label={`Metadados de ${label}`} onSubmit={async e => { e.preventDefault(); if (await tools.action(() => save(draft, editingRevision))) setDraft(null) }}><fieldset disabled={tools.busy}>
+    {fields.map(field => <label key={field.name} className={field.rows ? 'production-wide' : undefined}>{field.label}{field.options
+      ? <select aria-label={`${field.label} de ${label}`} value={draft[field.name]} onChange={e => patch(field.name, e.target.value)}>{Object.entries(field.options).map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select>
+      : field.rows ? <textarea aria-label={`${field.label} de ${label}`} rows={field.rows} maxLength={field.max} value={draft[field.name]} onChange={e => patch(field.name, e.target.value)} />
+        : <input aria-label={`${field.label} de ${label}`} required={field.required} maxLength={field.max} value={draft[field.name]} onChange={e => patch(field.name, e.target.value)} />}</label>)}
+    <div className="production-actions production-wide"><button className="primary">Salvar metadados</button><button type="button" onClick={() => setDraft(null)}>Cancelar edição</button></div>
+  </fieldset></form>
+}
+
+function ArchiveButton({ record, kind, ...tools }: Tools & { record: { id: number; revision: number; archived_at: string | null }; kind: 'Asset' | 'Build' | 'Playtest' }) {
+  return <button disabled={tools.busy} onClick={() => tools.action(() => api[`set${kind}Archived`](tools.game, record.id, record.revision, !record.archived_at))}>{record.archived_at ? 'Restaurar registro' : 'Arquivar registro'}</button>
+}
 
 function ImagePreview({ images, onClose }: { images: string[]; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -45,31 +70,35 @@ function ReviewActions({ version, kind, ...tools }: Tools & { version: AssetVers
 
 function AssetRow({ asset, ...tools }: Tools & { asset: Asset }) {
   const [note, setNote] = useState('')
-  return <details className="production-record">
-    <summary><b>{asset.title}</b><span className="production-path">{asset.path}</span><span className="production-meta">{asset.versions.length} {asset.versions.length === 1 ? 'versão' : 'versões'}</span></summary>
+  return <details className="production-record" data-catalog-kind="asset" data-catalog-id={asset.id}>
+    <summary><b>{asset.title}</b><span className="production-path">{asset.path}</span><span className="production-meta">{asset.versions.length} {asset.versions.length === 1 ? 'versão' : 'versões'}{asset.archived_at && ' · Arquivado'}</span></summary>
     <div className="production-record-body">
       <dl className="production-facts"><div><dt>Tipo</dt><dd>{asset.kind || 'Não informado'}</dd></div><div><dt>Licença</dt><dd>{asset.license || 'Não informada'}</dd></div><div><dt>Origem</dt><dd>{asset.source || 'Não informada'}</dd></div><div><dt>Tags</dt><dd>{asset.tags || 'Nenhuma'}</dd></div></dl>
+      <MetadataEditor {...tools} label={`asset ${asset.id}`} revision={asset.revision} initial={{ title: asset.title, kind: asset.kind, license: asset.license, source: asset.source, tags: asset.tags }} fields={[
+        { name: 'title', label: 'Nome', max: 200, required: true }, { name: 'kind', label: 'Tipo', max: 50 }, { name: 'license', label: 'Licença', max: 1000 }, { name: 'source', label: 'Origem', max: 1000 }, { name: 'tags', label: 'Tags', max: 1000 }
+      ]} save={(values, revision) => api.editAsset(tools.game, asset.id, { ...values, revision })} />
+      <div className="production-actions"><ArchiveButton {...tools} record={asset} kind="Asset" /></div>
       <form className="production-capture" onSubmit={async e => { e.preventDefault(); if (await tools.action(() => api.captureAssetVersion(tools.game, asset.id, note))) setNote('') }}>
         <label>Nota da próxima versão<input aria-label={`Nota da versão de ${asset.title}`} value={note} maxLength={4000} onChange={e => setNote(e.target.value)} disabled={tools.busy} placeholder="O que mudou neste arquivo?" /></label>
         <button disabled={tools.busy}>Capturar nova versão</button>
       </form>
-      <ol className="production-versions">{asset.versions.map((version, i) => <li key={version.id}>
-        <header><b>Versão {asset.versions.length - i}</b><span className={`production-state ${version.state}`}>{reviewText[version.state]}</span></header>
+      <ol className="production-versions">{asset.versions.map(version => <li key={version.id} data-version-id={version.id}>
+        <header><b>Versão #{version.id}</b><span className={`production-state ${version.state}`}>{reviewText[version.state]}</span>{!!version.pinned && <span className="production-meta">Preservada</span>}</header>
         <span className="production-meta">{sizeText(version.size)} · {dateText(version.created_at)}</span>
         <code className="production-hash" title={version.hash}>SHA-256 {version.hash}</code>
         {version.note && <p className="production-copy">{version.note}</p>}
-        <ReviewActions {...tools} version={version} kind="asset" />
+        <div className="production-actions"><ReviewActions {...tools} version={version} kind="asset" /><button disabled={tools.busy} aria-pressed={!!version.pinned} onClick={() => tools.action(() => api.setAssetVersionPinned(tools.game, version.id, version.hash, !version.pinned))}>{version.pinned ? 'Remover preservação' : 'Preservar versão'}</button></div>
       </li>)}</ol>
     </div>
   </details>
 }
 
 function Assets({ assets, ...tools }: Tools & { assets: Asset[] }) {
-  const [draft, setDraft] = useState(assetDraft), [filter, setFilter] = useState('')
+  const [draft, setDraft] = useState(assetDraft), [filter, setFilter] = useState(''), [archive, setArchive] = useState<ArchiveView>('active')
   const patch = (key: keyof typeof draft, value: string) => setDraft(d => ({ ...d, [key]: value }))
-  const filtered = assets.filter(a => `${a.title} ${a.path} ${a.kind} ${a.tags}`.toLowerCase().includes(filter.trim().toLowerCase()))
+  const filtered = assets.filter(a => inArchiveView(a, archive) && `${a.title} ${a.path} ${a.kind} ${a.tags}`.toLowerCase().includes(filter.trim().toLowerCase()))
   return <>
-    <div className="production-toolbar"><p className="muted">Guarde versões de arquivos do projeto e aprove a cópia que deseja usar.</p><input type="search" aria-label="Filtrar assets" placeholder="Buscar nome, tipo ou tag" value={filter} onChange={e => setFilter(e.target.value)} /></div>
+    <div className="production-toolbar"><p className="muted">Guarde versões de arquivos do projeto e aprove a cópia que deseja usar.</p><input type="search" aria-label="Filtrar assets" placeholder="Buscar nome, tipo ou tag" value={filter} onChange={e => setFilter(e.target.value)} /><ArchiveFilter label="assets" value={archive} onChange={setArchive} /></div>
     <details className="production-form-box"><summary>Registrar asset</summary>
       <form className="production-form" onSubmit={async e => { e.preventDefault(); if (await tools.action(() => api.captureAsset(tools.game, draft))) setDraft(assetDraft) }}>
         <fieldset disabled={tools.busy}><label>Nome do asset<input aria-label="Nome do asset" required maxLength={200} value={draft.title} onChange={e => patch('title', e.target.value)} /></label>
@@ -83,20 +112,44 @@ function Assets({ assets, ...tools }: Tools & { assets: Asset[] }) {
         </fieldset>
       </form>
     </details>
-    <div className="production-list">{filtered.map(asset => <AssetRow key={asset.id} {...tools} asset={asset} />)}{!filtered.length && <p className="production-empty">{assets.length ? 'Nenhum asset corresponde à busca.' : 'Nenhum asset registrado. Escolha um arquivo para guardar a primeira versão.'}</p>}</div>
+    <div className="production-list">{filtered.map(asset => <AssetRow key={asset.id} {...tools} asset={asset} />)}{!filtered.length && <p className="production-empty">{assets.length ? 'Nenhum asset corresponde aos filtros.' : 'Nenhum asset registrado. Escolha um arquivo para guardar a primeira versão.'}</p>}</div>
+    <Retention {...tools} assets={assets} />
   </>
+}
+
+function Retention({ assets, ...tools }: Tools & { assets: Asset[] }) {
+  const [keep, setKeep] = useState('3'), [preview, setPreview] = useState<RetentionPreview | null>(null), [confirmed, setConfirmed] = useState(false), [result, setResult] = useState<{ versions: number; files: number; bytes: number; warnings: string[] } | null>(null)
+  useEffect(() => { setPreview(null); setConfirmed(false) }, [assets, tools.game])
+  return <details className="production-form-box production-retention"><summary>Limpar versões antigas de assets</summary><div className="production-record-body">
+    <p className="muted">Limpeza manual apenas de versões rejeitadas, sem preservação, além das mais recentes de cada asset. Versões aprovadas e pendentes, builds e screenshots ficam guardadas. Arquivar um registro mantém seus arquivos.</p>
+    <form className="production-capture" onSubmit={e => { e.preventDefault(); void tools.action(async () => { setPreview(await api.previewRetention(tools.game, Number(keep))); setConfirmed(false); setResult(null) }, false) }}>
+      <label>Versões recentes por asset<input type="number" aria-label="Versões recentes a manter" min={1} max={100} required value={keep} disabled={tools.busy} onChange={e => { setKeep(e.target.value); setPreview(null); setConfirmed(false); setResult(null) }} /></label><button disabled={tools.busy}>Prévia da limpeza</button>
+    </form>
+    {preview && <div className="production-retention-preview" aria-label="Prévia da retenção">
+      <p><b>Versões: {preview.versions.length}</b> · arquivos: {preview.files} · {sizeText(preview.bytes)} a liberar</p>
+      <ul>{preview.versions.map(version => <li key={version.id}><b>{version.title}</b> · versão #{version.id} · {sizeText(version.size)}<code className="production-hash">SHA-256 {version.hash}</code></li>)}</ul>
+      {!preview.versions.length && preview.files > 0 && <p className="muted">A prévia inclui arquivos de versões removidas anteriormente cuja limpeza precisa ser repetida.</p>}
+      {!!(preview.versions.length || preview.files) ? <><label className="production-confirm"><input type="checkbox" aria-label="Confirmar limpeza das versões listadas" checked={confirmed} disabled={tools.busy} onChange={e => setConfirmed(e.target.checked)} />Conferi a prévia e autorizo remover as versões e os arquivos indicados. Esta limpeza não pode ser desfeita pelo catálogo.</label>
+        <button className="primary danger" disabled={tools.busy || !confirmed} onClick={async () => { if (!confirmed) return; if (!await tools.action(async () => { setResult(await api.pruneRetention(tools.game, preview.keep, preview.token)) })) { setPreview(null); setConfirmed(false) } }}>Remover versões listadas</button></> : <p className="muted">Nenhuma versão ou arquivo pode ser removido com esta regra.</p>}
+    </div>}
+    {result && <div role="status"><p>Versões removidas: {result.versions} · arquivos removidos: {result.files} · {sizeText(result.bytes)} liberados.</p>{result.warnings.map((warning, i) => <p className="err" key={i}>{warning}</p>)}</div>}
+  </div></details>
 }
 
 function PlaytestRow({ playtest, builds, onOpenTask, ...tools }: Tools & { playtest: Playtest; builds: Build[]; onOpenTask: (id: number) => void }) {
   const [title, setTitle] = useState(''), [instruction, setInstruction] = useState('')
   const openIssue = () => tools.action(async () => { const task = await api.taskForPin(playtest.pin_id); onOpenTask(typeof task === 'number' ? task : task.id) })
   const linkedBuild = builds.find(b => b.id === playtest.build_id)
-  return <details className="production-record">
-    <summary><b>{playtest.title}</b><span className={`production-state ${playtest.outcome === 'pass' ? 'approved' : playtest.outcome === 'fail' ? 'rejected' : 'pending'}`}>{outcomeText[playtest.outcome]}</span><span className="production-meta">{playtest.state === 'resolved' ? 'Resolvido' : 'Aberto'} · {severityText[playtest.severity]}</span></summary>
+  return <details className="production-record" data-catalog-kind="playtest" data-catalog-id={playtest.id}>
+    <summary><b>{playtest.title}</b><span className={`production-state ${playtest.outcome === 'pass' ? 'approved' : playtest.outcome === 'fail' ? 'rejected' : 'pending'}`}>{outcomeText[playtest.outcome]}</span><span className="production-meta">{playtest.state === 'resolved' ? 'Resolvido' : 'Aberto'} · {severityText[playtest.severity]}{playtest.archived_at && ' · Arquivado'}</span></summary>
     <div className="production-record-body">
       <span className="production-meta">{dateText(playtest.created_at)}{playtest.build_id && ` · Build: ${linkedBuild ? `${linkedBuild.title} ${linkedBuild.version}` : `#${playtest.build_id}`}`}</span>
       <dl className="production-observations">{[['Cenário', playtest.scenario], ['Esperado', playtest.expected], ['Observado', playtest.observed], ['Notas', playtest.notes]].filter(([, text]) => text).map(([label, text]) => <div key={label}><dt>{label}</dt><dd>{text}</dd></div>)}</dl>
+      <MetadataEditor {...tools} label={`playtest ${playtest.id}`} revision={playtest.revision} initial={{ title: playtest.title, notes: playtest.notes, severity: playtest.severity }} fields={[
+        { name: 'title', label: 'Nome', max: 200, required: true }, { name: 'severity', label: 'Severidade', options: severityText }, { name: 'notes', label: 'Notas', max: 8000, rows: 2 }
+      ]} save={(values, revision) => api.editPlaytest(tools.game, playtest.id, { ...values, revision })} />
       <div className="production-actions">{playtest.imageCount > 0 && <button disabled={tools.busy} onClick={() => tools.action(async () => tools.preview(await api.playtestImages(tools.game, playtest.id)))}>Ver evidências ({playtest.imageCount})</button>}
+        <ArchiveButton {...tools} record={playtest} kind="Playtest" />
         <button disabled={tools.busy} onClick={() => tools.action(() => api.setPlaytestState(tools.game, playtest.id, playtest.state === 'open' ? 'resolved' : 'open'))}>{playtest.state === 'open' ? 'Marcar resolvido' : 'Reabrir playtest'}</button>
         {playtest.pin_id && <button disabled={tools.busy} onClick={openIssue}>Abrir tarefa do problema</button>}
       </div>
@@ -114,16 +167,17 @@ function PlaytestRow({ playtest, builds, onOpenTask, ...tools }: Tools & { playt
 }
 
 function Playtests({ playtests, builds, onOpenTask, ...tools }: Tools & { playtests: Playtest[]; builds: Build[]; onOpenTask: (id: number) => void }) {
-  const [draft, setDraft] = useState(playtestDraft), [images, setImages] = useState<string[]>([]), [filter, setFilter] = useState<'all' | 'open' | 'resolved'>('all')
+  const [draft, setDraft] = useState(playtestDraft), [images, setImages] = useState<string[]>([]), [filter, setFilter] = useState<'all' | 'open' | 'resolved'>('all'), [archive, setArchive] = useState<ArchiveView>('active')
   const patch = (key: keyof typeof draft, value: string) => setDraft(d => ({ ...d, [key]: value }))
+  const filtered = playtests.filter(p => inArchiveView(p, archive) && (filter === 'all' || p.state === filter))
   return <>
-    <div className="production-toolbar"><p className="muted">Registre o que aconteceu durante uma sessão de jogo e acompanhe as correções.</p><label>Mostrar<select aria-label="Filtrar playtests" value={filter} onChange={e => setFilter(e.target.value as typeof filter)}><option value="all">Todos os playtests</option><option value="open">Abertos</option><option value="resolved">Resolvidos</option></select></label></div>
+    <div className="production-toolbar"><p className="muted">Registre o que aconteceu durante uma sessão de jogo e acompanhe as correções.</p><label>Mostrar<select aria-label="Filtrar playtests" value={filter} onChange={e => setFilter(e.target.value as typeof filter)}><option value="all">Todos os playtests</option><option value="open">Abertos</option><option value="resolved">Resolvidos</option></select></label><ArchiveFilter label="playtests" value={archive} onChange={setArchive} /></div>
     <details className="production-form-box"><summary>Registrar playtest</summary><form className="production-form" onSubmit={async e => {
       e.preventDefault()
       if (await tools.action(() => api.addPlaytest(tools.game, { ...draft, images, buildId: draft.buildId ? Number(draft.buildId) : null }))) { setDraft(playtestDraft); setImages([]) }
     }}><fieldset disabled={tools.busy}>
       <label>Nome do playtest<input aria-label="Nome do playtest" required maxLength={200} value={draft.title} onChange={e => patch('title', e.target.value)} /></label>
-      <label>Build testada<select aria-label="Build do playtest" value={draft.buildId} onChange={e => patch('buildId', e.target.value)}><option value="">Sem build vinculada</option>{builds.map(b => <option key={b.id} value={b.id}>{b.title} {b.version} · {b.platform}</option>)}</select></label>
+      <label>Build testada<select aria-label="Build do playtest" value={draft.buildId} onChange={e => patch('buildId', e.target.value)}><option value="">Sem build vinculada</option>{builds.filter(b => !b.archived_at).map(b => <option key={b.id} value={b.id}>{b.title} {b.version} · {b.platform}</option>)}</select></label>
       <label className="production-wide">Cenário<textarea aria-label="Cenário do playtest" maxLength={4000} rows={2} value={draft.scenario} onChange={e => patch('scenario', e.target.value)} placeholder="Como reproduzir o teste" /></label>
       <label>Resultado esperado<textarea aria-label="Resultado esperado do playtest" maxLength={8000} rows={3} value={draft.expected} onChange={e => patch('expected', e.target.value)} /></label>
       <label>Resultado observado<textarea aria-label="Resultado observado do playtest" required maxLength={8000} rows={3} value={draft.observed} onChange={e => patch('observed', e.target.value)} /></label>
@@ -137,7 +191,7 @@ function Playtests({ playtests, builds, onOpenTask, ...tools }: Tools & { playte
       {!!images.length && <div className="production-wide"><Thumbs images={images} onOpen={image => tools.preview([image])} onRemove={i => setImages(old => old.filter((_, j) => j !== i))} /></div>}
       <button className="primary production-submit">Salvar playtest</button>
     </fieldset></form></details>
-    <div className="production-list">{playtests.filter(p => filter === 'all' || p.state === filter).map(playtest => <PlaytestRow key={playtest.id} {...tools} playtest={playtest} builds={builds} onOpenTask={onOpenTask} />)}{!playtests.some(p => filter === 'all' || p.state === filter) && <p className="production-empty">{playtests.length ? 'Nenhum playtest neste estado.' : 'Nenhum playtest registrado. Guarde o cenário, o resultado e suas evidências após jogar.'}</p>}</div>
+    <div className="production-list">{filtered.map(playtest => <PlaytestRow key={playtest.id} {...tools} playtest={playtest} builds={builds} onOpenTask={onOpenTask} />)}{!filtered.length && <p className="production-empty">{playtests.length ? 'Nenhum playtest corresponde aos filtros.' : 'Nenhum playtest registrado. Guarde o cenário, o resultado e suas evidências após jogar.'}</p>}</div>
   </>
 }
 
@@ -153,11 +207,11 @@ function CommandSource({ snapshot }: { snapshot: string }) {
 }
 
 function Builds({ builds, commands, onOpenTask, ...tools }: Tools & { builds: Build[]; commands: BuildCommand[]; onOpenTask: (id: number) => void }) {
-  const [draft, setDraft] = useState(buildDraft)
+  const [draft, setDraft] = useState(buildDraft), [archive, setArchive] = useState<ArchiveView>('active')
   const patch = (key: keyof typeof draft, value: string) => setDraft(d => ({ ...d, [key]: value }))
   const command = commands.find(c => c.id === Number(draft.commandId))
   return <>
-    <p className="muted production-intro">Guarde um arquivo distribuível após um comando local concluído. Revise o jogo antes de aprovar a build.</p>
+    <div className="production-toolbar"><p className="muted">Guarde um arquivo distribuível após um comando local concluído. Revise o jogo antes de aprovar a build.</p><ArchiveFilter label="builds" value={archive} onChange={setArchive} /></div>
     <details className="production-form-box"><summary>Registrar build</summary><form className="production-form" onSubmit={async e => { e.preventDefault(); if (await tools.action(() => api.registerBuild(tools.game, { ...draft, commandId: Number(draft.commandId) }))) setDraft(buildDraft) }}><fieldset disabled={tools.busy}>
       <label className="production-wide">Comando concluído<select aria-label="Comando da build" required value={draft.commandId} onChange={e => patch('commandId', e.target.value)}><option value="">Escolher comando</option>{commands.map(c => <option key={c.id} value={c.id}>#{c.id} {c.name} · {c.task_title}</option>)}</select></label>
       {!commands.length && <p className="muted production-wide">Execute um comando local na conversa de uma tarefa. Comandos concluídos com exit 0 aparecem aqui.</p>}
@@ -169,12 +223,15 @@ function Builds({ builds, commands, onOpenTask, ...tools }: Tools & { builds: Bu
       <label className="production-wide">Notas<textarea aria-label="Notas da build" rows={2} maxLength={5000} value={draft.notes} onChange={e => patch('notes', e.target.value)} /></label>
       <button className="primary production-submit" disabled={!draft.commandId}>Capturar build</button>
     </fieldset></form></details>
-    <div className="production-list">{builds.map(build => <details key={build.id} className="production-record"><summary><b>{build.title} <span className="production-meta">{build.version}</span></b><span className="production-meta">{build.platform}</span><span className={`production-state ${build.state}`}>{reviewText[build.state]}</span></summary><div className="production-record-body">
+    <div className="production-list">{builds.filter(b => inArchiveView(b, archive)).map(build => <details key={build.id} className="production-record" data-catalog-kind="build" data-catalog-id={build.id}><summary><b>{build.title} <span className="production-meta">{build.version}</span></b><span className="production-meta">{build.platform}{build.archived_at && ' · Arquivado'}</span><span className={`production-state ${build.state}`}>{reviewText[build.state]}</span></summary><div className="production-record-body">
       <span className="production-path">{build.file_name}</span><span className="production-meta">{sizeText(build.size)} · {dateText(build.created_at)}</span><code className="production-hash" title={build.hash}>SHA-256 {build.hash}</code>
       {build.notes && <p className="production-copy">{build.notes}</p>}
+      <MetadataEditor {...tools} label={`build ${build.id}`} revision={build.revision} initial={{ title: build.title, version: build.version, platform: build.platform, notes: build.notes }} fields={[
+        { name: 'title', label: 'Nome', max: 200, required: true }, { name: 'version', label: 'Versão', max: 100, required: true }, { name: 'platform', label: 'Plataforma', max: 100, required: true }, { name: 'notes', label: 'Notas', max: 5000, rows: 2 }
+      ]} save={(values, revision) => api.editBuild(tools.game, build.id, { ...values, revision })} />
       <CommandSource snapshot={build.command} />
-      <div className="production-actions"><ReviewActions {...tools} version={build} kind="build" />{build.source_task_id && <button disabled={tools.busy} onClick={() => onOpenTask(build.source_task_id!)}>Abrir tarefa de origem</button>}</div>
-    </div></details>)}{!builds.length && <p className="production-empty">Nenhuma build registrada. Capture um arquivo após executar seu comando de build.</p>}</div>
+      <div className="production-actions"><ReviewActions {...tools} version={build} kind="build" /><ArchiveButton {...tools} record={build} kind="Build" />{build.source_task_id && <button disabled={tools.busy} onClick={() => onOpenTask(build.source_task_id!)}>Abrir tarefa de origem</button>}</div>
+    </div></details>)}{!builds.some(b => inArchiveView(b, archive)) && <p className="production-empty">{builds.length ? 'Nenhuma build corresponde ao filtro.' : 'Nenhuma build registrada. Capture um arquivo após executar seu comando de build.'}</p>}</div>
   </>
 }
 
@@ -192,12 +249,12 @@ export function Production({ game, onOpenTask, onErr }: { game: string; onOpenTa
     const off = onChat(e => { if ((e.productionChanged && e.game?.toLowerCase() === game.toLowerCase()) || e.commandChanged) void load().catch(error => { if (live.current) setError(errText(error)) }) })
     return () => { live.current = false; off() }
   }, [game])
-  const action: Action = async f => {
+  const action: Action = async (f, reload = true) => {
     if (locked.current) return false
     locked.current = true; setBusy(true); setError('')
     try {
       await f()
-      if (live.current) try { await load() } catch (e) { setError(`Operação concluída, mas a lista não foi atualizada: ${errText(e)}`) }
+      if (live.current && reload) try { await load() } catch (e) { setError(`Operação concluída, mas a lista não foi atualizada: ${errText(e)}`) }
       return live.current
     }
     catch (e) { if (live.current) setError(errText(e)); return false }

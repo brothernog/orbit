@@ -4,6 +4,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { MIGRATIONS } from './db.ts'
+import { inside, pathKey, sameKey as same } from './guard.ts'
 
 export type BackupSummary = { path: string; createdAt: string; files: number; bytes: number; schema: number }
 type FileEntry = { path: string; size: number; hash: string }
@@ -13,8 +14,7 @@ const REPLACEMENTS = ['dashboard.db', ...ROOTS]
 const SWAP_ENTRIES = [...REPLACEMENTS, 'dashboard.db-wal', 'dashboard.db-shm', 'dashboard.db-journal']
 const PENDING = '.restore-pending', TRANSACTION = '.restore-transaction', LAST = '.restore-last.json'
 function fail(s: string): never { throw Error(s) }
-const same = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
-const within = (root: string, file: string) => same(root, file) || path.resolve(file).toLowerCase().startsWith(path.resolve(root).toLowerCase() + path.sep)
+const within = (root: string, file: string) => same(root, file) || inside(root, file)
 const quote = (s: string) => `"${s.replaceAll('"', '""')}"`
 const owned = (s: string) => s === 'dashboard.db' || ROOTS.some(r => s === r || (r !== 'linkedin/perfil.md' && s.startsWith(r + '/')))
 const exists = (s: string) => { try { fs.lstatSync(s); return true } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e } }
@@ -121,7 +121,8 @@ function references(db: DatabaseSync, source: string, entries: FileEntry[]) {
     if (!Array.isArray(imageFiles)) fail('Referência de screenshot inválida.')
     for (const p of imageFiles) requireFile(p, 'production/playtests')
   }
-  for (const table of ['asset_versions', 'project_builds']) for (const r of db.prepare(`SELECT hash,size FROM ${table}`).iterate() as Iterable<{ hash: string; size: number }>) {
+  const version = (db.prepare('PRAGMA user_version').get() as any).user_version
+  for (const table of ['asset_versions', 'project_builds']) for (const r of db.prepare(`SELECT hash,size FROM ${table}${table === 'asset_versions' && version >= 20 ? ' WHERE pruned_at IS NULL' : ''}`).iterate() as Iterable<{ hash: string; size: number }>) {
     const e = files.get(`production/blobs/${r.hash}`)
     if (!/^[a-f0-9]{64}$/.test(r.hash) || !e || e.hash !== r.hash || e.size !== r.size) fail('O backup está incompleto: snapshot ausente ou corrompido.')
   }
@@ -234,7 +235,7 @@ function rebase(db: DatabaseSync, oldDir: string, newDir: string) {
       if (key === 'projectNames') value = Object.fromEntries(Object.entries(value).map(([p, n]) => [move(p, 'linkedin'), n]))
       if (key === 'projectGroups') for (const g of value) g.games = g.games.map((p: string) => move(p, 'linkedin'))
       if (key === 'todoBoard') for (const t of value.topics) for (const i of t.items) if (i.project) i.project = move(i.project, 'linkedin')
-      if (key.startsWith('commands:')) key = 'commands:' + move(key.slice(9), 'linkedin').toLowerCase()
+      if (key.startsWith('commands:')) key = 'commands:' + pathKey(move(key.slice(9), 'linkedin'))
       db.prepare('DELETE FROM settings WHERE key=?').run(r.key)
       db.prepare('INSERT INTO settings(key,value) VALUES (?,?)').run(key, JSON.stringify(value))
     }

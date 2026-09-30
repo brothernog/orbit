@@ -3,9 +3,10 @@
 // Arquivos desmarcados ficam fora do commit (continuam alterados na pasta).
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { api, errText } from './api'
+import { api, errText, onChat } from './api'
 import { Icon } from './icons'
 import { Confirm } from './Nav'
+import { Worktrees } from './Worktrees'
 
 type File = { path: string; status: 'M' | 'A' | 'D' | '?'; added: number | null; removed: number | null }
 type Commit = { sha: string; subject: string; when: string }
@@ -83,12 +84,20 @@ export function BranchPanel({ dirs, onErr }: { dirs: { path: string; label: stri
   const [ask, setAsk] = useState<'push' | 'commitpush' | 'pr' | 'issue' | 'branch' | null>(null)
   const [skip, setSkip] = useState<Set<string>>(new Set()) // desmarcados: ficam fora do commit
   const [hskip, setHskip] = useState<Record<string, string[]>>({}) // trechos desmarcados por arquivo (so arquivos modificados)
+  const [mergePending, setMergePending] = useState(true), [refresh, setRefresh] = useState(0)
 
   const load = () => {
+    setRefresh(n => n + 1)
     api.branchView(dir).then(setV, (e: any) => { setV(null); onErr(errText(e)) })
     api.prView(dir).then(setPr, () => setPr({ pr: null, error: null }))
   }
   useEffect(() => { setV(null); setPr(null); setIssues(null); setDiff({}); setSkip(new Set()); setHskip({}); load() }, [dir])
+  useEffect(() => onChat(ev => {
+    if (ev.worktreesChanged === dirs[0].path) {
+      if (ev.removedPath?.replace(/\\/g, '/').toLowerCase() === dir.replace(/\\/g, '/').toLowerCase()) setDir(dirs[0].path)
+      else load()
+    }
+  }), [dir, dirs[0].path])
   // Recarrega mesmo na falha: "commit e push" pode ter salvo o commit e falhado so no envio.
   const act = (name: string, f: () => Promise<unknown>) => { setBusy(name); f().catch((e: any) => onErr(errText(e))).finally(() => { setBusy(null); load() }) }
   const toggleDiff = (p: string) => {
@@ -123,7 +132,7 @@ export function BranchPanel({ dirs, onErr }: { dirs: { path: string; label: stri
     const n = await api.branchRemoteAhead(dir)
     if (n) throw new Error(`O remoto tem ${n} commit${n > 1 ? 's' : ''} novo${n > 1 ? 's' : ''}. Puxe antes de enviar; nada foi enviado.`)
   }
-  const canCommit = !!msg.trim() && picked.length > 0 && !busy
+  const canCommit = !!msg.trim() && picked.length > 0 && !busy && !mergePending
 
   return (
     <section className="branch" aria-label="Branch">
@@ -132,12 +141,13 @@ export function BranchPanel({ dirs, onErr }: { dirs: { path: string; label: stri
         <b className="br-name" title={v.branch ?? 'HEAD solto'}>{v.branch ?? 'HEAD solto'}</b>
         {v.upstream ? <span className="br-up" title="Remoto acompanhado">→ {v.upstream}</span> : v.branch && <span className="br-up warn">sem remoto</span>}
         <span className="br-sync">{v.ahead > 0 && <span title="Commits para enviar">↑{v.ahead}</span>}{v.behind > 0 && <span className="warn" title="Commits novos no remoto">↓{v.behind}</span>}</span>
-        <button className="icon sm" aria-label="Nova branch" title="Nova branch" onClick={() => setAsk('branch')}><Icon n="plus" size={14} /></button>
+        <button className="icon sm" aria-label="Nova branch" title="Nova branch" disabled={mergePending || !!busy} onClick={() => setAsk('branch')}><Icon n="plus" size={14} /></button>
         <button className="icon sm" aria-label="Atualizar" title="Atualizar" onClick={load}><Icon n="refresh" size={14} /></button>
       </header>
       {dirs.length > 1 && <div className="br-dirs" role="tablist" aria-label="Pasta ou worktree">
         {dirs.map(d => <button key={d.path} role="tab" aria-selected={d.path === dir} title={d.path} onClick={() => setDir(d.path)}>{d.label}</button>)}
       </div>}
+      <Worktrees game={dirs[0].path} dir={dir} refresh={refresh} onPending={setMergePending} onChange={load} />
 
       {pr?.pr
         ? <button className={`br-pr s-${pr.pr.state.toLowerCase()}`} onClick={() => api.openGithub(pr.pr!.url)} title="Abrir no GitHub">
@@ -151,7 +161,7 @@ export function BranchPanel({ dirs, onErr }: { dirs: { path: string; label: stri
           </button>
         : pr?.error && <p className="br-note">{pr.error}</p>}
 
-      {v.behind > 0 && <button className="br-pull" disabled={!!busy} onClick={() => act('pull', () => api.branchPull(dir))}>
+      {v.behind > 0 && <button className="br-pull" disabled={!!busy || mergePending} onClick={() => act('pull', () => api.branchPull(dir))}>
         <Icon n="down" size={14} />{busy === 'pull' ? 'Puxando…' : `Puxar ${v.behind} ${v.behind === 1 ? 'commit novo' : 'commits novos'}`}</button>}
 
       {v.files.length > 0 && <textarea className="br-msg" aria-label="Mensagem do commit" placeholder="O que mudou? (mensagem do commit)" rows={2} value={msg} onChange={e => setMsg(e.target.value)}
@@ -163,7 +173,7 @@ export function BranchPanel({ dirs, onErr }: { dirs: { path: string; label: stri
           onClick={() => setAsk('commitpush')}><Icon n="send" size={15} />{busy === 'commitpush' ? 'Enviando…' : 'Commit e push'}</button>}
         {canPush && <button className={next === 'push' ? 'primary' : ''} disabled={!!busy} onClick={() => setAsk('push')}><Icon n="send" size={15} />{busy === 'push' ? 'Enviando…' : v.ahead ? `Push ${v.ahead}` : 'Publicar branch'}</button>}
         {next === 'pr' && <button className="primary" onClick={() => setAsk('pr')}><Icon n="pr" size={15} />Abrir PR</button>}
-        {onBase && (v.files.length > 0 || v.ahead > 0) && <button onClick={() => setAsk('branch')} title="PR precisa de outra branch: as alterações vão junto"><Icon n="branch" size={15} />Nova branch para PR</button>}
+        {onBase && (v.files.length > 0 || v.ahead > 0) && <button disabled={mergePending || !!busy} onClick={() => setAsk('branch')} title="PR precisa de outra branch: as alterações vão junto"><Icon n="branch" size={15} />Nova branch para PR</button>}
         {!v.files.length && !canPush && next !== 'pr' && <span className="br-clean"><Icon n="check" size={15} />Tudo salvo e enviado</span>}
       </div>
 

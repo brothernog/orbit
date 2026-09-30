@@ -46,7 +46,8 @@ export type RunOptions = {
   onText?: (fullText: string) => void
   onUsage?: (data: any) => void
   onMetric?: (m: Metric) => void // medida acumulada a cada evento de contexto (medidor ao vivo)
-  onTool?: (name: string, detail?: string) => void // cada ferramenta que comeca (o que o agente faz agora)
+  onTool?: (name: string, detail?: string, ref?: string) => void // cada ferramenta que comeca (o que o agente faz agora); ref liga ao resultado
+  onToolResult?: (ref: string, ok: boolean | null, output: string) => void // resultado informado pela CLI (so Claude e Codex informam)
   maxTools?: number // teto de ferramentas por mensagem: ao pedir a seguinte, a execucao pausa (0/ausente = sem teto)
 }
 
@@ -107,7 +108,8 @@ export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; resu
           if (!paused) { paused = true; notes.push(`Pausado apos ${o.maxTools} ferramentas nesta mensagem, para nao gastar sem limite. A sessao foi mantida: responda "continuar" para seguir.`); cancel() }
           return
         }
-        else if (e.kind === 'tool') { o.onTool?.(e.name, e.detail); text += `\n\n\`> ${e.name.replace(/`/g, "'").slice(0, 200)}\`\n\n`; o.onText?.(text); tools.push(e.name.slice(0, 500)); lastWasText = false }
+        else if (e.kind === 'toolResult') o.onToolResult?.(e.ref, e.ok, e.output ?? '')
+        else if (e.kind === 'tool') { o.onTool?.(e.name, e.detail, e.ref); text += `\n\n\`> ${e.name.replace(/`/g, "'").slice(0, 200)}\`\n\n`; o.onText?.(text); tools.push(e.name.slice(0, 500)); lastWasText = false }
         else if (e.kind === 'usage') { usage = e.data; o.onUsage?.(e.data) }
         else if (e.kind === 'context') {
           if (e.key && e.accumulate) { if (seenKeys.has(e.key)) continue; seenKeys.add(e.key) }

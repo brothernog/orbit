@@ -1,13 +1,20 @@
 import { createCommandService, listCommandRuns, projectCommands, reconcileCommands, saveCommands } from './commands.ts'
+import { createCheckpoint as takeCheckpoint, listCheckpoints, previewRewind, rewindCheckpoint } from './checkpoints.ts'
 import { addStep, activeStep, beginStep, bindStep, failStep, listSteps, reconcileSteps, reviewStep } from './workflows.ts'
 import { todoBoard, saveTodo, todoTask } from './planning.ts'
 import { createChatService } from './chatService.ts'
+import { createAccountUsageService } from './accountUsage.ts'
 import { createJarvisService } from './jarvisService.ts'
 import { createLinkedInService } from './linkedinService.ts'
 import { createProductionService } from './production.ts'
 import { createPlaytestService } from './playtests.ts'
 import { applyPendingRestore, createBackup, inspectBackup, stageRestore } from './backups.ts'
 import { backupGate } from './backupGate.ts'
+import { createWorktreeService } from './worktrees.ts'
+import { resetWorkspace, unlinkWorktree } from './worktreeTasks.ts'
+import { godotDiagnostics, godotOrganizer, godotProbe, godotProject } from './godot.ts'
+import { GODOT_TOOLS, callGodotTool } from './godotTools.ts'
+import { prepareGodot, validatePreparedGodot, godotCommandError, godotBuildFile } from './godotFlow.ts'
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -31,6 +38,9 @@ import { ApprovalWaiters, approveSubset, deliveryCounts, getPackage, listPackage
 import { awaitingSend, listSends, reconcileSends, reconcileStarting, recoverSend } from './sends.ts'
 import { listArtifacts, readArtifact } from './artifacts.ts'
 import { normalizeLimits } from './limits.ts'
+import { inUse, moons, planetLayout, planetUsage } from './planet.ts'
+import { copyIntoWorktree, copyList, copyNote, copySuggestions, saveCopyList } from './worktreeSetup.ts'
+import { normalizeNotify, noticeFor, providerLabel, runChanges, type Notice, type NoticeInfo, type NotifyPrefs } from './notify.ts'
 import { attachImages, readImage } from './attachments.ts'
 import { taskBriefs } from './briefs.ts'
 
@@ -86,6 +96,7 @@ db.prepare("DELETE FROM settings WHERE key='lastError:codex' AND value LIKE '%--
 const getSetting = (k: string) => (db.prepare('SELECT value FROM settings WHERE key=?').get(k) as any)?.value
 const setSetting = (k: string, v: string) =>
   db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k, v)
+const worktrees = createWorktreeService(db)
 
 // Nomes de exibicao dados pelo usuario aos projetos (a pasta nunca e renomeada).
 const projectNames = (): Record<string, string> => { try { return JSON.parse(getSetting('projectNames') ?? '{}') } catch { return {} } }
@@ -132,8 +143,16 @@ function createWorktree(game: string, prefix: 'pin' | 'task', id: number, title:
   fs.mkdirSync(path.dirname(exclude), { recursive: true })
   const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : ''
   if (!cur.split(/\r?\n/).includes('.worktrees/')) fs.appendFileSync(exclude, `${cur.endsWith('\n') || !cur ? '' : '\n'}.worktrees/\n`)
-  if (!fs.existsSync(wt)) git(game, 'worktree', 'add', wt, '-b', branch)
-  return { wt, branch }
+  safeJoin(game, path.relative(game, wt))
+  if (fs.existsSync(wt)) {
+    if (!samePath(git(wt, 'rev-parse', '--show-toplevel'), wt)
+      || !samePath(path.resolve(wt, git(wt, 'rev-parse', '--git-common-dir')), path.resolve(game, git(game, 'rev-parse', '--git-common-dir')))
+      || git(wt, 'symbolic-ref', '--short', 'HEAD') !== branch
+      || !git(game, 'worktree', 'list', '--porcelain', '-z').split('\0').some(line => line.startsWith('worktree ') && samePath(line.slice(9), wt))) fail('A pasta de isolamento já existe e não corresponde à worktree da tarefa.')
+    return { wt, branch, setup: null }
+  }
+  git(game, 'worktree', 'add', wt, '-b', branch)
+  return { wt, branch, setup: copyNote(copyIntoWorktree(game, wt, copyList(db, game))) } // .env, cache .godot/...: so o que o usuario listou
 }
 
 const accountRow = (id?: number | null) => (id ? (db.prepare('SELECT * FROM accounts WHERE id=?').get(id) as any) : null)
@@ -209,9 +228,11 @@ async function checkSel(s: Sel) {
 // Pasta onde o agente roda: worktree da tarefa (se ela foi isolada) ou a pasta do projeto.
 function taskCwd(t: { game: string; worktree: string | null }) {
   const game = taskGame(t)
-  if (!t.worktree || !fs.existsSync(t.worktree)) return game
+  if (!t.worktree) { worktrees.assertAvailable(game); return game }
+  if (!fs.existsSync(t.worktree)) fail('Worktree da tarefa ausente. Revise seu vínculo antes de executar novamente.')
   const real = fs.realpathSync(t.worktree)
   if (!inside(path.join(fs.realpathSync(game), '.worktrees'), real)) fail('Worktree da tarefa fora de .worktrees do projeto.')
+  worktrees.assertAvailable(t.worktree)
   return t.worktree
 }
 
@@ -220,13 +241,21 @@ function taskCwd(t: { game: string; worktree: string | null }) {
 function isolateTask(taskId: number) {
   const t = asTask(taskId)
   const game = taskGame(t)
-  if (t.worktree && fs.existsSync(t.worktree)) return t
-  const { wt, branch } = createWorktree(game, t.pin_id ? 'pin' : 'task', t.pin_id ?? t.id, t.title)
-  db.prepare('UPDATE tasks SET worktree=?, branch=? WHERE id=?').run(wt, branch, t.id)
-  if (t.pin_id) db.prepare("UPDATE pins SET status='andamento', branch=?, worktree=? WHERE id=?").run(branch, wt, t.pin_id)
-  if (db.prepare('DELETE FROM task_sessions WHERE task_id=?').run(t.id).changes)
-    db.prepare("INSERT INTO messages (chat_key, role, text, task_id) VALUES (?, 'system', ?, ?)")
-      .run(`task:${t.id}`, `Tarefa isolada em worktree (${branch}). As sessoes nativas dos provedores recomecam; o historico sera enviado como contexto.`, t.id)
+  worktrees.assertAvailable(game)
+  if (t.worktree) { taskCwd(t); return t }
+  const { wt, branch, setup } = createWorktree(game, t.pin_id ? 'pin' : 'task', t.pin_id ?? t.id, t.title)
+  db.exec('BEGIN')
+  let packages: number[]
+  try {
+    packages = resetWorkspace(db, [t.id], 'A pasta da tarefa mudou para uma worktree.').packageIds
+    db.prepare('UPDATE tasks SET worktree=?, branch=? WHERE id=?').run(wt, branch, t.id)
+    if (t.pin_id) db.prepare("UPDATE pins SET status='andamento', branch=?, worktree=? WHERE id=?").run(branch, wt, t.pin_id)
+    db.exec('COMMIT')
+  } catch (e) { db.exec('ROLLBACK'); throw e }
+  for (const id of packages!) waiters.resolved(id, 'cancelled')
+  note(t.id, `Tarefa isolada em worktree (${branch}). As sessões nativas recomeçam; o histórico só segue como contexto após sua aprovação.`)
+  if (setup) db.prepare("INSERT INTO messages (chat_key, role, text, task_id) VALUES (?, 'system', ?, ?)").run(`task:${t.id}`, setup, t.id)
+  emit({ worktreesChanged: game, refresh: true })
   return getTask(db, t.id)
 }
 
@@ -246,7 +275,7 @@ function launchTask(taskId: number, sel: Sel, resume: boolean, isolate: boolean)
 // (tarefa, provedor, perfil). O historico e da tarefa; trocar de provedor nao o esconde.
 const active = new Map<number, { runId: number; cancel: (sync?: boolean) => void; text: string; workspace: string; provider?: string; model?: string; startedAt?: number; doing?: { tool: string; detail?: string } }>()
 let win: BrowserWindow | undefined
-app.on('second-instance', () => { if (win?.isMinimized()) win.restore(); win?.focus() })
+app.on('second-instance', () => { if (!win || win.isDestroyed()) return; if (win.isMinimized()) win.restore(); win.focus() })
 
 function taskChat(taskId: number, sel: Sel) {
   const t = asTask(taskId)
@@ -260,7 +289,133 @@ function taskChat(taskId: number, sel: Sel) {
 }
 
 const pct = (w: any) => w && { utilization: w.utilization * 100, resets_at: new Date(w.resetsAt * 1000).toISOString() }
-const emit = (ev: object) => { if (win && !win.isDestroyed()) win.webContents.send('chat', ev) }
+const send = (ev: object) => { if (win && !win.isDestroyed()) win.webContents.send('chat', ev) }
+const emit = (ev: object) => { send(ev); try { attend(ev) } catch {} } // aviso e opcional: nunca derruba o evento
+
+// Avisos de atencao (notify.ts). Com a Orbita em foco: cartao dentro do app. Fora de foco: janela propria de aviso no canto da tela
+// (mesmo visual do app, sem roubar o foco) e a barra de tarefas pisca. Ao voltar para o app, o que ficou pendente vira cartao la dentro.
+const notifyPrefs = () => normalizeNotify(JSON.parse(getSetting('notifications') ?? 'null'))
+type GitStat = { path: string; status: string; added: number | null; removed: number | null }
+const snapFiles = (cwd: string): Promise<GitStat[] | null> => changedFiles(cwd).then(r => (r.repo ? r.files : null), () => null)
+const baselines = new Map<number, { cwd: string; files: Promise<GitStat[] | null> }>() // runId -> estado do Git no inicio
+function runStart(_taskId: number, runId: number, cwd: string) {
+  baselines.set(runId, { cwd, files: snapFiles(cwd) })
+  if (baselines.size > 40) baselines.delete(baselines.keys().next().value!)
+}
+async function noticeInfo(ev: any): Promise<NoticeInfo> {
+  const t = typeof ev?.taskId === 'number' ? getTask(db, ev.taskId) : null
+  if (!t) return { task: null }
+  const info: NoticeInfo = { task: { title: t.title, game: t.game, project: projectNames()[t.game] ?? path.basename(t.game) } }
+  if (ev.done && ev.runId) {
+    info.step = (db.prepare('SELECT title FROM task_steps WHERE run_id=?').get(ev.runId) as any)?.title ?? null
+    const b = baselines.get(ev.runId)
+    baselines.delete(ev.runId)
+    if (b) { const [before, after] = await Promise.all([b.files, snapFiles(b.cwd)]); info.changes = before && after ? runChanges(before, after) : null }
+  }
+  if (ev.permissionRequest) {
+    const perm = db.prepare('SELECT provider, summary FROM permission_requests WHERE id=?').get(ev.permissionRequest) as any
+    info.permission = perm && { provider: perm.provider, summary: perm.summary ?? '' }
+  }
+  if (ev.contextRequest) {
+    const pkg = getPackage(db, ev.contextRequest)
+    info.context = pkg && { items: pkg.items.length, recipient: `${providerLabel(pkg.recipient.provider)}${pkg.recipient.model ? ` ${pkg.recipient.model}` : ''}` }
+  }
+  return info
+}
+
+// Janela do planeta (sempre por cima, fora da barra de tarefas; comeca no canto inferior direito e o usuario arrasta para onde
+// quiser): o planeta de uso fica visivel e se expande para virar o aviso quando ha algo com a Orbita fora de foco (ver Planet.tsx).
+// Planeta desligado: a janela so aparece com aviso. Continua com a Orbita minimizada; fecha junto com ela para nao segurar o
+// processo vivo. O renderer anima e informa o tamanho; aqui so posiciona.
+let noticeWin: BrowserWindow | undefined
+let noticeSeq = 0
+const pendingNotices: Notice[] = [] // o que a janela do planeta esta mostrando
+const NOTICE_W = 420, PLANET = 132
+const toPopup = (ev: object) => { if (noticeWin && !noticeWin.isDestroyed()) noticeWin.webContents.send('chat', ev) }
+const planetOn = () => getSetting('planet') !== 'off'
+// Posicao do planeta (canto superior esquerdo do quadrado de 132 px). Salva fora de qualquer tela (monitor removido) volta ao canto.
+function planetBox() {
+  let p: { x: number; y: number } | null = null
+  try { p = JSON.parse(getSetting('planetPos') ?? 'null') } catch {}
+  if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+    const wa = screen.getDisplayNearestPoint({ x: Math.round(p.x + PLANET / 2), y: Math.round(p.y + PLANET / 2) }).workArea
+    if (p.x >= wa.x && p.y >= wa.y && p.x + PLANET <= wa.x + wa.width && p.y + PLANET <= wa.y + wa.height) return { ...p, wa }
+  }
+  // Tela da Orbita (GPD_DISPLAY no e2e: segundo monitor).
+  const wa = (win && !win.isDestroyed() ? screen.getDisplayMatching(win.getBounds()) : screen.getAllDisplays()[Number(process.env.GPD_DISPLAY) - 1] ?? screen.getPrimaryDisplay()).workArea
+  return { x: wa.x + wa.width - PLANET - 8, y: wa.y + wa.height - PLANET - 8, wa }
+}
+// Para que lado o aviso abre (na direcao do centro da tela; ver planetLayout).
+function planetState() {
+  const b = planetBox(), { right, bottom } = planetLayout(b, b.wa, PLANET)
+  return { on: planetOn(), right, bottom }
+}
+function noticeWindow() {
+  if (noticeWin && !noticeWin.isDestroyed()) return noticeWin
+  noticeWin = new BrowserWindow({
+    width: PLANET, height: PLANET, show: false, frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false,
+    resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, alwaysOnTop: true, title: 'Órbita: planeta',
+    webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, autoplayPolicy: 'no-user-gesture-required' }
+  })
+  noticeWin.setAlwaysOnTop(true, 'pop-up-menu')
+  noticeWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  noticeWin.webContents.on('will-navigate', e => e.preventDefault())
+  noticeWin.on('closed', () => { noticeWin = undefined })
+  noticeWin.once('ready-to-show', () => fitNotices(0))
+  if (rendererUrl) noticeWin.loadURL(`${rendererUrl}#planet`)
+  else noticeWin.loadFile(rendererFile, { hash: 'planet' })
+  return noticeWin
+}
+// Com aviso a janela cresce a partir do planeta (que fica no mesmo lugar da tela); sem aviso (ou depois da animacao de fechar),
+// volta ao quadrado do planeta, ou some se o planeta estiver desligado.
+function fitNotices(height: number) {
+  const w = noticeWin
+  if (!w || w.isDestroyed()) return
+  const b = planetBox(), notice = pendingNotices.length > 0 && height > 0
+  w.setBounds(planetLayout(b, b.wa, PLANET, notice ? { width: NOTICE_W, height } : undefined).bounds)
+  if (!notice && !planetOn()) { w.hide(); return }
+  if (!w.isVisible()) w.showInactive()
+}
+function showNotice(base: Omit<Notice, 'key'>, prefs: NotifyPrefs, force = false) {
+  const n: Notice = { ...base, key: ++noticeSeq }
+  const away = !win || win.isDestroyed() || !win.isFocused()
+  if ((!away && !force) || !prefs.system) { send({ attention: n }); return }
+  pendingNotices.unshift(n)
+  if (pendingNotices.length > 6) pendingNotices.pop()
+  noticeWindow()
+  toPopup({ attention: n, sound: prefs.sound })
+  if (away && win && !win.isDestroyed()) win.flashFrame(true)
+}
+// Voltou para o app: o aviso volta a ser planeta e o que ninguem abriu continua visivel como cartao dentro da Orbita.
+function noticesToApp() {
+  if (!pendingNotices.length) return
+  for (const n of pendingNotices.splice(0).reverse()) if (n.taskId > 0) send({ attention: n })
+  toPopup({ noticeClear: true })
+}
+function attend(ev: any) {
+  if (!ev?.done && !ev?.permissionRequest && !ev?.contextRequest && !ev?.commandDone) return
+  const prefs = notifyPrefs()
+  noticeInfo(ev).then(info => { const n = noticeFor(ev, info, prefs); if (n) showNotice(n, prefs) }).catch(() => {})
+}
+
+// Uso das contas em uso, uma entrada por conta (o planeta alterna entre elas). O endpoint do Claude recusa excesso: consulta
+// a rede no maximo a cada 10 min; entre uma e outra usa o ultimo valor visto (que o chat tambem atualiza). Codex vem das
+// sessoes locais, sem rede.
+let planetFetched = 0
+async function usageForPlanet() {
+  const list = inUse(db)
+  const claude = list.flatMap(u => (u.provider === 'claude' && accountRow(u.accountId) ? [u.accountId] : []))
+  if (claude.length && Date.now() - planetFetched > 10 * 60_000) {
+    planetFetched = Date.now()
+    await Promise.allSettled(claude.map(id => accountUsage(id)))
+  }
+  const cached = (id: number) => accountUsageService.snapshot(id)
+  return list.flatMap(u => {
+    if (u.provider === 'codex') return [{ key: 'codex', ...planetUsage('Codex', codexLimits()) }]
+    const name = accountRow(u.accountId)?.name
+    return name ? [{ key: `claude:${u.accountId}`, ...planetUsage(`Claude, ${name}`, cached(u.accountId)) }] : []
+  })
+}
 
 // Junta o que o provedor informou com fontes nativas complementares: arquivo de sessao do Codex (contexto e janela) e
 // janela do modelo no catalogo do opencode. Nada e estimado a partir do texto visivel.
@@ -283,7 +438,7 @@ const guard = new WorkspaceGuard()
 const waiters = new ApprovalWaiters()
 // Token por execucao: pai (delegar + contexto) ou filho (contexto + operacoes locais; nunca delegar).
 // perm: a ferramenta `permission_prompt` (pop-up de permissao) so e anunciada a execucoes do Claude que a receberam por --permission-prompt-tool.
-type McpCtx = { kind: 'parent'; p: ParentCtx; perm: boolean } | { kind: 'child'; t: ToolCtx; perm: boolean; tools: ToolDef[] } // tools: o que ESTE filho recebeu (childToolset)
+type McpCtx = { kind: 'parent'; p: ParentCtx; perm: boolean } | { kind: 'child'; t: ToolCtx; perm: boolean; tools: ToolDef[]; godotOrganizerId?: string } // tools: o que ESTE filho recebeu (childToolset)
 const tokens = new Map<string, McpCtx>()
 const permissionSettings = () => normalizePermissionSettings(JSON.parse(getSetting('permissions') ?? 'null'))
 const broker = new PermissionBroker(db, { settings: permissionSettings, providers: Object.keys(AGENTS), emit: ev => emit(ev) })
@@ -293,8 +448,17 @@ const nativeFor = (provider: string) => nativePolicy(provider, permissionSetting
 const mcpDir = () => path.join(app.getPath('userData'), 'mcp')
 const delegationSettings = () => normalizeSettings(JSON.parse(getSetting('delegation') ?? 'null'))
 const contextLimits = () => normalizeLimits(JSON.parse(getSetting('contextLimits') ?? 'null'))
+const summaryTitles = () => getSetting('summaryTitles') !== 'off'
 const agentAliases = () => { try { return parseAliases(JSON.parse(getSetting('agentAliases') ?? '[]')) } catch { return [] } } // agentes nomeados (Configuracoes)
 const parentTool = (p: ParentCtx): ToolCtx => ({ taskId: p.taskId, lineage: p.lineage, auth: p.auth, role: 'parent', cwd: p.cwd, scope: [], runId: p.runId })
+const godotForProject = (game: string, cwd: string) => {
+  const organizer = godotOrganizer(db, game)
+  try { return organizer && fs.statSync(safeJoin(cwd, 'project.godot')).isFile() ? organizer.id : undefined } catch { return undefined }
+}
+const godotForExecution = (taskId: number, cwd: string, id?: string) => {
+  const task = getTask(db, taskId)
+  return id && task && samePath(task.worktree || task.game, cwd) && godotForProject(task.game, cwd) === id ? GODOT_TOOLS : []
+}
 const sameDir = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
 const note = (taskId: number, text: string) => {
   db.prepare("INSERT INTO messages (chat_key, role, text, task_id) VALUES (?, 'system', ?, ?)").run(`task:${taskId}`, text, taskId)
@@ -320,9 +484,10 @@ const delegationDeps: Deps = {
     let wire: McpWire | null = null
     const perm = p.provider === 'claude' && permissionSettings().prompt
     const set = childToolset(p.provider, p.mode, p.scope)
+    set.mcp.push(...godotForExecution(p.taskId, p.cwd, p.godotOrganizerId))
     try { wire = mcpWire(p.provider, { url: (await getMcp()).url, token, timeoutSec: 600, dir: mcpDir(), tools: set.mcp.map(x => x.name), permission: perm }) } catch { return null }
     if (!wire) return null
-    tokens.set(token, { kind: 'child', perm, tools: set.mcp, t: { taskId: p.taskId, lineage: p.lineage, auth: p.auth, role: 'child', cwd: p.cwd, scope: p.scope, delegationId: p.delegationId, provider: p.provider } })
+    tokens.set(token, { kind: 'child', perm, tools: set.mcp, godotOrganizerId: p.godotOrganizerId, t: { taskId: p.taskId, lineage: p.lineage, auth: p.auth, role: 'child', cwd: p.cwd, scope: p.scope, delegationId: p.delegationId, provider: p.provider } })
     const w = wire
     // Recibos e skills entregues valem para a SESSAO: continuam so se a execucao terminou comprovadamente nela (continuacao do mesmo filho).
     return { extra: w.extra, env: w.env, tools: set.mcp.map(x => x.name), ...(set.native ? { native: set.native } : {}), cleanup: keep => { tokens.delete(token); if (!keep) { dropReceipts(p.auth.authId); dropSkillSession(p.auth.authId) } w.cleanup() } }
@@ -330,7 +495,11 @@ const delegationDeps: Deps = {
 }
 let mcpServer: ReturnType<typeof startMcpServer<McpCtx>> | undefined
 const getMcp = () => (mcpServer ??= startMcpServer<McpCtx>({
-  tools: c => [...(c.kind === 'parent' ? toolsFor('parent', delegationSettings().enabled ? delegateTool(agentAliases(), delegationSettings().readAgent) : undefined) : c.tools), ...(c.perm ? [PERMISSION_TOOL] : [])],
+  tools: c => {
+    const godot = c.kind === 'parent' ? godotForExecution(c.p.taskId, c.p.cwd, c.p.godotOrganizerId) : godotForExecution(c.t.taskId, c.t.cwd, c.godotOrganizerId)
+    const base = c.kind === 'parent' ? [...toolsFor('parent', delegationSettings().enabled ? delegateTool(agentAliases(), delegationSettings().readAgent) : undefined), ...godot] : c.tools.filter(t => !GODOT_TOOLS.some(g => g.name === t.name) || godot.length)
+    return [...base, ...(c.perm ? [PERMISSION_TOOL] : [])]
+  },
   authorize: t => tokens.get(t) ?? null,
   call: async (c, name, args, signal) => {
     if (name === PERMISSION_TOOL_NAME) { // a CLI pergunta antes de uma acao que exigiria permissao; regra decide ou o pop-up pergunta ao usuario
@@ -339,16 +508,22 @@ const getMcp = () => (mcpServer ??= startMcpServer<McpCtx>({
     }
     if (c.kind === 'parent' && name === TOOL_NAME) return runDelegation(delegationDeps, c.p, args, signal)
     if (c.kind === 'child' && !c.tools.some(t => t.name === name)) return { text: 'Ferramenta nao anunciada para esta execucao.', isError: true }
+    if (GODOT_TOOLS.some(t => t.name === name)) return callGodotTool(db, contextLimits(), c.kind === 'parent' ? parentTool(c.p) : c.t, (c.kind === 'parent' ? c.p.godotOrganizerId : c.godotOrganizerId) ?? '', name, args)
     return callTaskTool(db, contextLimits(), c.kind === 'parent' ? parentTool(c.p) : c.t, name, args)
   }
 }))
 
-const commands = createCommandService(db, guard, cwd => [...active.values()].some(r => sameDir(r.workspace,cwd)) || (db.prepare("SELECT 1 FROM delegations WHERE status='running' AND workspace=?").get(cwd) != null), emit)
+const commands = createCommandService(db, guard, cwd => { worktrees.assertAvailable(cwd); return [...active.values()].some(r => sameDir(r.workspace,cwd)) || (db.prepare("SELECT 1 FROM delegations WHERE status='running' AND workspace=?").get(cwd) != null) }, emit, {
+  beforeSpawn: (taskId, game, cwd, command) => { if (!samePath(taskCwd(asTask(taskId)), cwd)) fail('A pasta da tarefa mudou. Prepare o comando novamente.'); validatePreparedGodot(db, game, cwd, command) },
+  resultError: godotCommandError
+})
 
 const { sendTask, decideSend: decideChatSend } = createChatService({
   db, active, guard, broker, asTask, taskCwd, checkSel, contextLimits, delegationSettings, permissionSettings,
   getMcp, mcpDir, nativeFor, envFor, emit, note, logFor, accountRow, setSetting, recordMetric, attachRoot, linkedinDir,
-  workspaceBusy: commands.busy,
+  workspaceBusy: commands.busy, onRunStart: runStart, summaryTitles,
+  accountUsageWriter: id => accountUsageService.writer(id),
+  godotOrganizer: godotForProject,
   registerParent: (token, p, perm) => { tokens.set(token, { kind: 'parent', p, perm }) },
   unregisterToken: token => { tokens.delete(token) }
 })
@@ -365,28 +540,43 @@ app.on('before-quit', () => {
   pulse.stop(); stopWatching()
 })
 
-// Uso da janela de 5h e semanal. Endpoint nao documentado usado pelo /usage do Claude Code.
-// Se o endpoint falhar, usa o ultimo valor visto (endpoint ou eventos do chat do Claude).
-async function accountUsage(accountId: number) {
-  try {
-    const u = await fetchUsage(accountId)
-    setSetting(`usage:${accountId}`, JSON.stringify(u))
-    return u
-  } catch (e) {
-    const cached = getSetting(`usage:${accountId}`)
-    if (cached) return { ...JSON.parse(cached), cached: true }
-    throw e
-  }
+// Snapshot persistido primeiro; refresh opcional compartilhado entre chat, limites e configuracoes.
+const accountUsageService = createAccountUsageService({
+  identity: id => {
+    const acc = accountRow(id)
+    return acc && loginState(dirKey(acc))?.state !== 'connecting' ? createHash('sha256').update(dirKey(acc)).digest('hex') : null
+  },
+  read: (id, identity) => {
+    const profile = getSetting(`usageProfile:${id}`)
+    if (profile && profile !== identity) return null
+    try { return JSON.parse(getSetting(`usage:${id}`) ?? 'null') } catch { return null }
+  },
+  write: (id, identity, usage) => {
+    setSetting(`usageProfile:${id}`, identity)
+    setSetting(`usage:${id}`, JSON.stringify(usage))
+  },
+  clear: id => { db.prepare('DELETE FROM settings WHERE key IN (?,?)').run(`usage:${id}`, `usageProfile:${id}`) },
+  request: fetchUsage,
+  emit: (accountId, usage) => emit({ accountUsage: { accountId, usage } }),
+  refreshGuard: work => backups.invoke(work)
+})
+const accountUsage = (accountId: number) => accountUsageService.get(accountId)
+// Perfis antigos podem compartilhar a mesma pasta: trocar login invalida todas essas contas.
+const invalidateAccountUsage = (account: any) => {
+  for (const acc of listAccounts()) if (dirKey(acc) === dirKey(account)) accountUsageService.invalidate(acc.id)
 }
 
-async function fetchUsage(accountId: number) {
-  const acc = db.prepare('SELECT * FROM accounts WHERE id=?').get(accountId) as any
+// Endpoint nao documentado usado pelo /usage do Claude Code; nao prova o estado do login.
+async function fetchUsage(accountId: number, signal: AbortSignal) {
+  const acc = accountRow(accountId) ?? fail('Conta inexistente.')
   const dir = acc.config_dir ?? path.join(os.homedir(), '.claude')
   const file = path.join(dir, '.credentials.json')
   if (!fs.existsSync(file)) throw new Error('Sem credencial local para consultar uso (recurso opcional; o chat nao depende dele).')
-  const token = JSON.parse(fs.readFileSync(file, 'utf8')).claudeAiOauth?.accessToken
+  let token: unknown
+  try { token = JSON.parse(fs.readFileSync(file, 'utf8')).claudeAiOauth?.accessToken } catch { throw Error('Credencial local invalida para consultar uso.') }
+  if (typeof token !== 'string' || !token) throw Error('Sem credencial local para consultar uso (recurso opcional; o chat nao depende dele).')
   const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
-    headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' }
+    headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' }, signal
   })
   // Endpoint nao documentado e opcional: recusa aqui NAO prova que o login falhou (veja o estado da conta).
   if (res.status === 401) throw new Error('Consulta de uso recusada (401). O estado do login e verificado a parte.')
@@ -417,17 +607,60 @@ async function decideSend(id: number, hash: string, decision: Decision, keep?: s
 
 const production = createProductionService(db, path.join(app.getPath('userData'), 'production'))
 const playtests = createPlaytestService(db, path.join(app.getPath('userData'), 'production'))
+function registerProjectBuild(game: string, raw: any) {
+  const run = typeof raw?.commandId === 'number' ? db.prepare('SELECT task_id,name FROM command_runs WHERE id=?').get(raw.commandId) as { task_id: number | null; name: string } | undefined : undefined
+  const validateSource = run?.name.startsWith('Godot · ') ? () => {
+    if (!run.task_id) fail('A tarefa de origem deste build não está disponível.')
+    const task = asTask(run.task_id), cwd = taskCwd(task)
+    if (!samePath(task.game, game)) fail('Build de outro projeto.')
+    const file = godotBuildFile(db, task.id, raw.commandId, cwd)
+    if (!samePath(safeJoin(cwd, file), safeJoin(cwd, asStr(raw?.path, 'arquivo', 2000)))) fail('Registre o executável completo produzido pela exportação Godot.')
+  } : undefined
+  return production.registerBuild(game, raw, validateSource)
+}
 async function productionChange(game: unknown, change: (g: string) => unknown) {
   const g = asGame(game), result = await change(g)
   emit({ productionChanged: true, game: g }); return result
 }
 
 // Pasta de repositorio aceita: projeto listado ou worktree registrada de tarefa/problema.
-const asRepoDir = (p: unknown) => asAllowedPath([...listGames(), ...(db.prepare('SELECT worktree FROM tasks WHERE worktree IS NOT NULL UNION SELECT worktree FROM pins WHERE worktree IS NOT NULL').all() as any[]).map(r => r.worktree)], p, 'pasta')
+const asRepoDir = async (p: unknown) => {
+  const dirs = [...listGames(), ...(db.prepare('SELECT worktree FROM tasks WHERE worktree IS NOT NULL UNION SELECT worktree FROM pins WHERE worktree IS NOT NULL').all() as any[]).map(r => r.worktree)]
+  // Caminho real: a aba da worktree vem do git (nome longo) e o cadastro pode ter o nome curto 8.3 ou um symlink.
+  const hit = typeof p === 'string' ? dirs.find(d => samePath(d, p)) : undefined
+  if (hit) return hit
+  // Tarefas excluídas podem deixar uma worktree: o registro Git continua sendo conferido.
+  for (const game of listGames()) if (typeof p === 'string' && inside(path.join(game, '.worktrees'), p)) {
+    const source = (await worktrees.view(game)).sources.find(s => samePath(s.path, p))
+    if (source) return source.path
+  }
+  return fail('Pasta de repositório não cadastrada.')
+}
+const worktreeFolder = async (game: string, dir: unknown) => {
+  const v = await worktrees.view(asGame(game)), p = asStr(dir, 'pasta', 4000)
+  return [v.target, ...v.sources].find(s => samePath(s.path, p))?.path ?? fail('Worktree não registrada neste projeto.')
+}
+const worktreeChange = async (game: string, fn: (game: string) => Promise<unknown>) => {
+  const g = asGame(game)
+  try { return await fn(g) } finally { emit({ worktreesChanged: g, refresh: true }) }
+}
+const finishWorktreeRemoval = (game: string, removed: string) => {
+  db.exec('BEGIN')
+  let affected: ReturnType<typeof unlinkWorktree>
+  try {
+    affected = unlinkWorktree(db, removed)
+    worktrees.ackRemoval(game, removed)
+    db.exec('COMMIT')
+  } catch (e) { db.exec('ROLLBACK'); throw e }
+  if (filesWatch && samePath(filesWatch.dir, removed)) { filesWatch.off(); filesWatch = null }
+  for (const id of affected.packageIds) waiters.resolved(id, 'cancelled')
+  for (const id of affected.taskIds) note(id, 'Worktree integrada e removida. A tarefa continua na pasta principal com sessões novas; mensagens e evidências foram preservadas.')
+  emit({ worktreesChanged: game, removedPath: removed, refresh: true })
+}
 
 const backups = backupGate(() => {
-  if (active.size || db.prepare("SELECT 1 FROM delegations WHERE status='running' UNION SELECT 1 FROM command_runs WHERE status='running' LIMIT 1").get()
-    || listAccounts().some(a => a.login?.state === 'connecting')) fail('Pare as execuções e conclua os logins antes de fazer backup/restaurar.')
+  if (active.size || db.prepare("SELECT 1 FROM delegations WHERE status IN ('running','awaiting_context_approval') UNION SELECT 1 FROM command_runs WHERE status='running' UNION SELECT 1 FROM runs WHERE status='running' UNION SELECT 1 FROM pending_sends WHERE state='starting' LIMIT 1").get()
+    || listAccounts().some(a => a.login?.state === 'connecting')) fail('Pare as execuções e conclua os logins antes da manutenção dos dados.')
 })
 let selectedBackup: { token: string; folder: string; manifestHash: string } | null = null
 const manifestHash = (folder: string) => {
@@ -469,18 +702,27 @@ const handlers: Record<string, (...a: any[]) => any> = {
     })
   },
   listAssets: (game: string) => production.listAssets(asGame(game)),
+  editAsset: (game: string, id: unknown, raw: unknown) => productionChange(game, g => production.editAsset(g, asInt(id, 'asset'), raw)),
+  setAssetArchived: (game: string, id: unknown, revision: unknown, archived: unknown) => productionChange(game, g => production.setAssetArchived(g, asInt(id, 'asset'), revision, archived)),
+  setAssetVersionPinned: (game: string, id: unknown, hash: unknown, pinned: unknown) => productionChange(game, g => production.setAssetVersionPinned(g, asInt(id, 'versão'), hash, pinned)),
+  previewRetention: (game: string, keep: unknown) => production.previewRetention(asGame(game), keep),
+  pruneRetention: (game: string, keep: unknown, token: unknown) => backups.exclusive(() => productionChange(game, g => production.pruneRetention(g, keep, token))),
   captureAsset: (game: string, raw: unknown) => productionChange(game, g => production.captureAsset(g, raw)),
   captureAssetVersion: (game: string, id: unknown, note: unknown) => productionChange(game, g => production.captureAssetVersion(g, asInt(id, 'asset'), note)),
   reviewAssetVersion: (game: string, id: unknown, hash: unknown, decision: unknown) => productionChange(game, g => production.reviewAssetVersion(g, asInt(id, 'versão'), hash, decision)),
   assetImage: (game: string, id: unknown) => production.readAssetImage(asGame(game), asInt(id, 'versão')),
   listPlaytests: (game: string) => playtests.list(asGame(game)),
+  editPlaytest: (game: string, id: unknown, raw: unknown) => productionChange(game, g => playtests.edit(g, asInt(id, 'playtest'), raw)),
+  setPlaytestArchived: (game: string, id: unknown, revision: unknown, archived: unknown) => productionChange(game, g => playtests.setArchived(g, asInt(id, 'playtest'), revision, archived)),
   addPlaytest: (game: string, raw: unknown) => productionChange(game, g => playtests.add(g, raw)),
   setPlaytestState: (game: string, id: unknown, state: unknown) => productionChange(game, g => playtests.setState(g, asInt(id, 'playtest'), state)),
   playtestImages: (game: string, id: unknown) => playtests.images(asGame(game), asInt(id, 'playtest')),
   createPlaytestIssue: (game: string, id: unknown, title: unknown, instruction: unknown) => productionChange(game, g => playtests.createIssue(g, asInt(id, 'playtest'), title, instruction)),
   listBuildCommands: (game: string) => production.listBuildCommands(asGame(game)),
   listBuilds: (game: string) => production.listBuilds(asGame(game)),
-  registerBuild: (game: string, raw: unknown) => productionChange(game, g => production.registerBuild(g, raw)),
+  editBuild: (game: string, id: unknown, raw: unknown) => productionChange(game, g => production.editBuild(g, asInt(id, 'build'), raw)),
+  setBuildArchived: (game: string, id: unknown, revision: unknown, archived: unknown) => productionChange(game, g => production.setBuildArchived(g, asInt(id, 'build'), revision, archived)),
+  registerBuild: (game: string, raw: unknown) => productionChange(game, g => registerProjectBuild(g, raw)),
   reviewBuild: (game: string, id: unknown, hash: unknown, decision: unknown) => productionChange(game, g => production.reviewBuild(g, asInt(id, 'build'), hash, decision)),
   selectProductionFile: async (game: string) => {
     const g = asGame(game), r = await dialog.showOpenDialog({ properties: ['openFile'], defaultPath: g })
@@ -498,6 +740,62 @@ const handlers: Record<string, (...a: any[]) => any> = {
     await production.exportFile(g, kind as 'asset' | 'build', n, r.filePath); return true
   },
   projectCommands: (game: string) => projectCommands(db, asGame(game)),
+  godotState: (taskId: number, details = false) => {
+    const t = asTask(taskId), organizer = godotOrganizer(db, t.game)
+    if (!organizer) return { organizer: null, available: false, project: null }
+    const cwd = taskCwd(t)
+    try {
+      if (!fs.statSync(safeJoin(cwd, 'project.godot')).isFile()) return { organizer, available: false, project: null }
+      return { organizer, available: true, project: details === true ? godotProject(cwd) : null }
+    } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { organizer, available: false, project: null }; return { organizer, available: true, project: null, error: e instanceof Error ? e.message : String(e) } }
+  },
+  godotProbe: async (taskId: number) => {
+    const t = asTask(taskId), cwd = taskCwd(t), organizer = godotOrganizer(db, t.game) ?? fail('Ative Godot no organizador deste projeto.')
+    const result = await godotProbe(organizer.config.executable, cwd)
+    if (!samePath(taskCwd(asTask(taskId)), cwd) || godotOrganizer(db, t.game)?.id !== organizer.id || godotOrganizer(db, t.game)?.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Confira novamente.')
+    return result
+  },
+  prepareGodotCommand: async (taskId: number, action: unknown, args: unknown) => {
+    const t = asTask(taskId), cwd = taskCwd(t), organizer = godotOrganizer(db, t.game) ?? fail('Ative Godot no organizador deste projeto.')
+    const probe = await godotProbe(organizer.config.executable, cwd)
+    if (!samePath(taskCwd(asTask(taskId)), cwd) || godotOrganizer(db, t.game)?.id !== organizer.id || godotOrganizer(db, t.game)?.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Prepare novamente.')
+    const command = prepareGodot(db, t.game, cwd, action, args, probe)
+    emit({ taskId, commandChanged: true }); return command
+  },
+  godotDiagnostics: (taskId: number, commandId: unknown) => {
+    const t = asTask(taskId), run = listCommandRuns(db, t.id).find(r => r.id === asInt(commandId, 'comando')) ?? fail('Comando de outra tarefa ou fora do histórico disponível.')
+    if (!run.name.startsWith('Godot · ')) fail('Selecione um comando Godot.')
+    return { run, ...godotDiagnostics(run.output) }
+  },
+  registerGodotBuild: (taskId: number, commandId: unknown, raw: any) => {
+    const t = asTask(taskId), cwd = taskCwd(t), id = asInt(commandId, 'comando')
+    return productionChange(t.game, async g => {
+      const path = godotBuildFile(db, t.id, id, cwd)
+      const buildId = await registerProjectBuild(g, { title: raw?.title, version: raw?.version, notes: raw?.notes, platform: 'Windows', commandId: id, path })
+      return { id: buildId }
+    })
+  },
+  worktreeCopy: (game: string) => { const g = asGame(game); return { list: copyList(db, g), suggestions: copySuggestions(g) } },
+  saveWorktreeCopy: (game: string, raw: unknown) => saveCopyList(db, asGame(game), raw),
+  worktreeView: (game: string) => worktrees.view(asGame(game)),
+  previewWorktreeMerge: (game: string, source: unknown) => worktrees.previewMerge(asGame(game), asStr(source, 'worktree', 4000)),
+  beginWorktreeMerge: (game: string, source: unknown, token: unknown) => backups.exclusive(() => worktreeChange(game, g => worktrees.beginMerge(g, asStr(source, 'worktree', 4000), asStr(token, 'prévia', 100))), true),
+  finishWorktreeMerge: (game: string, token: unknown) => backups.exclusive(() => worktreeChange(game, g => worktrees.finishMerge(g, asStr(token, 'revisão', 100))), true),
+  abortWorktreeMerge: (game: string, token: unknown) => backups.exclusive(() => worktreeChange(game, g => worktrees.abortMerge(g, asStr(token, 'revisão', 100))), true),
+  dismissWorktreeMerge: (game: string, token: unknown) => backups.exclusive(() => worktreeChange(game, g => worktrees.dismissMerge(g, asStr(token, 'revisão', 100))), true),
+  previewWorktreeRemoval: (game: string, source: unknown) => worktrees.previewRemoval(asGame(game), asStr(source, 'worktree', 4000)),
+  removeWorktree: (game: string, source: unknown, token: unknown) => backups.exclusive(() => worktreeChange(game, async g => {
+    const result = await worktrees.remove(g, asStr(source, 'worktree', 4000), asStr(token, 'prévia', 100))
+    finishWorktreeRemoval(g, result.path)
+    return result
+  }), true),
+  finishWorktreeRemoval: (game: string) => backups.exclusive(() => worktreeChange(game, async g => {
+    const result = await worktrees.recoverRemoval(g)
+    finishWorktreeRemoval(g, result.path)
+    return result
+  }), true),
+  openWorktreeFolder: async (game: string, dir: unknown) => shell.openPath(await worktreeFolder(game, dir)),
+  openWorktreeTerminal: async (game: string, dir: unknown) => openTerminal(await worktreeFolder(game, dir), 'Resolver integração', process.platform === 'linux' ? ':' : '', host.env),
   saveProjectCommands: (game: string, raw: unknown) => { const c = saveCommands(db, asGame(game), raw); emit({ commandChanged: true }); return c },
   listCommandRuns: (taskId: number) => listCommandRuns(db, asTask(taskId).id),
   runProjectCommand: (taskId: number, name: string) => { const t = asTask(taskId); return commands.start(t.id,t.game,taskCwd(t),asStr(name,'comando',100)) },
@@ -567,11 +865,16 @@ const handlers: Record<string, (...a: any[]) => any> = {
   accountStatus: (id: number) => claudeStatus(accountEnv(asInt(id, 'conta'))),
   loginAccount: (id: number) => {
     const acc = accountRow(asInt(id, 'conta')) ?? fail('Conta inexistente.')
+    invalidateAccountUsage(acc)
     startLogin(dirKey(acc), accountEnv(acc.id), logFor('claude', acc.name))
   },
-  cancelLogin: (id: number) => cancelLogin(dirKey(accountRow(asInt(id, 'conta')) ?? fail('Conta inexistente.'))),
+  cancelLogin: (id: number) => {
+    const acc = accountRow(asInt(id, 'conta')) ?? fail('Conta inexistente.')
+    cancelLogin(dirKey(acc)); invalidateAccountUsage(acc)
+  },
   diagnose,
   accountUsage: (id: number) => accountUsage(accountRow(asInt(id, 'conta'))?.id ?? fail('Conta inexistente.')),
+  accountUsageSnapshot: (id: number) => accountUsageService.snapshot(accountRow(asInt(id, 'conta'))?.id ?? fail('Conta inexistente.')),
   codexUsage: () => codexLimits(), // lido das sessoes locais do Codex: sem rede, sem tokens
   projectIcon: (game: string) => projectIconData(asGame(game)),
   // Arquivos da tarefa ao vivo (fs.watch + git; sem IA, sem tokens). So a tarefa visivel e observada: abrir outra troca o observador.
@@ -583,7 +886,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
     }
     return { isolated: dir !== t.game, ...(await changedFiles(dir)) }
   },
-  fileDiff: (id: number, rel: string) => { const t = asTask(id); return fileDiff(taskDir(t), asStr(rel, 'arquivo', 1000)) },
+  fileDiff: (id: number, rel: string, full?: boolean) => { const t = asTask(id); return fileDiff(taskDir(t), asStr(rel, 'arquivo', 1000), full === true) },
   stopFiles: () => { filesWatch?.off(); filesWatch = null },
   // Nucleo da home: gravacoes da ultima hora (em memoria) e, por projeto, commits recentes e o que esta sem commit (pasta + worktrees).
   pulseEvents: () => pulse.events(),
@@ -594,7 +897,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
   })),
   projectNames,
   getProjectGroups: () => { try { return cleanGroups(JSON.parse(getSetting('projectGroups') ?? '[]')) } catch { return [] } },
-  setProjectGroups: (groups: unknown) => setSetting('projectGroups', JSON.stringify(cleanGroups(groups))),
+  setProjectGroups: (groups: unknown) => { setSetting('projectGroups', JSON.stringify(cleanGroups(groups))); emit({ groupsChanged: true }) },
   renameProject: (game: string, title: string) => {
     const g = asGame(game), m = projectNames(), t = asStr(title, 'nome', 80).trim()
     if (t && t !== path.basename(g)) m[g] = t; else delete m[g] // vazio ou igual a pasta: volta ao nome da pasta
@@ -658,12 +961,22 @@ const handlers: Record<string, (...a: any[]) => any> = {
     const step = stepId == null ? null : asInt(stepId, 'etapa')
     if (activeStep(db, t.id)) fail('Aguarde ou cancele a etapa atual antes de enviar outra mensagem.')
     if (step) { if (active.has(t.id)) fail('O agente ainda está respondendo.'); beginStep(db, t.id, step) }
-    try { const result = await sendTask(t.id, s, input); if (step) bindStep(db, step, result); return result }
+    // Checkpoint do turno: congela o Git da pasta antes do agente mexer; best-effort (pasta sem Git ou com
+    // operacao pendente so fica sem checkpoint) e nunca impede o envio.
+    let turnCheckpoint: { id: number } | null = null
+    try { turnCheckpoint = await takeCheckpoint(db, taskCwd(t), t.id, {}) } catch {}
+    try {
+      const result = await sendTask(t.id, s, input)
+      if (step) bindStep(db, step, result)
+      if (turnCheckpoint && result.status === 'started' && 'runId' in result && result.runId)
+        db.prepare('UPDATE task_checkpoints SET run_id=? WHERE id=?').run(result.runId, turnCheckpoint.id)
+      return result
+    }
     catch (e) { if (step) failStep(db, step, String((e as Error).message)); throw e }
     finally { emit({ taskId: t.id, refresh: true }) }
   },
   stopTask: (id: number) => active.get(asInt(id, 'tarefa'))?.cancel(),
-  isolateTask: (id: number) => isolateTask(asTask(id).id),
+  isolateTask: (id: number) => backups.exclusive(() => isolateTask(asTask(id).id), true),
   newSession: (id: number, sel: any) => {
     const t = asTask(id), s = asSel(sel)
     if (active.has(t.id)) fail('Pare a execucao antes de abrir uma nova sessao.')
@@ -671,9 +984,58 @@ const handlers: Record<string, (...a: any[]) => any> = {
       note(t.id, `Nova sessao de ${s.provider}: a proxima mensagem comeca com contexto vazio. O historico recente so segue se voce aprovar o pacote.`)
     return true
   },
-  launchTask: (id: number, sel: any, o: any) => launchTask(asTask(id).id, asSel(sel), o?.resume === true, o?.isolate === true),
+  launchTask: (id: number, sel: any, o: any) => o?.isolate === true ? backups.exclusive(() => launchTask(asTask(id).id, asSel(sel), o?.resume === true, true), true) : launchTask(asTask(id).id, asSel(sel), o?.resume === true, false),
   // Catalogo de modelos/esforcos do provedor (fonte nativa quando existe) e escolha persistida da tarefa.
   delegationReport: () => delegationReport(db, 7),
+  // Avisos (Configuracoes > Avisos). O teste mostra um exemplo fixo mesmo com a janela em foco, sem executar nada.
+  getNotifySettings: () => notifyPrefs(),
+  setNotifySettings: (raw: unknown) => { const n = normalizeNotify(raw); setSetting('notifications', JSON.stringify(n)); return n },
+  testNotice: (group: unknown) => {
+    const base = { taskId: -1, game: '', project: 'Meu jogo', step: null, files: null, filesTotal: null, activity: null, command: null, model: null }
+    const done = { ...base, kind: 'done' as const, heading: 'Terminou', title: 'Exemplo: corrigir pulo duplo', provider: 'claude', model: 'opus', duration: '3 min', summaryFrom: 'agent' as const,
+      summary: 'Ajustei o coyote time para 0,12 s e bloqueei o segundo pulo enquanto o personagem está no ar. O teste de pulo passou.',
+      files: [{ path: 'scripts/player.gd', added: 30, removed: 5, isNew: false }, { path: 'tests/test_jump.gd', added: 12, removed: 0, isNew: true }, { path: 'scenes/hud.tscn', added: 2, removed: 2, isNew: false }],
+      filesTotal: { count: 3, added: 44, removed: 7 }, activity: { tools: 14, commands: 3, tests: 2, passed: 1, failed: 1, lastOk: true, summary: '12 testes, 12 passaram, 0 falharam' } }
+    showNotice(done, notifyPrefs(), true)
+    if (group === true) {
+      showNotice({ ...base, kind: 'cmd-fail', heading: 'Build falhou', title: 'Exemplo: exportar demo', provider: null, duration: '48 s', summaryFrom: 'app',
+        summary: 'ERRO: falta a textura res://art/hero.png', command: { name: 'Exportar Windows', exitCode: 1 } }, notifyPrefs(), true)
+      showNotice({ ...base, kind: 'review', heading: 'Etapa pronta para revisão', title: 'Exemplo: menu de pausa', provider: 'codex', duration: '7 min', summaryFrom: 'agent', step: 'Implementar menu',
+        summary: 'Menu de pausa com continuar, opções e sair.', filesTotal: { count: 2, added: 80, removed: 0 } }, notifyPrefs(), true)
+    }
+  },
+  // Janela de aviso: lista atual, tamanho do conteudo, fechar e abrir (abrir so traz a Orbita e mostra a tarefa; nada e executado).
+  noticeList: () => pendingNotices,
+  planetUsage: usageForPlanet,
+  planetMoons: () => moons(db),
+  planetOpen: () => { if (!win || win.isDestroyed()) return; if (win.isMinimized()) win.restore(); win.show(); win.focus() },
+  planetState,
+  summaryTitles,
+  setSummaryTitles: (on: unknown) => { setSetting('summaryTitles', on === false ? 'off' : 'on'); return summaryTitles() },
+  setPlanet: (on: unknown) => { setSetting('planet', on === false ? 'off' : 'on'); fitNotices(0); toPopup({ planet: planetState() }); return planetState() },
+  // Arrastar: a janela segue o ponteiro; ao soltar, a posicao vai para dentro da tela mais proxima e fica salva.
+  planetDrag: (x: unknown, y: unknown) => {
+    if (!noticeWin || noticeWin.isDestroyed() || pendingNotices.length || !Number.isFinite(x) || !Number.isFinite(y)) return
+    noticeWin.setBounds({ x: Math.round(x as number), y: Math.round(y as number), width: PLANET, height: PLANET })
+  },
+  planetDrop: () => {
+    if (!noticeWin || noticeWin.isDestroyed() || pendingNotices.length) return
+    const { x, y } = noticeWin.getBounds()
+    const wa = screen.getDisplayNearestPoint({ x: x + PLANET / 2, y: y + PLANET / 2 }).workArea
+    setSetting('planetPos', JSON.stringify({ x: Math.min(Math.max(x, wa.x), wa.x + wa.width - PLANET), y: Math.min(Math.max(y, wa.y), wa.y + wa.height - PLANET) }))
+    fitNotices(0)
+    toPopup({ planet: planetState() })
+  },
+  noticeFit: (h: unknown) => fitNotices(Number(h) || 0),
+  noticeDismiss: (key: unknown) => { const i = pendingNotices.findIndex(n => n.key === key); if (i >= 0) pendingNotices.splice(i, 1) },
+  noticeOpen: (key: unknown, files: unknown) => {
+    const i = pendingNotices.findIndex(n => n.key === key)
+    const n = i >= 0 ? pendingNotices.splice(i, 1)[0] : null
+    if (!win || win.isDestroyed()) return
+    if (win.isMinimized()) win.restore()
+    win.show(); win.focus()
+    if (n && n.taskId > 0) send({ openTask: { game: n.game, taskId: n.taskId, files: files === true } })
+  },
   getDelegationSettings: () => ({ ...delegationSettings(), providers: Object.keys(AGENTS), mcpProviders: ['claude', 'codex', 'opencode'] }),
   setDelegationSettings: (raw: any) => {
     const n = normalizeSettings({ ...DEFAULT_SETTINGS, ...raw })
@@ -765,21 +1127,42 @@ const handlers: Record<string, (...a: any[]) => any> = {
   },
   launchGame: (game: string, sel: any) => {
     const s = asSel(sel)
+    worktrees.assertAvailable(asGame(game))
     openTerminal(asGame(game), `${s.provider} - ${path.basename(asGame(game))}`, AGENTS[s.provider].cmd, envFor(s))
   },
   // ---- Branch da pasta (ou worktree): Git local + gh. Publicar (push/PR/issue) so por clique confirmado na interface.
-  branchView: (dir: string) => branchView(asRepoDir(dir)),
-  branchDiff: (dir: string, rel: string) => fileDiff(asRepoDir(dir), asStr(rel, 'arquivo', 1000)),
-  branchCommit: (dir: string, msg: string, paths?: unknown, parts?: unknown) => commitAll(asRepoDir(dir), asStr(msg, 'mensagem', 5000).trim() || fail('Mensagem de commit vazia.'), commitPaths(paths), commitParts(parts)),
-  branchRemoteAhead: (dir: string) => remoteAhead(asRepoDir(dir)),
-  branchCreate: (dir: string, name: string) => createBranch(asRepoDir(dir), asStr(name, 'nome da branch', 200).trim() || fail('Nome vazio.')),
-  branchPush: (dir: string) => push(asRepoDir(dir)),
-  branchPull: (dir: string) => pull(asRepoDir(dir)),
-  prView: (dir: string) => prView(asRepoDir(dir)),
-  prCreate: (dir: string, title: string, body: string) => prCreate(asRepoDir(dir), asStr(title, 'titulo', 250).trim() || fail('Título vazio.'), asStr(body ?? '', 'descricao', 20000)),
-  issueList: (dir: string) => issueList(asRepoDir(dir)),
-  issueCreate: (dir: string, title: string, body: string) => issueCreate(asRepoDir(dir), asStr(title, 'titulo', 250).trim() || fail('Título vazio.'), asStr(body ?? '', 'descricao', 20000)),
+  branchView: async (dir: string) => branchView(await asRepoDir(dir)),
+  branchDiff: async (dir: string, rel: string) => fileDiff(await asRepoDir(dir), asStr(rel, 'arquivo', 1000)),
+  branchCommit: async (dir: string, msg: string, paths?: unknown, parts?: unknown) => { const d = await asRepoDir(dir); worktrees.assertAvailable(d); return commitAll(d, asStr(msg, 'mensagem', 5000).trim() || fail('Mensagem de commit vazia.'), commitPaths(paths), commitParts(parts)) },
+  branchRemoteAhead: async (dir: string) => remoteAhead(await asRepoDir(dir)),
+  branchCreate: async (dir: string, name: string) => { const d = await asRepoDir(dir); worktrees.assertAvailable(d); return createBranch(d, asStr(name, 'nome da branch', 200).trim() || fail('Nome vazio.')) },
+  branchPush: async (dir: string) => push(await asRepoDir(dir)),
+  branchPull: async (dir: string) => { const d = await asRepoDir(dir); worktrees.assertAvailable(d); return pull(d) },
+  prView: async (dir: string) => prView(await asRepoDir(dir)),
+  prCreate: async (dir: string, title: string, body: string) => prCreate(await asRepoDir(dir), asStr(title, 'titulo', 250).trim() || fail('Título vazio.'), asStr(body ?? '', 'descricao', 20000)),
+  issueList: async (dir: string) => issueList(await asRepoDir(dir)),
+  issueCreate: async (dir: string, title: string, body: string) => issueCreate(await asRepoDir(dir), asStr(title, 'titulo', 250).trim() || fail('Título vazio.'), asStr(body ?? '', 'descricao', 20000)),
   openGithub: (u: string) => { if (/^https:\/\/github\.com\//.test(asStr(u, 'endereco', 500))) shell.openExternal(u) },
+  // Checkpoints do turno: a pasta da tarefa congela sozinha antes de cada mensagem; aqui o usuario cria, lista e volta.
+  listCheckpoints: (taskId: number) => listCheckpoints(db, asTask(taskId).id),
+  createCheckpoint: async (taskId: number) => {
+    const t = asTask(taskId), dir = taskCwd(t)
+    worktrees.assertAvailable(dir)
+    const cp = await takeCheckpoint(db, dir, t.id, {})
+    note(t.id, `Checkpoint criado (${cp.head?.slice(0, 7) ?? 'pasta limpa sem commits'}): a pasta pode voltar a este ponto.`)
+    emit({ taskId: t.id, refresh: true })
+    return cp
+  },
+  previewCheckpointRewind: async (taskId: number, id: number) => previewRewind(db, taskCwd(asTask(taskId)), asTask(taskId).id, asInt(id, 'checkpoint')),
+  rewindCheckpoint: async (taskId: number, id: number, token: string) => {
+    const t = asTask(taskId), dir = taskCwd(t)
+    if (active.has(t.id)) fail('Pare a execução desta tarefa antes de voltar.')
+    if (commands.busy(dir)) fail('Aguarde ou cancele o comando local nesta pasta antes de voltar.')
+    const r = await rewindCheckpoint(db, dir, t.id, asInt(id, 'checkpoint'), asStr(token, 'prévia', 200))
+    note(t.id, `Pasta voltada ao checkpoint #${asInt(id, 'checkpoint')} (${r.head.slice(0, 7)}). Mudanças posteriores foram descartadas.`)
+    emit({ taskId: t.id, refresh: true })
+    return r
+  },
   // Nova: o que espera voce (permissao/contexto pendente) e o que foi concluido hoje, por pasta. So leitura, sem IA.
   novaState: () => {
     const gs = new Set(listGames().map(g => g.toLowerCase()))
@@ -861,6 +1244,8 @@ app.whenReady().then(() => {
   // GPD_DISPLAY=2 abre no segundo monitor (os testes e2e usam para nao ocupar a tela principal).
   const display = screen.getAllDisplays()[Number(process.env.GPD_DISPLAY) - 1]
   if (display) win.setBounds(display.workArea)
+  win.on('closed', () => { if (noticeWin && !noticeWin.isDestroyed()) noticeWin.destroy() }) // a janela de aviso escondida seguraria o processo vivo e o atalho abriria so um fantasma
+  win.on('focus', () => { if (!win || win.isDestroyed()) return; win.flashFrame(false); noticesToApp() })
   win.once('ready-to-show', () => { win!.maximize(); win!.show() })
   win.webContents.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: 'deny' } })
   win.webContents.on('will-navigate', (e, url) => {
@@ -868,5 +1253,6 @@ app.whenReady().then(() => {
   })
   if (rendererUrl) win.loadURL(rendererUrl)
   else win.loadFile(rendererFile)
+  noticeWindow()
 })
 app.on('window-all-closed', () => app.quit())

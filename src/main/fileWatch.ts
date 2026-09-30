@@ -3,6 +3,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseStatus, run, type FileChange } from './projectInfo.ts'
+import { pathKey } from './guard.ts'
 
 export type ChangedFile = FileChange & { added: number | null; removed: number | null; lastWrite: number | null }
 
@@ -50,7 +51,7 @@ const watchers = new Map<string, { w: fs.FSWatcher; writes: Map<string, number>;
 // Compartilhado: o painel de arquivos e o pulso da home assinam a mesma pasta sem abrir dois observadores.
 // Devolve a funcao de sair; o observador fecha quando o ultimo assinante sai.
 export function watchDir(dir: string, onWrite: (rel: string) => void): () => void {
-  const key = path.resolve(dir).toLowerCase()
+  const key = pathKey(dir)
   let entry = watchers.get(key)
   if (!entry) {
     const writes = new Map<string, number>(), last = new Map<string, number>(), subs = new Set<(rel: string) => void>()
@@ -83,7 +84,7 @@ export function stopWatching() {
   watchers.clear()
 }
 
-const writesOf = (dir: string) => watchers.get(path.resolve(dir).toLowerCase())?.writes ?? new Map<string, number>()
+const writesOf = (dir: string) => watchers.get(pathKey(dir))?.writes ?? new Map<string, number>()
 
 export async function changedFiles(dir: string): Promise<{ repo: boolean; files: ChangedFile[] }> {
   let status: FileChange[]
@@ -98,16 +99,17 @@ export async function changedFiles(dir: string): Promise<{ repo: boolean; files:
 }
 
 // Diff de um arquivo para a previa. O caminho precisa ficar dentro da pasta; texto limitado.
-export async function fileDiff(dir: string, rel: string): Promise<string> {
+// `full`: arquivo inteiro com o contexto (linhas iguais com espaco na frente), mantendo as removidas e as adicionadas.
+export async function fileDiff(dir: string, rel: string, full = false): Promise<string> {
   const base = path.resolve(dir), abs = path.resolve(base, rel)
   if (!abs.startsWith(base + path.sep)) throw new Error('Arquivo fora da pasta da tarefa.')
-  const cut = (s: string, n = 300) => { const l = s.split(/\r?\n/); return l.length > n ? [...l.slice(0, n), `… mais ${l.length - n} linhas`].join('\n') : s }
+  const cut = (s: string, n = full ? 3000 : 300) => { const l = s.split(/\r?\n/); return l.length > n ? [...l.slice(0, n), `… mais ${l.length - n} linhas`].join('\n') : s }
   try {
-    const d = await run(base, ['diff', 'HEAD', '--no-color', '--', norm(path.relative(base, abs))])
+    const d = await run(base, ['diff', 'HEAD', '--no-color', ...(full ? ['-U99999'] : []), '--', norm(path.relative(base, abs))])
     if (d.trim()) return cut(d.split(/\r?\n/).filter(l => !/^(diff --git|index |--- |\+\+\+ )/.test(l)).join('\n'))
   } catch {}
   if (countLines(abs) === null) return fs.existsSync(abs) ? 'Arquivo binário ou grande demais para a prévia.' : 'Arquivo removido.'
-  return cut(fs.readFileSync(abs, 'utf8').replace(/\r?\n$/, '').split(/\r?\n/).map(l => `+${l}`).join('\n'), 120) // novo: tudo e adicao
+  return cut(fs.readFileSync(abs, 'utf8').replace(/\r?\n$/, '').split(/\r?\n/).map(l => `+${l}`).join('\n'), full ? 3000 : 120) // novo: tudo e adicao
 }
 
 // "Sujeira" da pasta: linhas sem commit (soma de +/-) e arquivos alterados. null = sem Git.

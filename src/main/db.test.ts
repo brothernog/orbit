@@ -262,4 +262,24 @@ test('v17–19 preservam planejamento/comandos v16 e acrescentam registros de pr
   const again = openDb(file); assert.equal(rows(again, 'SELECT COUNT(*) n FROM tasks')[0].n, 1); again.close()
 })
 
+test('v20 migra catálogo v19 preservando snapshots, aprovações e vínculos com defaults de revisão/arquivo', () => {
+  const db = new DatabaseSync(':memory:')
+  try {
+    for (const migration of MIGRATIONS.slice(0, 19)) migration(db)
+    db.exec('PRAGMA user_version=19')
+    db.prepare("INSERT INTO project_assets(game,title,path,kind,license,source,tags) VALUES ('C:/g','Asset','a.png','sprite','CC0','Autor','player')").run()
+    db.prepare("INSERT INTO asset_versions(asset_id,hash,size,file_name,note,state,reviewed_at) VALUES (1,'hash',8,'a.png','Nota','approved','2026-01-01')").run()
+    db.prepare("INSERT INTO project_builds(game,title,version,platform,hash,size,file_name,notes,command,state) VALUES ('C:/g','Build','1','Windows','hash',8,'a.png','Notas','{\"id\":2}','approved')").run()
+    db.prepare("INSERT INTO project_playtests(game,title,scenario,expected,observed,outcome,notes,severity,pin_id,build_id) VALUES ('C:/g','Testar','Mover','Mova','Move','pass','Ok','low',7,1)").run()
+    migrate(db)
+    assert.equal(version(db), MIGRATIONS.length)
+    assert.deepEqual(rows(db, 'SELECT title,path,revision,archived_at FROM project_assets').map(r => ({ ...r })), [{ title: 'Asset', path: 'a.png', revision: 1, archived_at: null }])
+    assert.deepEqual(rows(db, 'SELECT state,reviewed_at,note,pinned,pruned_at FROM asset_versions').map(r => ({ ...r })), [{ state: 'approved', reviewed_at: '2026-01-01', note: 'Nota', pinned: 0, pruned_at: null }])
+    assert.deepEqual(rows(db, 'SELECT hash,command,state,revision,archived_at FROM project_builds').map(r => ({ ...r })), [{ hash: 'hash', command: '{"id":2}', state: 'approved', revision: 1, archived_at: null }])
+    assert.deepEqual(rows(db, 'SELECT pin_id,build_id,observed,revision,archived_at FROM project_playtests').map(r => ({ ...r })), [{ pin_id: 7, build_id: 1, observed: 'Move', revision: 1, archived_at: null }])
+    assert.throws(() => db.prepare('UPDATE asset_versions SET pinned=2').run(), /CHECK/)
+    migrate(db); assert.equal(rows(db, 'SELECT COUNT(*) n FROM asset_versions')[0].n, 1)
+  } finally { db.close() }
+})
+
 test.after(() => { try { fs.rmSync(tmp, { recursive: true, force: true }) } catch {} }) // handles SQLite ainda abertos no Windows

@@ -60,7 +60,6 @@ export const TEST_EVIDENCE_TOOL: ToolDef = {
     inputs: { type: 'array', items: { type: 'string' }, description: 'Arquivos/pastas de que o teste depende.' }, hermetic: { type: 'boolean' }, network: { type: 'boolean' }, env: { type: 'string', description: 'Ex.: "win32 node 26".' }
   }, ['action', 'command'])
 }
-
 // Ferramentas anunciadas por papel. Pai: so consulta/registro de contexto (mais delegar, acrescentado pelo chamador).
 // Filho: alem disso, operacoes locais. Nunca delegar_to_agent para filho (a recursao tambem e barrada no backend).
 // read_task_skill: instrucoes detalhadas sob demanda, com a lista do que o PAPEL pode consultar (pai: delegacao e memoria; filho: so memoria).

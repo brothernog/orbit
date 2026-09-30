@@ -75,3 +75,33 @@ test('playtests: build deve existir no mesmo projeto, sem ler arquivos ou saída
   const id = service.add('game', { ...record, buildId: build, images: [] })
   assert.equal(service.list('game').find(p => p.id === id)?.build_id, build)
 })
+
+test('playtests: edição e arquivo preservam evidências e recusam revisão obsoleta', t => {
+  const { db, service } = setup(t)
+  const build = Number(db.prepare(`INSERT INTO project_builds (game,title,version,platform,hash,size,file_name,notes,command)
+    VALUES ('game','Build','1','desktop',?,1,'game.zip','','{}')`).run('b'.repeat(64)).lastInsertRowid)
+  const id = service.add('game', { ...record, buildId: build })
+  const before = db.prepare('SELECT * FROM project_playtests WHERE id=?').get(id) as any
+  const patch = { revision: before.revision, title: 'Pulo revisado', notes: 'Priorizar', severity: 'high', observed: 'Não sobrescrever', buildId: null, images: [] }
+  assert.throws(() => service.edit('other', id, patch), /neste projeto/)
+  for (const invalid of [null, [], { ...patch, revision: 0 }, { ...patch, title: '' }, { ...patch, title: '\0' }, { ...patch, severity: 'urgent' }, { ...patch, notes: 'x'.repeat(8001) }]) assert.throws(() => service.edit('game', id, invalid))
+  service.edit('game', id, patch)
+  const after = db.prepare('SELECT * FROM project_playtests WHERE id=?').get(id) as any
+  assert.equal(after.title, patch.title); assert.equal(after.notes, patch.notes); assert.equal(after.severity, patch.severity)
+  for (const key of ['scenario','expected','observed','outcome','images','build_id','created_at','state']) assert.equal(after[key], before[key])
+  assert.deepEqual(service.images('game', id), [image])
+  assert.throws(() => service.edit('game', id, patch), /mudou/)
+  assert.throws(() => service.setArchived('other', id, after.revision, true), /neste projeto/)
+  assert.throws(() => service.setArchived('game', id, after.revision, 'true'), /inválido/)
+  assert.throws(() => service.setArchived('game', id, before.revision, true), /mudou/)
+  service.setArchived('game', id, after.revision, true)
+  assert.ok(service.list('game')[0].archived_at)
+  assert.deepEqual(service.images('game', id), [image])
+  db.prepare('UPDATE project_builds SET archived_at=CURRENT_TIMESTAMP WHERE id=?').run(build)
+  assert.throws(() => service.add('game', { ...record, buildId: build }), /ativa/)
+  assert.equal(service.list('game')[0].build_id, build)
+  service.setArchived('game', id, after.revision + 1, false)
+  assert.equal(service.list('game')[0].archived_at, null)
+  assert.equal(service.list('game')[0].id, id)
+  assert.equal((db.prepare('SELECT COUNT(*) n FROM messages').get() as any).n, 0)
+})

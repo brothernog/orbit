@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from './api'
-import { GROUP_COLORS, initials, SUGGESTED, type Group } from './groups'
+import { GROUP_COLORS, initials, SUGGESTED, type Group, type GodotConfig } from './groups'
+import './godot.css'
 
 // Icone do projeto: o da propria pasta (lido pelo processo principal) ou um padrao geometrico gerado do caminho, sempre igual.
 const icons = new Map<string, Promise<string | null>>()
@@ -85,9 +86,10 @@ export function Confirm({ title, body, action, tone = 'danger', onConfirm, onClo
 }
 
 // Criar ou editar um grupo do trilho: previa ao vivo, sugestoes de um clique e cor. Enter salva.
-export function GroupDialog({ edit, count, onSave, onClose }: { edit?: Group; count: number; onSave: (name: string, color: string) => void; onClose: () => void }) {
+export function GroupDialog({ edit, count, onSave, onClose }: { edit?: Group; count: number; onSave: (name: string, color: string, godot: GodotConfig) => void; onClose: () => void }) {
   const [v, setV] = useState(edit?.name ?? '')
   const [color, setColor] = useState(edit?.color ?? GROUP_COLORS[0])
+  const [godot, setGodot] = useState<GodotConfig>(edit?.godot ?? { enabled: false, executable: '' })
   useEffect(() => {
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', esc)
@@ -97,20 +99,25 @@ export function GroupDialog({ edit, count, onSave, onClose }: { edit?: Group; co
   return (
     <div className="modal-back" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
       <form className="modal group-dlg" role="dialog" aria-modal="true" aria-label={edit ? 'Editar organizador' : 'Novo organizador'} style={{ '--g': color } as CSSProperties}
-        onSubmit={e => { e.preventDefault(); if (ok) { onSave(v.trim().slice(0, 40), color); onClose() } }}>
+        onSubmit={e => { e.preventDefault(); if (ok) { onSave(v.trim().slice(0, 40), color, { ...godot, executable: godot.executable.trim() || 'godot' }); onClose() } }}>
         <div className="gd-preview" aria-hidden="true">
           <span className="gd-folder">{initials(v.trim() || 'Wo')}</span>
           <span className="gd-name">{v.trim() || 'Nome do organizador'}</span>
         </div>
         <div className="gd-body">
           <h2>{edit ? 'Editar organizador' : 'Novo organizador'}</h2>
-          <p>{edit ? 'Só muda a organização no Órbita.' : `Uma pasta-mãe só do Órbita. Junta pastas de lugares diferentes do Windows num ícone; cada uma mantém as próprias conversas e terminais. Nada muda no disco nem no contexto da IA.${count ? ` ${count === 1 ? 'Esta pasta entra' : `As ${count} pastas entram`} nele.` : ''}`}</p>
+          <p>{edit ? 'Organização e ferramentas disponíveis para os projetos deste organizador.' : `Junta pastas de lugares diferentes num ícone; cada uma mantém as próprias conversas e terminais.${count ? ` ${count === 1 ? 'Esta pasta entra' : `As ${count} pastas entram`} nele.` : ''}`}</p>
           <input aria-label="Nome do organizador" autoFocus maxLength={40} placeholder="Ex.: Case Opened, Trabalho, Pessoais" value={v} onChange={e => setV(e.target.value)} />
           {!edit && <div className="gd-sugg">{SUGGESTED.map(([n, c]) => (
             <button type="button" key={n} className={v === n ? 'on' : ''} style={{ '--g': c } as CSSProperties} onClick={() => { setV(n); setColor(c) }}>{n}</button>
           ))}</div>}
           <div className="gd-colors" role="radiogroup" aria-label="Cor do organizador">
             {GROUP_COLORS.map(c => <button type="button" key={c} role="radio" aria-checked={c === color} aria-label={`Cor ${c}`} style={{ '--g': c } as CSSProperties} onClick={() => setColor(c)} />)}
+          </div>
+          <div className="gd-godot">
+            <label className="check"><input type="checkbox" checked={godot.enabled} onChange={e => setGodot(g => ({ ...g, enabled: e.target.checked }))} />Ativar integração Godot</label>
+            <small>Ferramentas sob demanda para agentes invocados nos projetos Godot deste organizador.</small>
+            {godot.enabled && <label>Executável Godot 4<input aria-label="Executável Godot do organizador" value={godot.executable} maxLength={2000} placeholder="Vazio usa godot no PATH" onChange={e => setGodot(g => ({ ...g, executable: e.target.value }))} /><small>Caminho de executável direto. Salvar não inicia a engine.</small></label>}
           </div>
         </div>
         <footer>

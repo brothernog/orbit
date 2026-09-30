@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AGENTS, api, errText, type Catalog } from './api'
 import { Dropdown, type Opt } from './Dropdown'
 import { Icon, PROVIDER } from './icons'
+import { loadRead, peekRead } from './readCache'
+import { useCachedRead } from './useCachedRead'
 import './agentNames.css'
 
 // Sub-aba "Agentes" das Configuracoes: o usuario da um nome a um provedor + modelo (+ esforco) e os agentes da dashboard passam a
@@ -11,27 +13,42 @@ type Row = { name: string; provider: string; model: string; effort: string }
 const empty = (): Row => ({ name: '', provider: '', model: '', effort: '' })
 const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim()
 const providerOpts: Opt[] = AGENTS.map(p => ({ value: p, label: PROVIDER[p]?.label ?? p }))
+const aliasRows = (v: Row[]) => v.map(a => ({ name: a.name, provider: a.provider, model: a.model, effort: a.effort ?? '' }))
 
 export function AgentNames() {
-  const [rows, setRows] = useState<Row[] | null>(null)
-  const [saved, setSaved] = useState('[]')
-  const [catalogs, setCatalogs] = useState<Record<string, Catalog | 'loading' | 'error'>>({})
-  const [err, setErr] = useState('')
+  const aliases = useCachedRead<Row[]>('getAgentAliases', () => api.getAgentAliases())
+  const [rows, setRows] = useState<Row[] | null>(() => {
+    const value = peekRead<Row[]>('getAgentAliases')
+    return value ? aliasRows(value) : null
+  })
+  const [saved, setSaved] = useState(() => JSON.stringify(rows ?? []))
+  const dirtyRef = useRef(false)
+  const requestedCatalogs = useRef(new Set<string>())
+  const [catalogs, setCatalogs] = useState<Record<string, Catalog | 'loading' | 'error'>>(() => Object.fromEntries(
+    [...new Set((rows ?? []).map(r => r.provider).filter(Boolean))].flatMap(p => {
+      const value = peekRead<Catalog>(`catalog:${p}`)
+      return value ? [[p, value]] : []
+    })
+  ))
+  const [writeErr, setErr] = useState('')
+  const err = writeErr || (aliases.error ? errText(aliases.error) : '')
   const [ok, setOk] = useState(false)
   const [busy, setBusy] = useState(false)
 
-  const load = () => api.getAgentAliases().then((v: any[]) => {
-    const r = v.map(a => ({ name: a.name, provider: a.provider, model: a.model, effort: a.effort ?? '' }))
-    setRows(r); setSaved(JSON.stringify(r))
-  }, e => setErr(errText(e)))
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    if (!aliases.data) return
+    const r = aliasRows(aliases.data)
+    setSaved(JSON.stringify(r))
+    if (!dirtyRef.current) setRows(r)
+  }, [aliases.data])
 
   // Catalogo do provedor (modelos e esforcos), carregado uma vez por provedor usado nas linhas.
   useEffect(() => {
     for (const p of new Set((rows ?? []).map(r => r.provider).filter(Boolean)))
-      if (!catalogs[p]) {
-        setCatalogs(c => ({ ...c, [p]: 'loading' }))
-        api.catalog(p).then((c: Catalog) => setCatalogs(x => ({ ...x, [p]: c })), () => setCatalogs(x => ({ ...x, [p]: 'error' })))
+      if (!requestedCatalogs.current.has(p)) {
+        requestedCatalogs.current.add(p)
+        if (!catalogs[p]) setCatalogs(c => ({ ...c, [p]: 'loading' }))
+        loadRead<Catalog>(`catalog:${p}`, () => api.catalog(p), 600_000).then(c => setCatalogs(x => ({ ...x, [p]: c })), () => setCatalogs(x => ({ ...x, [p]: typeof x[p] === 'object' ? x[p] : 'error' })))
       }
   }, [rows])
 
@@ -50,12 +67,13 @@ export function AgentNames() {
     })
   }, [rows])
   const dirty = rows !== null && JSON.stringify(rows) !== saved
-  const set = (i: number, patch: Partial<Row>) => { setOk(false); setRows(rs => rs!.map((r, j) => (j === i ? { ...r, ...patch } : r))) }
+  const edit = (change: (rs: Row[]) => Row[]) => { dirtyRef.current = true; setOk(false); setRows(rs => change(rs!)) }
+  const set = (i: number, patch: Partial<Row>) => edit(rs => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
 
   const save = () => {
     setErr(''); setOk(false); setBusy(true)
     api.setAgentAliases(rows!.map(r => ({ name: r.name.trim(), provider: r.provider, model: r.model, effort: r.effort || undefined })))
-      .then((v: any[]) => { const r = v.map(a => ({ name: a.name, provider: a.provider, model: a.model, effort: a.effort ?? '' })); setRows(r); setSaved(JSON.stringify(r)); setOk(true) }, e => setErr(errText(e)))
+      .then((v: Row[]) => { const r = aliasRows(v); dirtyRef.current = false; aliases.set(v); setRows(r); setSaved(JSON.stringify(r)); setOk(true) }, e => setErr(errText(e)))
       .finally(() => setBusy(false))
   }
 
@@ -82,14 +100,14 @@ export function AgentNames() {
                 <Dropdown down label={`Esforço do agente ${i + 1}`} placeholder="Esforço" value={r.effort} options={[{ value: '', label: 'Padrão do modelo' }, ...efforts.map(e => ({ value: e, label: e }))]}
                   onChange={v => set(i, { effort: v })} />
               )}
-              <button type="button" className="icon sm" aria-label={`Remover o agente ${r.name || i + 1}`} title="Remover" onClick={() => { setOk(false); setRows(rs => rs!.filter((_, j) => j !== i)) }}><Icon n="close" size={16} /></button>
+              <button type="button" className="icon sm" aria-label={`Remover o agente ${r.name || i + 1}`} title="Remover" onClick={() => edit(rs => rs.filter((_, j) => j !== i))}><Icon n="close" size={16} /></button>
               {problems[i] && dirty && <small className="an-problem" role="status">{problems[i]}</small>}
             </li>
           )
         })}
       </ul>
       <div className="an-actions">
-        <button type="button" onClick={() => { setOk(false); setRows(rs => [...rs!, empty()]) }}><Icon n="plus" size={14} /> Adicionar agente</button>
+        <button type="button" onClick={() => edit(rs => [...rs, empty()])}><Icon n="plus" size={14} /> Adicionar agente</button>
         <button type="button" className="primary" disabled={!dirty || busy || problems.some(Boolean)} onClick={save}>{busy ? 'Salvando…' : 'Salvar'}</button>
         {ok && <small className="an-ok" role="status">Salvo. Vale na próxima execução.</small>}
       </div>

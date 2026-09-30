@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api, errText } from './api'
+import { useCachedRead } from './useCachedRead'
 import './backup.css'
 
 type Backup = { path: string; createdAt: string; files: number; bytes: number; schema: number }
@@ -14,15 +15,14 @@ function BackupSummary({ value }: { value: Backup }) {
 }
 
 export function BackupSettings() {
-  const [info, setInfo] = useState<Info | null>(null)
+  const read = useCachedRead<Info>('backupInfo', () => api.backupInfo())
+  const info = read.data
   const [created, setCreated] = useState<Backup | null>(null)
   const [selected, setSelected] = useState<(Backup & { token: string }) | null>(null)
-  const [busy, setBusy] = useState('Carregando dados…')
-  const [err, setErr] = useState('')
-
-  useEffect(() => {
-    api.backupInfo().then(setInfo, e => setErr(errText(e))).finally(() => setBusy(''))
-  }, [])
+  const [operation, setBusy] = useState('')
+  const [writeErr, setErr] = useState('')
+  const err = writeErr || (read.error ? errText(read.error) : '')
+  const busy = operation || (!info && !read.error ? 'Carregando dados…' : '')
 
   const create = async () => {
     setErr(''); setBusy('Criando backup…')

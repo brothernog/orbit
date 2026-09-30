@@ -213,6 +213,18 @@ test('codex e opencode: sessao, texto, ferramenta e erros', () => {
   assert.equal((o({ type: 'step_finish', part: { reason: 'stop', tokens: { input: 1 } } })[1] as any).kind, 'done')
 })
 
+test('resultado de ferramenta: Claude marca is_error, Codex informa exit code; sem informacao fica null', () => {
+  const cl = AGENTS.claude.parse
+  assert.deepEqual(cl({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: 'npm test' } }] } })[0], { kind: 'tool', name: 'Bash', detail: 'npm test', ref: 'tu1' })
+  assert.deepEqual(cl({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu1', is_error: true, content: [{ type: 'text', text: 'Exit code 1' }] }] } }),
+    [{ kind: 'toolResult', ref: 'tu1', ok: false, output: 'Exit code 1' }])
+  assert.equal((cl({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu2', content: 'ok' }] } })[0] as any).ok, null)
+  const cx = AGENTS.codex.parse
+  assert.deepEqual(cx({ type: 'item.completed', item: { id: 'i1', type: 'command_execution', command: 'npm test', exit_code: 0, aggregated_output: 'ℹ tests 3' } }),
+    [{ kind: 'toolResult', ref: 'i1', ok: true, output: 'ℹ tests 3' }])
+  assert.equal((cx({ type: 'item.completed', item: { id: 'i2', type: 'command_execution', command: 'x' } })[0] as any).ok, null)
+})
+
 test('resposta, atividade e estado separados: o texto de chat continua igual, o resto e recuperavel', async () => {
   const r = await run('codex-activity').result
   assert.equal(r.status, 'completed')

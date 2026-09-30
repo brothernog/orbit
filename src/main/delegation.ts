@@ -13,7 +13,7 @@ import {
   type Grant, type PackageItem, type PackageRow, type Recipient
 } from './consent.ts'
 import { buildEnvelope, excerpt, extractConclusion, type Conclusion } from './envelope.ts'
-import { inScope, safeJoin } from './guard.ts'
+import { inScope, pathKey, safeJoin, sameKey } from './guard.ts'
 import type { ContextLimits } from './limits.ts'
 import type { ToolDef, ToolResult } from './mcp.ts'
 import { addMemory, buildCheckpoint } from './memory.ts'
@@ -193,7 +193,7 @@ export function diffSnap(a: Snap, b: Snap): string[] {
 // ---- Um escritor por area de trabalho
 export class WorkspaceGuard {
   private edits = new Map<string, { taskId: number; delegationId: number }>()
-  private key = (ws: string) => path.resolve(ws).toLowerCase()
+  private key = pathKey
   // Mensagem de bloqueio se OUTRA tarefa tem uma delegacao de edicao ativa nesta area.
   blockedFor(ws: string, taskId: number): string | null {
     const h = this.edits.get(this.key(ws))
@@ -220,6 +220,7 @@ export type ParentCtx = {
   depth: number // 0 = execucao do usuario; filhos nunca recebem a ferramenta, esta checagem e uma segunda barreira
   fails: Map<string, number> // falhas seguidas por provedor nesta execucao
   children: Set<{ cancel: (sync?: boolean) => void }> // cancelados junto com o pai
+  godotOrganizerId?: string // capacidade herdada da invocação, revalidada pelo MCP a cada consulta
 }
 // Ferramentas de contexto/area de trabalho que o filho recebe (nunca delegate_to_agent). null = CLI sem transporte compativel.
 // native: ferramentas nativas do filho quando ele tem o MCP (ver taskContext.childToolset); keepSession: a execucao terminou na MESMA sessao nativa,
@@ -236,7 +237,7 @@ export type Deps = {
   waiters: ApprovalWaiters
   catalogCheck: (provider: string, model?: string, effort?: string) => Promise<string | null>
   runChild: (p: { provider: string; opts: ChatOpts; cwd: string; env: NodeJS.ProcessEnv; input: string; session?: string }) => Child
-  childTools?: (p: { taskId: number; lineage: string; auth: Grant; delegationId: number; provider: string; mode: 'read' | 'edit'; cwd: string; scope: string[] }) => Promise<ChildWire | null>
+  childTools?: (p: { taskId: number; lineage: string; auth: Grant; delegationId: number; provider: string; mode: 'read' | 'edit'; cwd: string; scope: string[]; godotOrganizerId?: string }) => Promise<ChildWire | null>
   envFor: (provider: string, accountId?: number) => NodeJS.ProcessEnv
   otherTasksActiveIn: (workspace: string, taskId: number) => boolean
   note: (taskId: number, text: string) => void // mensagem de sistema no chat do pai (+ atualizacao da tela)
@@ -266,7 +267,7 @@ export function continuationProblems(prev: any, a: DelegateArgs, scope: string[]
   if (prev.mode !== a.mode) why.push('modo diferente')
   if (JSON.stringify([...JSON.parse(prev.paths ?? '[]')].sort()) !== JSON.stringify([...scope].sort())) why.push('escopo diferente')
   if ((prev.account_id ?? null) !== (accountId ?? null)) why.push('conta diferente')
-  if (path.resolve(prev.workspace ?? '').toLowerCase() !== path.resolve(cwd).toLowerCase()) why.push('area de trabalho diferente')
+  if (!sameKey(prev.workspace ?? '', cwd)) why.push('area de trabalho diferente')
   return why
 }
 
@@ -364,7 +365,7 @@ export async function runDelegation(d: Deps, ctx: ParentCtx, raw: unknown, signa
   const before = snapshot(ctx.cwd)
   // Identidade efetiva do filho (criada aqui, nunca informada por ele): continuacao legitima = mesma sessao + mesmo destinatario = mesmo grant.
   const grant = openGrant(d.db, { taskId: ctx.taskId, recipient, sessionId: sid ?? null })
-  const wire = await d.childTools?.({ taskId: ctx.taskId, lineage, auth: grant, delegationId: id, provider: a.provider, mode: a.mode, cwd: ctx.cwd, scope }).catch(() => null) ?? null
+  const wire = await d.childTools?.({ taskId: ctx.taskId, lineage, auth: grant, delegationId: id, provider: a.provider, mode: a.mode, cwd: ctx.cwd, scope, godotOrganizerId: ctx.godotOrganizerId }).catch(() => null) ?? null
   // Politica nativa de "sempre permitir" (Codex sandbox/rede, OpenCode --auto e regras): so em edicao. O modo leitura nunca e alargado.
   const np = a.mode === 'edit' ? d.nativePolicy?.(a.provider) : undefined
   const extra = [...(wire?.extra ?? []), ...(np?.opts.extra ?? [])]

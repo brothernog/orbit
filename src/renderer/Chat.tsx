@@ -9,52 +9,42 @@ import { ContextRequests, TaskInspector, UnsentMessages, usePackages } from './T
 import { Bar, STATE } from './Settings'
 import { shrink, Thumbs, type TodoDraft } from './Todo'
 import { Workflow } from './Workflow'
+import { Checkpoints } from './Checkpoints'
 import { ProjectCommands } from './ProjectCommands'
 import { imageRefs, stripMarks } from './msgImages'
+import { loadRead } from './readCache'
+import { useCachedRead } from './useCachedRead'
+import { usageNote, type QuotaSnapshot } from './usageText'
 
 const parseSel = (s: string | null | undefined): Sel | null => {
   try { const v = JSON.parse(s ?? 'null'); return v && typeof v.provider === 'string' ? v : null } catch { return null }
 }
 
-// Estado de login das contas Claude (consulta gratuita), com cache curto para nao abrir a CLI a cada troca.
-const statusCache = new Map<number, { at: number; state: string }>()
+// Status/quotas compartilham o snapshot com Configuracoes e o popup de limites.
 function useClaudeStatus(accountId: number | undefined, enabled: boolean) {
-  const [state, setState] = useState<string>('unknown')
-  useEffect(() => {
-    if (!enabled || !accountId) return
-    const c = statusCache.get(accountId)
-    if (c && Date.now() - c.at < 60_000) return setState(c.state)
-    setState('unknown')
-    api.accountStatus(accountId).then(s => { statusCache.set(accountId, { at: Date.now(), state: s.state }); setState(s.state) }, () => setState('unknown'))
-  }, [accountId, enabled])
-  return state
+  const { data } = useCachedRead<{ state: string }>(enabled && accountId ? `accountStatus:${accountId}` : null, () => api.accountStatus(accountId), 60_000)
+  return data?.state ?? 'unknown'
 }
 
 // Cotas da conta Claude (5 horas e semana), com o mesmo cache curto; recarrega quando uma execucao termina.
-type Window_ = { utilization: number; resets_at: string } | null
-type Usage = { fiveHour?: Window_; sevenDay?: Window_; cached?: boolean; error?: string }
-const usageCache = new Map<number, { at: number; u: Usage }>()
+type Usage = QuotaSnapshot
+const USAGE_EVERY = 30_000
 function useUsage(accountId: number | undefined, enabled: boolean, bump: unknown) {
-  const [u, setU] = useState<Usage | null>(null)
+  const key = enabled && accountId ? `accountUsage:${accountId}` : null
+  const { data, error, reload } = useCachedRead<Usage | null>(key, () => api.accountUsage(accountId), USAGE_EVERY)
   useEffect(() => {
-    if (!enabled || !accountId) return setU(null)
-    const c = usageCache.get(accountId)
-    if (c && Date.now() - c.at < 60_000) return setU(c.u)
-    api.accountUsage(accountId).then(v => { usageCache.set(accountId, { at: Date.now(), u: v }); setU(v) }, e => setU({ error: errText(e) }))
-  }, [accountId, enabled, bump])
-  return u
+    if (!key) return
+    loadRead(key, () => api.accountUsage(accountId), USAGE_EVERY).catch(() => {})
+    const t = setInterval(() => { if (document.visibilityState === 'visible') reload().catch(() => {}) }, USAGE_EVERY)
+    return () => clearInterval(t)
+  }, [key, bump, reload])
+  return data ?? (error ? { error: errText(error) } : null)
 }
 
 // Catalogo de modelos/esforcos do provedor (fonte nativa quando existe); falha aqui nao afeta login nem chat.
 function useCatalog(provider: string) {
-  const [cat, setCat] = useState<Catalog | null>(null)
-  useEffect(() => {
-    let live = true
-    setCat(null)
-    api.catalog(provider).then(c => live && setCat(c), e => live && setCat({ provider, source: 'manual', at: '', models: [], efforts: [], allowCustomModel: false, error: errText(e) }))
-    return () => { live = false }
-  }, [provider])
-  return cat
+  const { data, error } = useCachedRead<Catalog>(`catalog:${provider}`, () => api.catalog(provider), 600_000)
+  return data ?? (error ? { provider, source: 'manual' as const, at: '', models: [], efforts: [], allowCustomModel: false, error: errText(error) } : null)
 }
 
 const label = (m: Msg, accounts: Account[]) => {
@@ -140,7 +130,7 @@ function LimitRing({ u, provider }: { u: Usage | null; provider: string }) {
           : <>
               <Bar label="Limite de 5 horas" w={u.fiveHour ?? null} />
               <Bar label="Semanal" w={u.sevenDay ?? null} />
-              {u.cached && <small>Último valor visto.</small>}
+              {usageNote(u) && <small>{usageNote(u)}</small>}
             </>}
       </span>
     </span>
@@ -196,6 +186,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
   const pkgs = usePackages(task.id)
   const [inspect, setInspect] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
+  const [cps, setCps] = useState(false) // checkpoints do turno (congelam o Git antes de cada mensagem)
   const [ask, setAsk] = useState<{ title: string; body: string; action: string; run: () => void } | null>(null) // confirmacao no estilo do app, nao o confirm() do Windows
 
   useEffect(() => {
@@ -243,11 +234,12 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
   }, [hist, live])
 
   const provider = providers?.find(p => p.id === sel.provider)
-  const claudeState = useClaudeStatus(sel.accountId, sel.provider === 'claude')
+  const claudeEnabled = sel.provider === 'claude' && accounts.find(a => a.id === sel.accountId)?.login?.state !== 'connecting'
+  const claudeState = useClaudeStatus(sel.accountId, claudeEnabled)
   const conn = sel.provider === 'claude' ? claudeState : provider?.auth?.state ?? 'unknown'
   const missing = providers && provider && !provider.exe
   const running = hist?.running ?? false
-  const usage = useUsage(sel.accountId, sel.provider === 'claude', hist?.metric?.at)
+  const usage = useUsage(sel.accountId, claudeEnabled, hist?.metric?.at)
 
   const awaiting = !!hist?.awaitingContext || pkgs.sends.some(s => s.state === 'awaiting_context_approval')
   const send = () => {
@@ -268,7 +260,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
         <Title task={t} onRename={title => act(api.renameTask(task.id, title))} />
         <div className="chat-actions">
           <button className={`icon ${inspect ? 'on' : ''}`} aria-label="Memória, uso e contexto da tarefa" title="Memória, uso e contexto da tarefa" aria-expanded={inspect} onClick={() => setInspect(!inspect)}><Icon n="layers" /></button>
-          <button className="icon" aria-label="Mais ações da tarefa" title="Nova sessão, terminal, worktree, arquivar" aria-haspopup="menu" aria-expanded={!!menu}
+          <button className="icon" aria-label="Mais ações da tarefa" title="Nova sessão, terminal, worktree, checkpoints, arquivar" aria-haspopup="menu" aria-expanded={!!menu}
             onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.right - 200, y: r.bottom + 6, items: [
               { label: 'Nova sessão', hint: 'A próxima mensagem começa com contexto vazio (economiza tokens em tarefas longas)', disabled: running,
                 run: () => setAsk({ title: 'Começar uma nova sessão?', action: 'Nova sessão', body: 'O agente deixa de ver a conversa anterior; o histórico recente só segue se você aprovar.', run: () => act(api.newSession(task.id, sel)) }) },
@@ -276,6 +268,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
               { label: t.worktree ? `Isolada em ${t.branch}` : 'Isolar em worktree', disabled: !!t.worktree || running, hint: 'Necessário só para implementar em isolamento',
                 run: () => setAsk({ title: 'Isolar numa worktree Git?', action: 'Criar worktree', body: 'As sessões nativas dos provedores recomeçam e o histórico é enviado como contexto.', run: () => act(api.isolateTask(task.id)) }) },
               { label: 'Arquivar tarefa', hint: 'Não apaga mensagens, arquivos nem worktrees', disabled: running, run: () => act(api.archiveTask(task.id, true)) },
+              { label: 'Checkpoints do turno…', hint: 'A pasta congela antes de cada mensagem; volte a um ponto anterior', run: () => setCps(true) },
             ] }) }}><Icon n="more" /></button>
         </div>
       </header>
@@ -343,6 +336,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
         {view && <div className="lightbox" role="dialog" aria-label="Imagem" tabIndex={-1} ref={el => el?.focus()} onClick={() => setView(null)} onKeyDown={e => { if (e.key === 'Escape') setView(null) }}><img src={view} alt="" /></div>}
         {inspect && <TaskInspector taskId={task.id} pkgs={pkgs.list} reload={pkgs.load} onClose={() => setInspect(false)} />}
         {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
+        {cps && <Checkpoints taskId={task.id} onClose={() => { setCps(false); load(); onChange() }} />}
         {ask && <Confirm title={ask.title} body={ask.body} action={ask.action} tone="primary" onConfirm={ask.run} onClose={() => setAsk(null)} />}
         <small className="kbd-hint">Ctrl+Enter envia. Modelo e esforço valem a partir da próxima mensagem.</small>
       </div>

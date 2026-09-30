@@ -22,7 +22,8 @@ export type Metric = {
 export type Ev =
   | { kind: 'session'; id: string }
   | { kind: 'text'; text: string; delta?: boolean } // delta: pedaco de um texto maior, concatenar sem separador
-  | { kind: 'tool'; name: string; detail?: string } // detail: alvo curto (arquivo, padrao, comando), so para mostrar o que o agente faz agora
+  | { kind: 'tool'; name: string; detail?: string; ref?: string } // detail: alvo curto (arquivo, padrao, comando), so para mostrar o que o agente faz agora; ref: id da chamada
+  | { kind: 'toolResult'; ref: string; ok: boolean | null; output?: string } // resultado informado pela CLI (erro/exit code); null = a CLI nao disse
   | { kind: 'usage'; data: any } // janelas de limite da CONTA (rate limit), nao e contexto
   | { kind: 'context'; metric: Metric; accumulate?: boolean; key?: string } // accumulate: somar consumo ao anterior (eventos por passo); key: id do passo, repetido = ignorado
   | { kind: 'note'; text: string } // aviso nao fatal (ex.: acao negada pela protecao do provedor)
@@ -92,12 +93,18 @@ export const AGENTS: Record<string, Agent> = {
       if (ev.type === 'assistant') {
         for (const c of ev.message?.content ?? []) {
           if (c.type === 'text' && c.text) out.push({ kind: 'text', text: c.text })
-          else if (c.type === 'tool_use') { const detail = toolDetail(c.input); out.push(detail ? { kind: 'tool', name: c.name, detail } : { kind: 'tool', name: c.name }) }
+          else if (c.type === 'tool_use') { const detail = toolDetail(c.input); out.push({ kind: 'tool', name: c.name, ...(detail ? { detail } : {}), ...(str(c.id) ? { ref: c.id } : {}) }) }
         }
         // Contexto ocupado = entrada total da ULTIMA chamada ao modelo (entrada + cache lido + cache criado).
         const u = ev.message?.usage
         if (u && num(u.input_tokens) !== undefined)
           out.push({ kind: 'context', metric: { occupied: u.input_tokens + (num(u.cache_read_input_tokens) ?? 0) + (num(u.cache_creation_input_tokens) ?? 0), source: 'usage da ultima mensagem do Claude' } })
+      }
+      // Resultado de cada ferramenta: o Claude marca is_error (no Bash, exit code diferente de zero).
+      if (ev.type === 'user') for (const c of ev.message?.content ?? []) {
+        if (c?.type !== 'tool_result' || !str(c.tool_use_id)) continue
+        const output = typeof c.content === 'string' ? c.content : Array.isArray(c.content) ? c.content.map((x: any) => (x?.type === 'text' ? x.text : '')).join('\n') : ''
+        out.push({ kind: 'toolResult', ref: c.tool_use_id, ok: typeof c.is_error === 'boolean' ? !c.is_error : null, output: output.slice(-20_000) })
       }
       if (ev.type === 'rate_limit_event' && ev.rate_limit_info?.unifiedWindows) out.push({ kind: 'usage', data: ev.rate_limit_info.unifiedWindows })
       if (ev.type === 'result') {
@@ -125,8 +132,10 @@ export const AGENTS: Record<string, Agent> = {
     parse: ev => {
       switch (ev.type) {
         case 'thread.started': return str(ev.thread_id) ? [{ kind: 'session', id: ev.thread_id }] : []
-        case 'item.started': return ev.item?.type === 'command_execution' ? [{ kind: 'tool', name: String(ev.item.command) }] : []
-        case 'item.completed': return ev.item?.type === 'agent_message' && ev.item.text ? [{ kind: 'text', text: ev.item.text }] : []
+        case 'item.started': return ev.item?.type === 'command_execution' ? [{ kind: 'tool', name: String(ev.item.command), ...(str(ev.item.id) ? { ref: ev.item.id } : {}) }] : []
+        case 'item.completed':
+          if (ev.item?.type === 'command_execution' && str(ev.item.id)) return [{ kind: 'toolResult', ref: ev.item.id, ok: typeof ev.item.exit_code === 'number' ? ev.item.exit_code === 0 : null, output: String(ev.item.aggregated_output ?? '').slice(-20_000) }]
+          return ev.item?.type === 'agent_message' && ev.item.text ? [{ kind: 'text', text: ev.item.text }] : []
         // `exec --json` so informa o uso acumulado do thread; janela e contexto ocupado nao vem neste fluxo.
         case 'turn.completed': return [
           // Semantica conferida no arquivo de sessao do codex 0.147.0: cached_input_tokens esta dentro de input_tokens e

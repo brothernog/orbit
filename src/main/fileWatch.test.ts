@@ -48,6 +48,7 @@ test('pasta real com git: mudancas, diff do arquivo, caminho de fora recusado e 
   assert.ok(seen.includes('player.gd'), `observador nao viu a gravacao: ${seen}`)
   assert.ok(byPath['player.gd'].lastWrite! > 0)
   assert.match(await fileDiff(dir, 'player.gd'), /-b\n\+B/)
+  assert.match(await fileDiff(dir, 'player.gd', true), /@@[^\n]*\n a\n-b\n\+B\n c\n\+d\n?$/) // arquivo inteiro: contexto + removido + adicionado
   assert.equal(await fileDiff(dir, 'save/slot.gd'), '+x\n+y')
   await assert.rejects(fileDiff(dir, '../fora.txt'), /fora da pasta/)
 })

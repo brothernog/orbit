@@ -26,7 +26,10 @@ export function useProjects(games: string[], everyMs = 60_000) {
     const load = (maxAge: number) => games.forEach(g => get(g, maxAge).then(i => live && setMap(m => ({ ...m, [g]: i })), () => {}))
     load(everyMs)
     const t = setInterval(() => load(0), everyMs)
-    const off = onChat(ev => { if (ev.done) load(0) }) // agente terminou: Git provavelmente mudou
+    const off = onChat(ev => {
+      if (games.includes(ev.worktreesChanged)) { cache.delete(ev.worktreesChanged); load(0) }
+      else if (ev.done) load(0) // agente terminou: Git provavelmente mudou
+    })
     return () => { live = false; clearInterval(t); off() }
   }, [key])
   return map

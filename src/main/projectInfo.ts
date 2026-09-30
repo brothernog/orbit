@@ -3,6 +3,7 @@
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { samePath } from './guard.ts'
 
 export type FileChange = { path: string; status: 'M' | 'A' | 'D' | '?' }
 export type GitState = { branch: string | null; upstream: string | null; ahead: number; behind: number; files: FileChange[] }
@@ -65,9 +66,9 @@ export async function projectInfo(dir: string, taskOf: (worktree: string) => { i
     const noRepo = /not a git repository/i.test(String(e?.stderr ?? e?.message))
     return { ...kind, repo: false, git: null, worktrees: [], error: noRepo ? undefined : String(e?.message ?? e).slice(0, 200) }
   }
-  const same = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
   let list: { path: string; branch: string | null }[] = []
-  try { list = parseWorktrees(await run(dir, ['worktree', 'list', '--porcelain'])).filter(w => !same(w.path, dir) && fs.existsSync(w.path)) } catch {}
+  // Caminho real: nome curto 8.3 (Windows) ou symlink nao duplica a pasta principal.
+  try { list = parseWorktrees(await run(dir, ['worktree', 'list', '--porcelain'])).filter(w => fs.existsSync(w.path) && !samePath(w.path, dir)) } catch {}
   const worktrees = await Promise.all(list.map(async w => {
     let st: GitState = { branch: w.branch, upstream: null, ahead: 0, behind: 0, files: [] }
     try { st = parseStatus(await run(w.path, ['status', '--porcelain=v1', '-b'])) } catch {}
