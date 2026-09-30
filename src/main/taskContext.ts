@@ -7,7 +7,7 @@ import { authorizedPackages, type Grant } from './consent.ts'
 import { lookupTestEvidence, recordTestEvidence } from './evidence.ts'
 import { inScope } from './guard.ts'
 import type { ContextLimits } from './limits.ts'
-import { addMemory, fileEvidence, getMemory, KINDS, normalize, TODO_STATES, validate, type MemoryRow } from './memory.ts'
+import { addMemory, fileEvidence, getMemory, KINDS, normalize, TODO_STATES, validate, type EvidenceReads, type MemoryRow } from './memory.ts'
 import { loadSkill, READ_SKILL_TOOL_NAME, skillTool } from './skills.ts'
 import type { EngineId } from './engines.ts'
 import type { ToolDef, ToolResult } from './mcp.ts'
@@ -108,9 +108,10 @@ const VALIDITY_PT: Record<string, string> = { valid: 'valido', stale: 'DESATUALI
 function readContext(db: DatabaseSync, lim: ContextLimits, c: ToolCtx, a: any): string {
   const mult = a.expand === true ? 3 : 1
   const chars = lim.queryChars * mult
+  const seen: EvidenceReads = new Map()
   const audit = (r: Readable) => {
     if (!r.live) return r.source === 'package' ? 'snapshot aprovado' : ''
-    const v = validate(db, r.live, c.cwd)
+    const v = validate(db, r.live, c.cwd, seen)
     return `${VALIDITY_PT[v.validity]}${v.changed.length ? ` (mudou: ${v.changed.slice(0, 3).join(', ')})` : ''}`
   }
   if (a.artifactId !== undefined) {

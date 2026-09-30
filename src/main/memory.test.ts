@@ -109,3 +109,19 @@ test('artefatos: guardados uma vez, leitura paginada, so tarefa e leitores autor
   assert.equal(listArtifacts(db, T1, 'del:2').length, 0)
   assert.equal(listArtifacts(db, T1, 'g:outro')[0].size, 6000) // leitor acrescentado pelo reaproveitamento
 })
+
+test('validacao em lote: a mesma evidencia e lida e hasheada uma vez por passada; o hash continua obrigatorio', t => {
+  fs.writeFileSync(path.join(ws, 'src', 'lote.ts'), 'export const lote = 1\n')
+  const ev = { files: fileEvidence(ws, ['src/lote.ts']) }
+  const T = createTask(db, ws, 'lote')
+  const ids = Array.from({ length: 30 }, (_, i) => addMemory(db, mk({ taskId: T, title: `Item ${i}`, content: `conteudo ${i}`, evidence: ev })).id)
+  const reads = t.mock.method(fs, 'readFileSync')
+  const seen = new Map()
+  assert.ok(ids.every(id => validate(db, getMemory(db, T, id)!, ws, seen).validity === 'valid'))
+  assert.equal(reads.mock.calls.length, 1)
+  // Mesmo tamanho, conteudo diferente: so o hash revela; uma passada nova le de novo (nada vale entre chamadas).
+  fs.writeFileSync(path.join(ws, 'src', 'lote.ts'), 'export const lote = 2\n')
+  const fresh = new Map()
+  assert.ok(ids.every(id => validate(db, getMemory(db, T, id)!, ws, fresh).validity === 'stale'))
+  assert.equal(reads.mock.calls.length, 2)
+})

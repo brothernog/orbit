@@ -48,7 +48,7 @@ import { normalizeNotify, noticeFor, providerLabel, runChanges, type Notice, typ
 import { attachImages, readImage } from './attachments.ts'
 import { taskBriefs } from './briefs.ts'
 
-import { searchMemory, validate } from './memory.ts'
+import { searchMemory, validate, type EvidenceReads } from './memory.ts'
 import { newToken, startMcpServer, type ToolDef } from './mcp.ts'
 import { addRule, answerText, assessRule, listRules, nativePolicy, normalizePermissionSettings, PERMISSION_TOOL, PERMISSION_TOOL_NAME, PermissionBroker, removeRule, type Decision as PermDecision } from './permissions.ts'
 
@@ -1152,7 +1152,8 @@ const handlers: Record<string, (...a: any[]) => any> = {
     const t = asTask(taskId)
     let cwd: string | null = null
     try { cwd = await taskCwd(t) } catch {}
-    return searchMemory(db, { taskId: t.id, limit: 500, state: undefined }).items.map(m => ({ ...m, validity: cwd ? validate(db, m, cwd).validity : 'unknown' }))
+    const seen: EvidenceReads = new Map()
+    return searchMemory(db, { taskId: t.id, limit: 500, state: undefined }).items.map(m => ({ ...m, validity: cwd ? validate(db, m, cwd, seen).validity : 'unknown' }))
   },
   listTaskArtifacts: (taskId: number) => listArtifacts(db, asTask(taskId).id),
   readTaskArtifact: (taskId: number, id: number, offset?: number) =>
