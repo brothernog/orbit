@@ -484,7 +484,7 @@ const delegationDeps: Deps = {
     const grants = liveGrants(db, p.taskId, p.cwd, p.engines)
     const set = childToolset(p.provider, p.mode, p.scope, grantedEngines(grants))
     set.mcp.push(...grantedTools(grants))
-    try { wire = mcpWire(p.provider, { url: (await getMcp()).url, token, timeoutSec: 600, dir: mcpDir(), tools: set.mcp.map(x => x.name), permission: perm }) } catch { return null }
+    try { wire = mcpWire(p.provider, { url: (await getMcp()).url, token, timeoutSec: 600, dir: mcpDir(), tools: set.mcp.map(x => x.name), permission: perm, strict: p.mode === 'read' }) } catch { return null }
     if (!wire) return null
     tokens.set(token, { kind: 'child', perm, tools: set.mcp, engines: grants, t: { taskId: p.taskId, lineage: p.lineage, auth: p.auth, role: 'child', cwd: p.cwd, scope: p.scope, delegationId: p.delegationId, provider: p.provider } })
     const w = wire

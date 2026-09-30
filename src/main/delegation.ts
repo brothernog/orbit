@@ -470,7 +470,7 @@ export function reconcileDelegations(db: DatabaseSync) {
 // ---- Como cada provedor enxerga as ferramentas (sem tocar em configuracoes globais)
 export type McpWire = { extra: string[]; env: Record<string, string>; cleanup: () => void }
 const QUOTE_OK = /^[^"%^&|<>\r\n]+$/
-export function mcpWire(provider: string, o: { url: string; token: string; timeoutSec: number; dir: string; tools?: string[]; permission?: boolean }): McpWire | null {
+export function mcpWire(provider: string, o: { url: string; token: string; timeoutSec: number; dir: string; tools?: string[]; permission?: boolean; strict?: boolean }): McpWire | null {
   const noop = () => {}
   if (provider === 'codex')
     return {
@@ -493,8 +493,10 @@ export function mcpWire(provider: string, o: { url: string; token: string; timeo
     // (que aplicam os proprios limites); nenhuma outra permissao e ampliada.
     // permission: o pop-up do dashboard responde as permissoes do modo headless (--permission-prompt-tool); a propria ferramenta de pergunta nao pede permissao.
     const allowed = [...(o.tools ?? [TOOL_NAME]), ...(o.permission ? ['permission_prompt'] : [])].map(t => `mcp__dashboard__${t}`)
+    // strict: so o servidor do dashboard (filho de leitura). Sem ele o Claude carrega tambem os MCP globais/do projeto e as definicoes
+    // dessas ferramentas entram no contexto. Edicao e pai ficam sem: podem precisar de um MCP do projeto (ex.: Godot do jogo).
     // Caminho SEM aspas: cliSpawn so as poe quando roda pelo cmd.exe (claude.cmd); claude.exe (ou Linux) as receberia literais e recusaria a configuracao.
-    return { extra: ['--mcp-config', file, ...(o.permission ? ['--permission-prompt-tool', 'mcp__dashboard__permission_prompt'] : []), '--allowedTools', ...allowed], env: { MCP_TOOL_TIMEOUT: String(o.timeoutSec * 1000) }, cleanup: () => { try { fs.rmSync(file, { force: true }) } catch {} } }
+    return { extra: ['--mcp-config', file, ...(o.strict ? ['--strict-mcp-config'] : []), ...(o.permission ? ['--permission-prompt-tool', 'mcp__dashboard__permission_prompt'] : []), '--allowedTools', ...allowed], env: { MCP_TOOL_TIMEOUT: String(o.timeoutSec * 1000) }, cleanup: () => { try { fs.rmSync(file, { force: true }) } catch {} } }
   }
   return null // gemini: a CLI so le servidores MCP de arquivos de configuracao (global ou do projeto); nao alteramos esses arquivos
 }
