@@ -10,10 +10,12 @@ files:
   - out/**
   - resources/icon.png
   - package.json
-# Skills lidas em runtime por process.resourcesPath/skills (index.ts: setSkillRoots).
+# Skills lidas em runtime por process.resourcesPath/skills (index.ts: setSkillRoots); script de inspeção Blender por .../blender (setBlenderScriptRoots).
 extraResources:
   - from: resources/skills
     to: skills
+  - from: resources/blender
+    to: blender
 icon: resources/icon.png
 electronFuses:
   runAsNode: false

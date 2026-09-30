@@ -25,7 +25,7 @@ const call = (c: ToolCtx, args: any) => callTaskTool(db, DEFAULT_LIMITS, c, 'rea
 test('os recursos empacotados existem e a skill geral NAO e carregavel por esta ferramenta', () => {
   setSkillRoots([REAL])
   for (const n of SKILL_NAMES) { const s = readSkill(n); assert.ok(s.text.length > 500 && /^[0-9a-f]{12}$/.test(s.version) && !s.text.startsWith('---'), n) } // sem front matter, com versao
-  assert.deepEqual(SKILL_NAMES, ['task-delegation', 'task-memory', 'ponytail', 'linkedin'])
+  assert.deepEqual(SKILL_NAMES, ['task-delegation', 'task-memory', 'ponytail', 'linkedin', 'godot', 'unity', 'blender'])
   assert.throws(() => readSkill('dashboard-token-efficiency'), SkillError) // guia manual: nunca carregado automaticamente
   assert.ok(fs.existsSync(path.join(REAL, 'dashboard-token-efficiency', 'SKILL.md'))) // continua no repositorio como guia manual
 })
@@ -92,3 +92,18 @@ test('empacotamento: recurso ausente e pasta ausente falham com mensagem clara e
 })
 
 test.after(() => { try { db.close(); fs.rmSync(tmp, { recursive: true, force: true }) } catch {} })
+
+test('skills de engine: so entram no anuncio, no resumo e na leitura quando o organizador concedeu a engine', () => {
+  setSkillRoots([REAL])
+  assert.deepEqual(skillsFor('parent', ['unity']), ['task-delegation', 'task-memory', 'ponytail', 'linkedin', 'unity'])
+  assert.deepEqual(skillsFor('child', ['blender', 'godot']), ['task-memory', 'ponytail', 'godot', 'blender'])
+  assert.deepEqual((skillTool('child', ['unity']) as any).inputSchema.properties.name.enum, ['task-memory', 'ponytail', 'unity'])
+  assert.ok(!/unity|blender|godot/.test(JSON.stringify(skillTool('parent'))))
+  const brief = runtimeBrief({ memoryTools: true, workspaceTools: false, skills: 'parent', engines: ['unity'] })
+  assert.match(brief, /read_task_skill \(task-memory, task-delegation, ponytail, linkedin, unity\)/); assert.match(brief, /Projeto Unity: consulte unity_\*/)
+  assert.ok(!/Projeto/.test(runtimeBrief({ memoryTools: false, workspaceTools: false, engines: ['unity'] }))) // sem MCP: nao promete ferramenta
+  const c = ctx('child', 'sk-e')
+  assert.match(call(c, { name: 'unity' }).text, /nao esta disponivel para o seu papel ou organizador/) // sem concessao
+  assert.equal(call({ ...c, engines: ['unity'] }, { name: 'unity' }).isError, false)
+  assert.equal(call({ ...c, engines: ['unity'] }, { name: 'blender' }).isError, true)
+})

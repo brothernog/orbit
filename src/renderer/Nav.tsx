@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from './api'
-import { GROUP_COLORS, initials, SUGGESTED, type Group, type GodotConfig } from './groups'
+import { GROUP_COLORS, initials, SUGGESTED, type EngineConfig, type EngineId, type EngineSettings, type Group } from './groups'
 import './godot.css'
 
 // Icone do projeto: o da propria pasta (lido pelo processo principal) ou um padrao geometrico gerado do caminho, sempre igual.
@@ -86,10 +86,17 @@ export function Confirm({ title, body, action, tone = 'danger', onConfirm, onClo
 }
 
 // Criar ou editar um grupo do trilho: previa ao vivo, sugestoes de um clique e cor. Enter salva.
-export function GroupDialog({ edit, count, onSave, onClose }: { edit?: Group; count: number; onSave: (name: string, color: string, godot: GodotConfig) => void; onClose: () => void }) {
+// Integrações por organizador: ferramentas sob demanda só para agentes invocados nos projetos daquela engine.
+const ENGINE_UI: { id: EngineId; label: string; hint: string; exe: string; placeholder: string; note: string }[] = [
+  { id: 'godot', label: 'Godot', hint: 'Ferramentas sob demanda para agentes invocados nos projetos Godot deste organizador.', exe: 'Executável Godot 4', placeholder: 'Vazio usa godot no PATH', note: 'Caminho de executável direto. Salvar não inicia a engine.' },
+  { id: 'unity', label: 'Unity', hint: 'Cenas, prefabs, GUIDs e logs de projetos Unity lidos localmente, sem gastar tokens com YAML.', exe: 'Editor Unity (opcional)', placeholder: 'Unity.exe do Hub; vazio usa unity no PATH', note: 'As consultas não abrem o editor; o executável só serve para comandos locais.' },
+  { id: 'blender', label: 'Blender', hint: 'Inspeção e auditoria de arquivos .blend em segundo plano, sem salvar e sem scripts embutidos.', exe: 'Executável Blender', placeholder: 'Vazio usa blender no PATH', note: 'Usado nas consultas dos agentes, em segundo plano. Salvar não inicia o Blender.' }
+]
+export function GroupDialog({ edit, count, onSave, onClose }: { edit?: Group; count: number; onSave: (name: string, color: string, engines: EngineSettings) => void; onClose: () => void }) {
   const [v, setV] = useState(edit?.name ?? '')
   const [color, setColor] = useState(edit?.color ?? GROUP_COLORS[0])
-  const [godot, setGodot] = useState<GodotConfig>(edit?.godot ?? { enabled: false, executable: '' })
+  const [engines, setEngines] = useState<Record<EngineId, EngineConfig>>(() => Object.fromEntries(ENGINE_UI.map(e => [e.id, edit?.[e.id] ?? { enabled: false, executable: '' }])) as Record<EngineId, EngineConfig>)
+  const setEngine = (id: EngineId, v: Partial<EngineConfig>) => setEngines(all => ({ ...all, [id]: { ...all[id], ...v } }))
   useEffect(() => {
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', esc)
@@ -99,7 +106,7 @@ export function GroupDialog({ edit, count, onSave, onClose }: { edit?: Group; co
   return (
     <div className="modal-back" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
       <form className="modal group-dlg" role="dialog" aria-modal="true" aria-label={edit ? 'Editar organizador' : 'Novo organizador'} style={{ '--g': color } as CSSProperties}
-        onSubmit={e => { e.preventDefault(); if (ok) { onSave(v.trim().slice(0, 40), color, { ...godot, executable: godot.executable.trim() || 'godot' }); onClose() } }}>
+        onSubmit={e => { e.preventDefault(); if (ok) { onSave(v.trim().slice(0, 40), color, Object.fromEntries(ENGINE_UI.filter(e => e.id === 'godot' || engines[e.id].enabled || edit?.[e.id]).map(e => [e.id, { ...engines[e.id], executable: engines[e.id].executable.trim() || e.id }]))); onClose() } }}>
         <div className="gd-preview" aria-hidden="true">
           <span className="gd-folder">{initials(v.trim() || 'Wo')}</span>
           <span className="gd-name">{v.trim() || 'Nome do organizador'}</span>
@@ -114,11 +121,11 @@ export function GroupDialog({ edit, count, onSave, onClose }: { edit?: Group; co
           <div className="gd-colors" role="radiogroup" aria-label="Cor do organizador">
             {GROUP_COLORS.map(c => <button type="button" key={c} role="radio" aria-checked={c === color} aria-label={`Cor ${c}`} style={{ '--g': c } as CSSProperties} onClick={() => setColor(c)} />)}
           </div>
-          <div className="gd-godot">
-            <label className="check"><input type="checkbox" checked={godot.enabled} onChange={e => setGodot(g => ({ ...g, enabled: e.target.checked }))} />Ativar integração Godot</label>
-            <small>Ferramentas sob demanda para agentes invocados nos projetos Godot deste organizador.</small>
-            {godot.enabled && <label>Executável Godot 4<input aria-label="Executável Godot do organizador" value={godot.executable} maxLength={2000} placeholder="Vazio usa godot no PATH" onChange={e => setGodot(g => ({ ...g, executable: e.target.value }))} /><small>Caminho de executável direto. Salvar não inicia a engine.</small></label>}
-          </div>
+          {ENGINE_UI.map(e => <div className="gd-godot" key={e.id}>
+            <label className="check"><input type="checkbox" checked={engines[e.id].enabled} onChange={x => setEngine(e.id, { enabled: x.target.checked })} />Ativar integração {e.label}</label>
+            <small>{e.hint}</small>
+            {engines[e.id].enabled && <label>{e.exe}<input aria-label={`Executável ${e.label} do organizador`} value={engines[e.id].executable} maxLength={2000} placeholder={e.placeholder} onChange={x => setEngine(e.id, { executable: x.target.value })} /><small>{e.note}</small></label>}
+          </div>)}
         </div>
         <footer>
           <button type="button" onClick={onClose}>Cancelar</button>

@@ -38,7 +38,7 @@ export const SKIP_DIRS = new Set(['node_modules', '.git', '.worktrees', 'out', '
 // Procura .blend sem ler conteúdo: profundidade e entradas limitadas; o resultado fica em cache curto para o anúncio de ferramentas.
 const blendCache = new Map<string, { at: number; found: boolean }>()
 export function hasBlendFiles(cwd: string, limit = 5000, depth = 4): boolean {
-  const key = path.resolve(cwd), hit = blendCache.get(key)
+  const key = `${depth}:${limit}:${path.resolve(cwd)}`, hit = blendCache.get(key)
   if (hit && Date.now() - hit.at < 15_000) return hit.found
   let seen = 0, found = false
   const visit = (dir: string, d: number) => {
@@ -50,7 +50,7 @@ export function hasBlendFiles(cwd: string, limit = 5000, depth = 4): boolean {
       if (e.isDirectory() && d < depth && !e.name.startsWith('.') && !SKIP_DIRS.has(e.name)) visit(path.join(dir, e.name), d + 1)
     }
   }
-  visit(key, 0)
+  visit(path.resolve(cwd), 0)
   blendCache.set(key, { at: Date.now(), found })
   if (blendCache.size > 200) blendCache.delete(blendCache.keys().next().value as string)
   return found

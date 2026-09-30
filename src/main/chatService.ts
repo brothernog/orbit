@@ -19,7 +19,8 @@ import { nativePolicy, normalizePermissionSettings, PermissionBroker } from './p
 import { CHAT_IMAGES_HINT, CHAT_TITLE_HINT, runtimeBrief } from './prompt.ts'
 import { runChat } from './runner.ts'
 import { toolsFor } from './taskContext.ts'
-import { GODOT_TOOLS } from './godotTools.ts'
+import { grantedEngines, grantedTools } from './engineMcp.ts'
+import { ENGINE_LABELS, sameGrants, type EngineGrants } from './engines.ts'
 import { recordUsage } from './usage.ts'
 import { finishRun, savePartial, startRun } from './runs.ts'
 import { readSkill } from './skills.ts'
@@ -44,7 +45,7 @@ type ChatDeps = {
   registerParent: (token: string, parent: ParentCtx, perm: boolean) => void; unregisterToken: (token: string) => void
   attachRoot: string; linkedinDir: string
   onRunStart?: (taskId: number, runId: number, cwd: string) => void // linha de base dos arquivos para o resumo do aviso
-  godotOrganizer?: (game: string, cwd: string) => string | undefined
+  engineGrants?: (game: string, cwd: string) => EngineGrants // engines do organizador presentes na pasta (Godot/Unity/Blender)
   summaryTitles?: () => boolean // Configuracoes: titulo-resumo pelo agente (padrao ligado)
 }
 export function createChatService(d: ChatDeps) {
@@ -109,20 +110,20 @@ export function createChatService(d: ChatDeps) {
     let token = ''
     const pset = permissionSettings()
     const perm = sel.provider === 'claude' && pset.prompt // Claude: as permissoes do modo headless vao ao pop-up do dashboard
-    const godotOrganizerId = d.godotOrganizer?.(t.game, cwd)
-    if (ds.enabled || perm || godotOrganizerId) {
+    const engines = d.engineGrants?.(t.game, cwd) ?? {}, hasEngines = grantedEngines(engines).length > 0
+    if (ds.enabled || perm || hasEngines) {
       try {
         token = newToken()
         // O pai pode esperar a aprovacao humana antes de o filho comecar (e o usuario responder um pedido de permissao): o timeout do cliente MCP cobre tudo.
         const timeoutSec = (ds.timeoutMin + Math.max(contextLimits().approvalTimeoutMin, pset.timeoutMin)) * 60 + 60
-        wire = mcpWire(sel.provider, { url: (await getMcp()).url, token, timeoutSec, dir: mcpDir(), tools: [...toolsFor('parent', ds.enabled ? delegateTool() : undefined), ...(godotOrganizerId ? GODOT_TOOLS : [])].map(x => x.name), permission: perm })
+        wire = mcpWire(sel.provider, { url: (await getMcp()).url, token, timeoutSec, dir: mcpDir(), tools: [...toolsFor('parent', ds.enabled ? delegateTool() : undefined, grantedEngines(engines)), ...grantedTools(engines)].map(x => x.name), permission: perm })
       } catch (e: any) { // a delegacao e um extra: se o servidor local nao subir, a conversa segue sem a ferramenta
         logFor('app')({ category: 'config', detail: `ferramenta de delegacao indisponivel: ${e?.message}` })
       }
     }
     // MCP é assíncrono: um comando/execução pode reservar a pasta durante sua preparação.
     try { requireIdle() } catch(e) { wire?.cleanup(); throw e }
-    if (godotOrganizerId && d.godotOrganizer?.(t.game, cwd) !== godotOrganizerId) { wire?.cleanup(); throw Error('A configuração Godot do organizador mudou. Envie novamente para usar a configuração atual.') }
+    if (hasEngines && !sameGrants(d.engineGrants?.(t.game, cwd), engines)) { wire?.cleanup(); throw Error(`A configuração ${grantedEngines(engines).map(e => ENGINE_LABELS[e]).join('/')} do organizador mudou. Envie novamente para usar a configuração atual.`) }
     // Politica nativa do "sempre permitir" (Codex: sandbox/rede; OpenCode: --auto e regras). Claude pergunta pelo pop-up (acima).
     const np = nativeFor(sel.provider)
     const extra = [...(wire?.extra ?? []), ...(np.opts.extra ?? [])]
@@ -137,13 +138,13 @@ export function createChatService(d: ChatDeps) {
     // Identidade efetiva da execucao (autoriza toda leitura de memoria/artefatos pelas ferramentas MCP): mesma sessao + mesmo destinatario = mesma identidade;
     // sessao nova recebe uma interna e o backend a vincula ao ID nativo quando o executor o informar (onSession).
     const grant = openGrant(db, { taskId: t.id, recipient, sessionId: sid ?? null })
-    const dctx: ParentCtx = { taskId: t.id, runId: 0, provider: sel.provider, accountId: sel.accountId, cwd, lineage, auth: grant, depth: 0, fails: new Map(), children: new Set(), godotOrganizerId }
+    const dctx: ParentCtx = { taskId: t.id, runId: 0, provider: sel.provider, accountId: sel.accountId, cwd, lineage, auth: grant, depth: 0, fails: new Map(), children: new Set(), ...(hasEngines ? { engines } : {}) }
     const pkgText = plan.deliver.length ? renderPackage(plan.deliver.flatMap(x => x.items), { uncertain: plan.deliver.some(x => x.uncertain) }) : ''
     const first = !sid && !(db.prepare("SELECT 1 FROM messages WHERE task_id=? AND role='user'").get(t.id))
     // Titulo-resumo na propria 1a resposta (tag removida do texto): sem chamada extra de CLI. Medido contra ferramenta MCP em docs/roadmap.md.
     const titleTag = first && t.title === DEFAULT_TITLE && (d.summaryTitles?.() ?? true)
     const pin = first && t.pin_id ? (db.prepare('SELECT * FROM pins WHERE id=?').get(t.pin_id) as any) : null
-    const brief = wire && !sid ? runtimeBrief({ memoryTools: true, workspaceTools: false, skills: 'parent' }) : '' // regras curtas so na sessao nova: a sessao as retem
+    const brief = wire && !sid ? runtimeBrief({ memoryTools: true, workspaceTools: false, skills: 'parent', engines: grantedEngines(engines) }) : '' // regras curtas so na sessao nova: a sessao as retem
     // Pagina LinkedIn: a skill vai inteira na sessao nova (e o unico assunto dali); a pasta atual e a mesa do agente.
     const li = !sid && sameDir(cwd, linkedinDir) ? `[Pagina LinkedIn do dashboard: a pasta atual e a sua mesa]\n${readSkill('linkedin').text}\n\n` : ''
     const input = [pin && `Resolva este problema do jogo. ${pin.title}. ${pin.body ?? ''}\n\n`, !sid && `${CHAT_IMAGES_HINT}\n\n`, brief && `${brief}\n\n`, li, pkgText && `${pkgText}\n\n`, titleTag && `${CHAT_TITLE_HINT}\n\n`, text].filter(Boolean).join('')

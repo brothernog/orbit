@@ -423,7 +423,7 @@ export default function App() {
     { label: 'Recolher todas as pastas', run: () => x.games.forEach(g => toggleFolder(g, false)) },
   ] : [
     { label: 'Adicionar pasta…', run: () => addGame(x.id) },
-    { label: 'Configurar organizador…', hint: 'Nome, cor e integração Godot', run: () => setGroupDlg({ games: [], edit: x }) },
+    { label: 'Configurar organizador…', hint: 'Nome, cor e integrações Godot, Unity e Blender', run: () => setGroupDlg({ games: [], edit: x }) },
     { label: 'Recolher todas as pastas', run: () => x.games.forEach(g => toggleFolder(g, false)) },
     { label: 'Desfazer organizador', hint: 'As pastas vão para "Sem organizador"; nada é apagado', run: () => saveGroups(groups.filter(y => y.id !== x.id)) },
   ] })
@@ -540,7 +540,7 @@ export default function App() {
       <Toasts openTaskId={inProject && taskView ? task?.id : undefined} onOpen={(g, id, f) => { openIn(g, id); if (f) { setFiles(true); setPanel(false) } }} />
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
       {groupDlg && <GroupDialog edit={groupDlg.edit} count={groupDlg.games.length} onClose={() => setGroupDlg(null)}
-        onSave={(n, c, godot) => saveGroups(groupDlg.edit ? groups.map(y => (y.id === groupDlg.edit!.id ? { ...y, name: n, color: c, godot } : y)) : newGroup(groups, n, c, groupDlg.games, godot))} />}
+        onSave={(n, c, engines) => saveGroups(groupDlg.edit ? groups.map(y => (y.id === groupDlg.edit!.id ? { ...y, name: n, color: c, ...engines } : y)) : newGroup(groups, n, c, groupDlg.games, engines))} />}
       {toHide && <Confirm title={`Remover "${name(toHide)}" da lista?`} action="Remover da lista" onClose={() => setToHide(null)} onConfirm={() => hideProject(toHide)}
         body="Nada é apagado: a pasta, as conversas e o histórico continuam onde estão. Para trazer de volta, adicione a pasta de novo pelo +." />}
       {toDelete && <Confirm title={`Excluir "${toDelete.title}"?`} action="Excluir conversa" onClose={() => setToDelete(null)} onConfirm={() => deleteTask(toDelete)}

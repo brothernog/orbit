@@ -13,7 +13,9 @@ import { backupGate } from './backupGate.ts'
 import { createWorktreeService } from './worktrees.ts'
 import { resetWorkspace, unlinkWorktree } from './worktreeTasks.ts'
 import { godotDiagnostics, godotOrganizer, godotProbe, godotProject } from './godot.ts'
-import { GODOT_TOOLS, callGodotTool } from './godotTools.ts'
+import { callEngineTool, engineOf, grantedEngines, grantedTools, liveGrants } from './engineMcp.ts'
+import { engineGrants, type EngineGrants } from './engines.ts'
+import { setBlenderScriptRoots } from './blender.ts'
 import { prepareGodot, validatePreparedGodot, godotCommandError, godotBuildFile } from './godotFlow.ts'
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron'
 import { execFileSync } from 'node:child_process'
@@ -54,7 +56,7 @@ import { delegationReport, taskUsage } from './usage.ts'
 import { finishRun, reconcileRuns } from './runs.ts'
 import { projectInfo } from './projectInfo.ts'
 import { dropReceipts } from './workspaceTools.ts'
-import { dropSkillSession, setSkillRoots } from './skills.ts'
+import { dropSkillSession, READ_SKILL_TOOL_NAME, setSkillRoots, skillTool } from './skills.ts'
 import { markPublished, readDesk } from './linkedin.ts'
 import type { JarvisSettings } from './jarvis.ts'
 import { createTask, deleteTask, resetSession, getMetric, getSel, getTask, listTasks, profileOf, renameTask, saveMetric, saveSel, sessionOf, setArchived, setTaskState, taskForPin, taskMessages, TASK_STATES, type TaskSel } from './tasks.ts'
@@ -81,6 +83,7 @@ function openOrQuit() {
 }
 // Skills empacotadas (resources/skills) lidas sob demanda por read_task_skill: pasta do app (desenvolvimento e execucao do build) ou recursos do pacote.
 setSkillRoots([path.join(app.getAppPath(), 'resources', 'skills'), path.join(process.resourcesPath ?? '', 'skills')])
+setBlenderScriptRoots([path.join(app.getAppPath(), 'resources', 'blender'), path.join(process.resourcesPath ?? '', 'blender')])
 const db = openOrQuit()
 if (!db.prepare('SELECT 1 FROM accounts').get())
   db.prepare("INSERT INTO accounts (name, config_dir) VALUES ('Principal', NULL)").run()
@@ -438,7 +441,7 @@ const guard = new WorkspaceGuard()
 const waiters = new ApprovalWaiters()
 // Token por execucao: pai (delegar + contexto) ou filho (contexto + operacoes locais; nunca delegar).
 // perm: a ferramenta `permission_prompt` (pop-up de permissao) so e anunciada a execucoes do Claude que a receberam por --permission-prompt-tool.
-type McpCtx = { kind: 'parent'; p: ParentCtx; perm: boolean } | { kind: 'child'; t: ToolCtx; perm: boolean; tools: ToolDef[]; godotOrganizerId?: string } // tools: o que ESTE filho recebeu (childToolset)
+type McpCtx = { kind: 'parent'; p: ParentCtx; perm: boolean } | { kind: 'child'; t: ToolCtx; perm: boolean; tools: ToolDef[]; engines?: EngineGrants } // tools: o que ESTE filho recebeu (childToolset)
 const tokens = new Map<string, McpCtx>()
 const permissionSettings = () => normalizePermissionSettings(JSON.parse(getSetting('permissions') ?? 'null'))
 const broker = new PermissionBroker(db, { settings: permissionSettings, providers: Object.keys(AGENTS), emit: ev => emit(ev) })
@@ -451,14 +454,8 @@ const contextLimits = () => normalizeLimits(JSON.parse(getSetting('contextLimits
 const summaryTitles = () => getSetting('summaryTitles') !== 'off'
 const agentAliases = () => { try { return parseAliases(JSON.parse(getSetting('agentAliases') ?? '[]')) } catch { return [] } } // agentes nomeados (Configuracoes)
 const parentTool = (p: ParentCtx): ToolCtx => ({ taskId: p.taskId, lineage: p.lineage, auth: p.auth, role: 'parent', cwd: p.cwd, scope: [], runId: p.runId })
-const godotForProject = (game: string, cwd: string) => {
-  const organizer = godotOrganizer(db, game)
-  try { return organizer && fs.statSync(safeJoin(cwd, 'project.godot')).isFile() ? organizer.id : undefined } catch { return undefined }
-}
-const godotForExecution = (taskId: number, cwd: string, id?: string) => {
-  const task = getTask(db, taskId)
-  return id && task && samePath(task.worktree || task.game, cwd) && godotForProject(task.game, cwd) === id ? GODOT_TOOLS : []
-}
+// Engines (Godot/Unity/Blender) concedidas pelo organizador: revalidadas a cada anúncio e consulta.
+const ctxGrants = (c: McpCtx) => c.kind === 'parent' ? liveGrants(db, c.p.taskId, c.p.cwd, c.p.engines) : liveGrants(db, c.t.taskId, c.t.cwd, c.engines)
 const sameDir = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
 const note = (taskId: number, text: string) => {
   db.prepare("INSERT INTO messages (chat_key, role, text, task_id) VALUES (?, 'system', ?, ?)").run(`task:${taskId}`, text, taskId)
@@ -483,11 +480,12 @@ const delegationDeps: Deps = {
     const token = newToken()
     let wire: McpWire | null = null
     const perm = p.provider === 'claude' && permissionSettings().prompt
-    const set = childToolset(p.provider, p.mode, p.scope)
-    set.mcp.push(...godotForExecution(p.taskId, p.cwd, p.godotOrganizerId))
+    const grants = liveGrants(db, p.taskId, p.cwd, p.engines)
+    const set = childToolset(p.provider, p.mode, p.scope, grantedEngines(grants))
+    set.mcp.push(...grantedTools(grants))
     try { wire = mcpWire(p.provider, { url: (await getMcp()).url, token, timeoutSec: 600, dir: mcpDir(), tools: set.mcp.map(x => x.name), permission: perm }) } catch { return null }
     if (!wire) return null
-    tokens.set(token, { kind: 'child', perm, tools: set.mcp, godotOrganizerId: p.godotOrganizerId, t: { taskId: p.taskId, lineage: p.lineage, auth: p.auth, role: 'child', cwd: p.cwd, scope: p.scope, delegationId: p.delegationId, provider: p.provider } })
+    tokens.set(token, { kind: 'child', perm, tools: set.mcp, engines: grants, t: { taskId: p.taskId, lineage: p.lineage, auth: p.auth, role: 'child', cwd: p.cwd, scope: p.scope, delegationId: p.delegationId, provider: p.provider } })
     const w = wire
     // Recibos e skills entregues valem para a SESSAO: continuam so se a execucao terminou comprovadamente nela (continuacao do mesmo filho).
     return { extra: w.extra, env: w.env, tools: set.mcp.map(x => x.name), ...(set.native ? { native: set.native } : {}), cleanup: keep => { tokens.delete(token); if (!keep) { dropReceipts(p.auth.authId); dropSkillSession(p.auth.authId) } w.cleanup() } }
@@ -496,8 +494,10 @@ const delegationDeps: Deps = {
 let mcpServer: ReturnType<typeof startMcpServer<McpCtx>> | undefined
 const getMcp = () => (mcpServer ??= startMcpServer<McpCtx>({
   tools: c => {
-    const godot = c.kind === 'parent' ? godotForExecution(c.p.taskId, c.p.cwd, c.p.godotOrganizerId) : godotForExecution(c.t.taskId, c.t.cwd, c.godotOrganizerId)
-    const base = c.kind === 'parent' ? [...toolsFor('parent', delegationSettings().enabled ? delegateTool(agentAliases(), delegationSettings().readAgent) : undefined), ...godot] : c.tools.filter(t => !GODOT_TOOLS.some(g => g.name === t.name) || godot.length)
+    const grants = ctxGrants(c), live = grantedTools(grants)
+    // Filho: o conjunto fixado ao iniciar, menos engines revogadas depois (e a lista de skills de engine revogadas).
+    const base = c.kind === 'parent' ? [...toolsFor('parent', delegationSettings().enabled ? delegateTool(agentAliases(), delegationSettings().readAgent) : undefined, grantedEngines(grants)), ...live]
+      : c.tools.filter(t => !engineOf(t.name) || live.some(l => l.name === t.name)).map(t => t.name === READ_SKILL_TOOL_NAME ? skillTool('child', grantedEngines(grants)) : t)
     return [...base, ...(c.perm ? [PERMISSION_TOOL] : [])]
   },
   authorize: t => tokens.get(t) ?? null,
@@ -508,8 +508,9 @@ const getMcp = () => (mcpServer ??= startMcpServer<McpCtx>({
     }
     if (c.kind === 'parent' && name === TOOL_NAME) return runDelegation(delegationDeps, c.p, args, signal)
     if (c.kind === 'child' && !c.tools.some(t => t.name === name)) return { text: 'Ferramenta nao anunciada para esta execucao.', isError: true }
-    if (GODOT_TOOLS.some(t => t.name === name)) return callGodotTool(db, contextLimits(), c.kind === 'parent' ? parentTool(c.p) : c.t, (c.kind === 'parent' ? c.p.godotOrganizerId : c.godotOrganizerId) ?? '', name, args)
-    return callTaskTool(db, contextLimits(), c.kind === 'parent' ? parentTool(c.p) : c.t, name, args)
+    const grants = ctxGrants(c), tctx = { ...(c.kind === 'parent' ? parentTool(c.p) : c.t), engines: grantedEngines(grants) }
+    if (engineOf(name)) return callEngineTool(db, contextLimits(), tctx, grants, name, args, signal)
+    return callTaskTool(db, contextLimits(), tctx, name, args)
   }
 }))
 
@@ -523,7 +524,7 @@ const { sendTask, decideSend: decideChatSend } = createChatService({
   getMcp, mcpDir, nativeFor, envFor, emit, note, logFor, accountRow, setSetting, recordMetric, attachRoot, linkedinDir,
   workspaceBusy: commands.busy, onRunStart: runStart, summaryTitles,
   accountUsageWriter: id => accountUsageService.writer(id),
-  godotOrganizer: godotForProject,
+  engineGrants: (game, cwd) => engineGrants(db, game, cwd),
   registerParent: (token, p, perm) => { tokens.set(token, { kind: 'parent', p, perm }) },
   unregisterToken: token => { tokens.delete(token) }
 })

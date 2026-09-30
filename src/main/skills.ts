@@ -4,6 +4,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { sha } from './artifacts.ts'
+import type { EngineId } from './engines.ts'
 import type { ToolDef } from './mcp.ts'
 
 export type Role = 'parent' | 'child'
@@ -12,18 +13,23 @@ export const SKILLS = {
   'task-memory': { roles: ['parent', 'child'] as Role[], summary: 'consultar/registrar a memoria da tarefa, leitura por intervalo (readToken) e evidencia de testes (conservadora)' },
   // Terceiros (MIT, ver resources/skills/ponytail/LICENSE): o menor codigo que funciona. Carregue antes de escrever ou revisar codigo.
   ponytail: { roles: ['parent', 'child'] as Role[], summary: 'antes de escrever/revisar codigo: o minimo que funciona (YAGNI, reusar o que existe, stdlib/nativo antes de dependencia, menor diff)' },
-  linkedin: { roles: ['parent'] as Role[], summary: 'LinkedIn do usuario: briefing, rascunhos no tom dele, conexoes sugeridas e videos por gravacao de tela + ffmpeg; nunca publica sozinho' }
-} as const
+  linkedin: { roles: ['parent'] as Role[], summary: 'LinkedIn do usuario: briefing, rascunhos no tom dele, conexoes sugeridas e videos por gravacao de tela + ffmpeg; nunca publica sozinho' },
+  // Engines: so aparecem quando o organizador concedeu a engine a esta execucao (engines.ts).
+  godot: { roles: ['parent', 'child'] as Role[], engine: 'godot', summary: 'fluxo Godot economico: godot_* antes de ler .tscn, editar cenas/scripts com seguranca e verificar' },
+  unity: { roles: ['parent', 'child'] as Role[], engine: 'unity', summary: 'fluxo Unity economico: unity_* antes de ler YAML, GUID/.meta seguros, testes batchmode e diagnostico' },
+  blender: { roles: ['parent', 'child'] as Role[], engine: 'blender', summary: 'fluxo Blender economico: blender_* antes de scripts, auditoria antes de exportar, alteracoes por bpy seguras' }
+} as const satisfies Record<string, { roles: Role[]; summary: string; engine?: EngineId }>
 export type SkillName = keyof typeof SKILLS
 export const SKILL_NAMES = Object.keys(SKILLS) as SkillName[]
 export const READ_SKILL_TOOL_NAME = 'read_task_skill'
-export const skillsFor = (role: Role): SkillName[] => SKILL_NAMES.filter(n => (SKILLS[n].roles as Role[]).includes(role))
+const engineOfSkill = (n: SkillName): EngineId | undefined => (SKILLS[n] as { engine?: EngineId }).engine
+export const skillsFor = (role: Role, engines: readonly EngineId[] = []): SkillName[] => SKILL_NAMES.filter(n => (SKILLS[n].roles as Role[]).includes(role) && (!engineOfSkill(n) || engines.includes(engineOfSkill(n)!)))
 
 // Descricao curta por papel: so o que aquele papel pode consultar; o conteudo so chega quando pedido.
-export const skillTool = (role: Role): ToolDef => ({
+export const skillTool = (role: Role, engines: readonly EngineId[] = []): ToolDef => ({
   name: READ_SKILL_TOOL_NAME,
-  description: `Instrucoes detalhadas sob demanda: ${skillsFor(role).map(n => `${n} (${SKILLS[n].summary})`).join('; ')}. Na mesma sessao, reler devolve so a versao; reload=true (apos compactacao) devolve o texto.`,
-  inputSchema: { type: 'object', properties: { name: { type: 'string', enum: skillsFor(role) }, reload: { type: 'boolean', description: 'Texto de novo.' } }, required: ['name'] }
+  description: `Instrucoes detalhadas sob demanda: ${skillsFor(role, engines).map(n => `${n} (${SKILLS[n].summary})`).join('; ')}. Na mesma sessao, reler devolve so a versao; reload=true (apos compactacao) devolve o texto.`,
+  inputSchema: { type: 'object', properties: { name: { type: 'string', enum: skillsFor(role, engines) }, reload: { type: 'boolean', description: 'Texto de novo.' } }, required: ['name'] }
 })
 
 // Onde procurar os arquivos empacotados (definido pelo processo principal: pasta do app em desenvolvimento e executando o build; recursos do pacote).
@@ -52,10 +58,10 @@ const MAX_SESSIONS = 200
 const delivered = new Map<string, Map<string, string>>()
 export const dropSkillSession = (session: string) => delivered.delete(session)
 
-export function loadSkill(session: string, role: Role, args: { name?: unknown; reload?: unknown }): string {
+export function loadSkill(session: string, role: Role, args: { name?: unknown; reload?: unknown }, engines: readonly EngineId[] = []): string {
   const name = typeof args.name === 'string' ? args.name : ''
-  if (!Object.hasOwn(SKILLS, name)) throw new SkillError(`name invalido. Opcoes para o seu papel: ${skillsFor(role).join(', ')}.`)
-  if (!(SKILLS[name as SkillName].roles as Role[]).includes(role)) throw new SkillError(`A skill "${name}" nao esta disponivel para o seu papel. Opcoes: ${skillsFor(role).join(', ')}.`)
+  if (!Object.hasOwn(SKILLS, name)) throw new SkillError(`name invalido. Opcoes para o seu papel: ${skillsFor(role, engines).join(', ')}.`)
+  if (!skillsFor(role, engines).includes(name as SkillName)) throw new SkillError(`A skill "${name}" nao esta disponivel para o seu papel ou organizador. Opcoes: ${skillsFor(role, engines).join(', ')}.`)
   const s = readSkill(name)
   let mine = delivered.get(session)
   if (!mine) { delivered.set(session, (mine = new Map())); if (delivered.size > MAX_SESSIONS) delivered.delete(delivered.keys().next().value as string) }

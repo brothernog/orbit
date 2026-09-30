@@ -1,13 +1,15 @@
 // Montagem da entrada dos agentes em ORDEM ESTAVEL (instrucoes estaticas, ordem direta, pacote aprovado, pedido atual), para
 // favorecer cache de prefixo onde o provedor o oferecer (nao e garantia: depende da CLI/assinatura). Nada volatil (ids, datas)
 // entra no prefixo. Sem dependencia de 'electron'.
+import { ENGINE_LABELS, type EngineId } from './engines.ts'
 import { estimateTokens } from './limits.ts'
 
 // Resumo curto das regras permanentes do runtime. Usado onde a CLI nao carrega skills sob demanda; nao substitui as regras do
 // usuario e nao promete ferramentas que nao foram anunciadas.
 // nativeSearch: o filho busca com Grep/Glob nativos (Claude) e le com read_file_range; find_in_workspace nao foi anunciado.
 // testEvidence: false quando test_evidence nao foi anunciado (filho Claude em leitura); omitido = anunciado junto com as de area de trabalho.
-export function runtimeBrief(o: { memoryTools: boolean; workspaceTools: boolean; nativeSearch?: boolean; testEvidence?: boolean; skills?: 'parent' | 'child' }): string {
+export function runtimeBrief(o: { memoryTools: boolean; workspaceTools: boolean; nativeSearch?: boolean; testEvidence?: boolean; skills?: 'parent' | 'child'; engines?: readonly EngineId[] }): string {
+  const engines = o.skills ? o.engines ?? [] : []
   return [
     '[Regras permanentes do dashboard]',
     '- Procure antes de reler; nao refaca investigacao concluida sem motivo; use evidencia so se ainda valida (confira hash/validade).',
@@ -17,7 +19,9 @@ export function runtimeBrief(o: { memoryTools: boolean; workspaceTools: boolean;
     o.memoryTools ? '- Contexto da tarefa: so via read_task_context (itens autorizados). Ao concluir uma unidade de trabalho registre decisoes/checkpoint com record_task_memory.' : '',
     o.workspaceTools ? `- ${o.nativeSearch ? 'Busque com Grep/Glob (Grep em modo content com -C ja traz o trecho, poupando uma leitura) e leia com read_file_range' : 'Prefira find_in_workspace/read_file_range'} (readToken evita receber de novo linhas ja entregues) a reler arquivos inteiros${o.testEvidence === false ? '' : '; test_evidence registra/consulta testes'}.` : '',
     // As instrucoes detalhadas NAO vao no prompt: so o ponteiro. O agente as carrega quando precisar (e de novo apos compactacao).
-    o.skills ? `- Instrucoes detalhadas sob demanda: read_task_skill (${o.skills === 'parent' ? 'task-memory, task-delegation, ponytail, linkedin' : 'task-memory, ponytail'}); nao sao repetidas a cada turno.` : ''
+    o.skills ? `- Instrucoes detalhadas sob demanda: read_task_skill (${[o.skills === 'parent' ? 'task-memory, task-delegation, ponytail, linkedin' : 'task-memory, ponytail', ...engines].join(', ')}); nao sao repetidas a cada turno.` : '',
+    // Engines do organizador: consultas locais sem IA; o ponteiro evita que o agente leia cenas/YAML/logs inteiros.
+    engines.length ? `- Projeto ${engines.map(e => ENGINE_LABELS[e]).join('/')}: consulte ${engines.map(e => `${e}_*`).join('/')} antes de abrir cenas, YAML, .blend ou logs inteiros; read_task_skill ${engines.join('/')} traz o fluxo.` : ''
   ].filter(Boolean).join('\n')
 }
 // O chat do app mostra como miniatura as imagens do projeto que a resposta citar; sem isto o agente tenta 'ler' a imagem e diz que nao conseguiu mostrar.
