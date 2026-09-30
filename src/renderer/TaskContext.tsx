@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, errText, onChat, type Account } from './api'
 import { Avatar, Icon, PROVIDER } from './icons'
 import { coverTitle, totalText, type TotalLike } from './usageText'
+import { useCachedRead } from './useCachedRead'
 
 // Contexto da tarefa: pedidos de aprovacao (o que vai para outro agente), memoria, uso e pacotes ja enviados.
 // A aprovacao manda so ID + hash do que foi exibido (e, se o usuario desmarcou itens, as refs mantidas); o processo principal valida e decide o resto.
@@ -50,10 +51,9 @@ export function ContextRequests({ pkgs, sends, accounts = [], reload }: { pkgs: 
   const [open, setOpen] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [limit, setLimit] = useState(10)
+  const limit = useCachedRead<{ approvalTimeoutMin: number }>('getContextLimits', () => api.getContextLimits()).data?.approvalTimeoutMin ?? 10
   const [drop, setDrop] = useState<Set<string>>(new Set()) // itens desmarcados: nao vao (o backend cria um pacote novo so com os marcados)
   const primary = useRef<HTMLButtonElement>(null)
-  useEffect(() => { api.getContextLimits().then((l: any) => setLimit(l.approvalTimeoutMin), () => {}) }, [])
   const pending = pkgs.filter(p => p.state === 'pending')
   const p = pending[pending.length - 1] // o mais antigo primeiro: e o que expira antes
   const send = p ? sends.find(s => s.package_id === p.id && s.state === 'awaiting_context_approval') : undefined

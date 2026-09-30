@@ -62,7 +62,7 @@ test('chat: falha ao gravar o fim da execução (banco fechado) ainda emite done
   const done = new Promise<any>(r => finished = r)
   try {
     const service = createChatService({ db, active: new Map(), guard: new WorkspaceGuard(), broker: { expire: () => {} } as any,
-      asTask: id => getTask(db, id), taskCwd: () => process.cwd(), checkSel: async () => {}, workspaceBusy: () => false,
+      asTask: id => getTask(db, id), taskCwd: async () => process.cwd(), checkSel: async () => {}, workspaceBusy: () => false,
       contextLimits: () => DEFAULT_LIMITS, delegationSettings: () => ({ ...DEFAULT_SETTINGS, enabled: false }), permissionSettings: () => normalizePermissionSettings(null),
       getMcp: async () => ({ url: '' }), mcpDir: () => process.cwd(), nativeFor: () => ({ opts: {} }) as any, envFor: () => ({ ...process.env }),
       emit: (ev: any) => { if (ev.done) finished(ev) }, note: () => {}, logFor: p => e => logs.push({ p, ...e }), accountRow: () => null, setSetting: () => {},

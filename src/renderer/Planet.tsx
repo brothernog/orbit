@@ -73,15 +73,18 @@ export function Planet() {
     return () => { clearInterval(p); clearInterval(s); off?.() }
   }, [])
 
-  // Luas: a cada 3 s (so leitura no banco). A que sumiu da lista fica marcada `gone` para animar a saida e depois sai.
+  // Luas: a cada 3 s com a janela visivel (so leitura no banco). A que sumiu da lista fica marcada `gone` para animar a saida e depois sai.
   useEffect(() => {
     const load = () => api.planetMoons().then((l: MoonT[]) => setMoons(prev => {
+      if (JSON.stringify(prev) === JSON.stringify(l)) return prev // nada mudou (nem saida animando): sem re-render
       const keys = new Set(l.map(m => m.key))
       return [...l, ...prev.filter(m => !keys.has(m.key) && !m.gone).map(m => ({ ...m, gone: true }))]
     }), () => {})
     load()
-    const t = setInterval(load, 3000)
-    return () => clearInterval(t)
+    const t = setInterval(() => { if (document.visibilityState === 'visible') load() }, 3000) // janela do planeta oculta: nao consulta
+    const vis = () => { if (document.visibilityState === 'visible') load() }
+    document.addEventListener('visibilitychange', vis)
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', vis) }
   }, [])
   useEffect(() => {
     if (!moonList.some(m => m.gone)) return
@@ -194,6 +197,8 @@ function Orb({ a, count, at, loading, drag, moons }: { a?: Acc; count: number; a
       <svg viewBox="0 0 132 132" aria-hidden="true">
         <defs>
           <clipPath id="pl-body"><circle cx="66" cy="66" r={R} /></clipPath>
+          {/* Halo suave desenhado pelo proprio gradiente: um blur animado repintava o filtro a cada quadro, sempre visivel. */}
+          <radialGradient id="pl-glow">{[[.6, 1], [.72, .75], [.78, .5], [.86, .22], [1, 0]].map(([o, a]) => <stop key={o} className="pl-glow-c" offset={o} stopOpacity={a} />)}</radialGradient>
           <clipPath id="pl-back"><rect x="-20" y="-20" width="172" height="86" /></clipPath>
           <clipPath id="pl-front"><rect x="-20" y="66" width="172" height="86" /></clipPath>
           <radialGradient id="pl-shade" cx="35%" cy="30%" r="75%">
@@ -204,7 +209,7 @@ function Orb({ a, count, at, loading, drag, moons }: { a?: Acc; count: number; a
         </defs>
         <Moons list={moons} layer="back" />
         <g className="pl-orb">
-          <circle className="pl-glow" cx="66" cy="66" r={R + 6} />
+          <circle className="pl-glow" cx="66" cy="66" r={R + 20} />
           <circle className="pl-track" cx="66" cy="66" r={R + 5} />
           {a?.resetsAt && <circle className="pl-ring" cx="66" cy="66" r={R + 5} strokeDasharray={RING} strokeDashoffset={RING * (1 - elapsed(a))} transform="rotate(-90 66 66)" />}
           <g clipPath="url(#pl-body)">

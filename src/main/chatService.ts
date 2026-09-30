@@ -230,7 +230,7 @@ export function createChatService(d: ChatDeps) {
         }
       } catch {}
       // status/tempo/resposta alimentam o aviso de atencao (notify.ts); a interface continua recarregando pelo `done`
-      emit({ taskId: t.id, done: true, runId, status: r.status, paused: r.paused, error: r.error, durationMs: r.durationMs, provider: sel.provider, model: sel.model, answer: r.answer || r.text, acts })
+      emit({ taskId: t.id, game: t.game, done: true, runId, status: r.status, paused: r.paused, error: r.error, durationMs: r.durationMs, provider: sel.provider, model: sel.model, answer: r.answer || r.text, acts })
       try { d.onFinished?.({ taskId: t.id, sel, text, status: r.status, category: r.category, partial: r.text, acts }) } catch {}
     }).catch(e => { // falha inesperada antes do `done`: registra e ainda avisa a interface
       logFor('app')({ category: 'unknown', detail: `fim da execucao da tarefa ${t.id}: ${e?.message}` })

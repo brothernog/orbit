@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { onChat } from './api'
 import { NoticeCard, NoticeGroup, type Notice } from './NoticeCard'
 import { groupNotices } from './noticeGroups'
@@ -12,6 +12,8 @@ export function Toasts({ openTaskId, onOpen }: { openTaskId?: number; onOpen: (g
   const [items, setItems] = useState<Notice[]>([])
   const [away, setAway] = useState(!document.hasFocus())
   const drop = (f: (x: Notice) => boolean) => setItems(l => l.filter(x => !f(x)))
+  const openRef = useRef(onOpen) // onOpen chega nova a cada render do App: a inscricao em onChat nao depende dela
+  openRef.current = onOpen
 
   useEffect(() => {
     const on = () => setAway(false), off = () => setAway(true)
@@ -23,8 +25,8 @@ export function Toasts({ openTaskId, onOpen }: { openTaskId?: number; onOpen: (g
     if (n && n.kind !== 'permission' && !(n.taskId === openTaskId && document.hasFocus()))
       setItems(l => [n, ...l.filter(x => x.taskId !== n.taskId || !x.command !== !n.command || x.taskId < 0)]) // um aviso do agente e um de comando por tarefa: o mais novo vale
     if (ev?.contextResolved) drop(x => x.ref?.context === ev.contextResolved)
-    if (ev?.openTask?.taskId > 0) onOpen(ev.openTask.game, ev.openTask.taskId, !!ev.openTask.files) // clique na janela de aviso
-  }), [openTaskId, onOpen])
+    if (ev?.openTask?.taskId > 0) openRef.current(ev.openTask.game, ev.openTask.taskId, !!ev.openTask.files) // clique na janela de aviso
+  }), [openTaskId])
   useEffect(() => { if (openTaskId != null) drop(x => x.taskId === openTaskId) }, [openTaskId])
 
   if (!items.length) return null

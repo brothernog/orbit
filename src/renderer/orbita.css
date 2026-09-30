@@ -146,7 +146,7 @@ button.task.active { background: linear-gradient(90deg, #7cc4ff17, #7cc4ff05 70%
   box-shadow: 0 24px 48px -28px #000, inset 0 1px 0 #ffffff08;
 }
 .composer:focus-within { border-color: #7cc4ff40; box-shadow: 0 24px 60px -28px #7cc4ff50, inset 0 1px 0 #ffffff0a; }
-.composer.running::before { background: conic-gradient(from var(--spin, 0deg), transparent 0 62%, #69d6b5 75%, #7cc4ff 87%, #c6a2ff 100%); }
+.composer-glow::before { background: conic-gradient(transparent 0 62%, #69d6b5 75%, #7cc4ff 87%, #c6a2ff 100%); }
 .composer-bar { border-top: 1px solid transparent; transition: border-color .2s; }
 .composer:focus-within .composer-bar { border-top-color: var(--line-soft); }
 .send {

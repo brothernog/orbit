@@ -615,11 +615,12 @@ const { askJarvis, jarvisSettings, stopJarvis } = createJarvisService({
 
 async function decideSend(id: number, hash: string, decision: Decision, keep?: string[]) {
   const step = db.prepare("SELECT id FROM task_steps WHERE send_id=? AND state='awaiting_context'").get(id) as { id: number } | undefined
+  const taskId = (db.prepare('SELECT task_id FROM pending_sends WHERE id=?').get(id) as { task_id: number } | undefined)?.task_id // etapas da tarefa recarregam so com evento dela
   try {
     const result = await decideChatSend(id, hash, decision, keep)
     if (step && 'runId' in result && result.runId) bindStep(db, step.id, { status: 'started', runId: result.runId })
     return result
-  } finally { reconcileSteps(db); emit({ refresh: true }) }
+  } finally { reconcileSteps(db); emit({ taskId, refresh: true }) }
 }
 
 const production = createProductionService(db, path.join(app.getPath('userData'), 'production'))

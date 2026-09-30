@@ -299,15 +299,19 @@ form.inline input { flex: 1 1 200px; min-width: 0; }
   box-shadow: 0 18px 40px -20px #000; transition: border-color .2s;
 }
 .composer:focus-within { border-color: #7cc4ff55; }
-.composer.running::before { /* borda com brilho em movimento enquanto o agente trabalha */
-  content: ''; position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none;
-  background: conic-gradient(from var(--spin, 0deg), transparent 0 70%, var(--accent) 85%, transparent 100%);
+/* Borda com brilho em movimento enquanto o agente trabalha: a mascara (so a borda de 1px) fica parada e o gradiente conico gira
+   por transform, que o compositor anima sem repintar (animar o angulo do gradiente repintava a borda inteira a cada quadro). */
+.composer-glow {
+  position: absolute; inset: -1px; border-radius: inherit; padding: 1px; overflow: hidden; pointer-events: none;
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
-  animation: sweep 3s linear infinite;
 }
-@property --spin { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
-@keyframes sweep { to { --spin: 360deg; } }
+.composer-glow::before {
+  content: ''; position: absolute; left: 50%; top: 50%; width: max(200%, 400px); aspect-ratio: 1;
+  background: conic-gradient(transparent 0 70%, var(--accent) 85%, transparent 100%);
+  transform: translate(-50%, -50%); animation: sweep 3s linear infinite;
+}
+@keyframes sweep { to { transform: translate(-50%, -50%) rotate(360deg); } }
 .composer textarea {
   width: 100%; min-height: 56px; max-height: 40vh; resize: none; field-sizing: content;
   background: none; border: 0; padding: 14px 16px 6px; font-size: 15px; line-height: 1.55;

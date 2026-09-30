@@ -42,7 +42,7 @@
 ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
 ::view-transition-old(center) { animation: vt-out .14s var(--ease) both; }
 ::view-transition-new(center) { animation: vt-in .3s var(--ease) both; }
-@keyframes vt-out { to { opacity: 0; transform: scale(.985); filter: blur(2px); } }
+@keyframes vt-out { to { opacity: 0; transform: scale(.985); } } /* sem blur: desfocar a tela inteira custava a cada quadro */
 @keyframes vt-in { from { opacity: 0; transform: translateY(10px); } }
 .drawer-head b { cursor: pointer; border-radius: 6px; padding: 2px 6px; margin-left: -6px; transition: background-color .15s; }
 .drawer-head b:hover, .drawer-head b.on { background: #ffffff0a; }
