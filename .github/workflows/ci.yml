@@ -23,13 +23,13 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      # O e2e abre o Electron real com CLIs falsas (PATH isolado) nos tres sistemas.
+      # The e2e opens the real Electron with fake CLIs (isolated PATH) on all three OSes.
       - run: node node_modules/electron/install.js && npm run build
       - if: runner.os != 'Linux'
         run: npm run e2e
-      # Linux sem tela: display virtual (o run.mjs passa --no-sandbox ao Electron no CI).
+      # Headless Linux: virtual display with 24-bit depth (xvfb-run defaults to 8); run.mjs passes --no-sandbox to Electron in CI.
       - if: runner.os == 'Linux'
-        run: xvfb-run -a npm run e2e
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npm run e2e
 
   package:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')

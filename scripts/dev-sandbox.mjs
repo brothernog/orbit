@@ -38,7 +38,7 @@ const port = process.env.GPD_SANDBOX_PORT ? Number(process.env.GPD_SANDBOX_PORT)
 
 // Sem ELECTRON_RENDERER_URL herdada (ex.: de um 'electron-vite dev' em execucao): a sandbox abre o renderer COMPILADO em out/, isolado do servidor de desenvolvimento.
 const { ELECTRON_RENDERER_URL: _dev, ...cleanEnv } = process.env
-const electron = createRequire(import.meta.url)('electron') // caminho do binario em qualquer sistema
+const electron = createRequire(import.meta.url)('electron') // binary path on any OS
 const app = spawn(electron, [ROOT, `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`], {
   env: { ...cleanEnv, CODEX_HOME: path.join(work, 'codexhome'), GPD_DISPLAY: process.env.GPD_DISPLAY ?? '2' }, stdio: 'inherit'
 })
