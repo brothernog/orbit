@@ -1,6 +1,7 @@
 // E2E do app Electron real (build em out/: rode 'npm run build' antes) com CLIs falsas e um banco LEGADO sintetico.
 // Nenhuma chamada paga e nenhum dado real: usa --user-data-dir temporario. Uso: npm run e2e
 import { spawn, execSync, execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -10,7 +11,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(here, '../..')
-const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-e2e-'))
+const WIN = process.platform === 'win32'
+const electron = createRequire(import.meta.url)('electron') // binary path on any OS
+// Off Windows the tmp dir may be a symlink (macOS: /var -> /private/var) and the CLIs' process.cwd() returns the real path.
+const work = fs.mkdtempSync(path.join(WIN ? os.tmpdir() : fs.realpathSync(os.tmpdir()), 'gpd-e2e-'))
 const ud = path.join(work, 'userdata'), proj = path.join(work, 'projeto'), projGit = path.join(work, 'projgit'), bin = path.join(work, 'bin')
 const logFile = path.join(work, 'argv.log'), pidsFile = path.join(work, 'pids.txt')
 for (const d of [ud, proj, projGit, bin]) fs.mkdirSync(d, { recursive: true })
@@ -19,7 +23,22 @@ execSync('git init -q && git add -A && git -c user.name=t -c user.email=t@t comm
 fs.writeFileSync(path.join(proj, 'roadmap.md'), '# Roadmap\n- [ ] x\n')
 fs.writeFileSync(path.join(work, 'segredo.md'), 'fora do projeto')
 fs.copyFileSync(path.join(here, 'fake-cli.js'), path.join(bin, 'fake-cli.js'))
-for (const k of ['codex', 'opencode']) fs.writeFileSync(path.join(bin, `${k}.cmd`), `@echo off\r\nnode "%~dp0fake-cli.js" ${k} %*\r\n`)
+for (const k of ['codex', 'opencode']) {
+  if (WIN) fs.writeFileSync(path.join(bin, `${k}.cmd`), `@echo off\r\nnode "%~dp0fake-cli.js" ${k} %*\r\n`)
+  else fs.writeFileSync(path.join(bin, k), `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/fake-cli.js" ${k} "$@"\n`, { mode: 0o755 })
+}
+// Off Windows (dev machine with real, logged-in CLIs) the app sees only the fake CLIs and the base system: minimal PATH, empty HOME
+// (no ~/.claude.json or credentials) and a fake login shell, because the app merges the login-shell PATH (which would bring the real CLIs).
+const loginSh = path.join(work, 'login-sh')
+if (!WIN) { fs.mkdirSync(path.join(work, 'home')); fs.writeFileSync(loginSh, '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o755 }) }
+const appEnv = () => {
+  // No inherited ELECTRON_RENDERER_URL (e.g. from a running 'electron-vite dev'): the e2e tests the COMPILED renderer in out/, never a dev server.
+  const { ELECTRON_RENDERER_URL: _dev, ...cleanEnv } = process.env
+  const iso = WIN ? { PATH: `${bin};${process.env.PATH}` } : { PATH: [bin, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'), HOME: path.join(work, 'home'), SHELL: loginSh }
+  return { ...cleanEnv, ...iso, E2E_LOG: logFile, E2E_PIDS: pidsFile, CODEX_HOME: path.join(work, 'codexhome'), ELECTRON_ENABLE_LOGGING: '1', GPD_DISPLAY: process.env.GPD_DISPLAY ?? '2' }
+}
+// macOS: mock keychain (the swapped HOME would make Chromium prompt for the keychain). Linux: no keyring for passwords; in CI the SUID sandbox is not set up.
+const appArgs = process.platform === 'darwin' ? ['--use-mock-keychain'] : WIN ? [] : ['--password-store=basic', ...(process.env.CI ? ['--no-sandbox'] : [])]
 
 // Banco LEGADO (so o esquema v1) com pin, chat geral e sessao.
 const { MIGRATIONS } = await import(pathToFileURL(path.join(ROOT, 'src/main/db.ts')).href)
@@ -46,11 +65,7 @@ async function start(userData = ud, entry = ROOT) {
   await new Promise(r => listener.listen(0, '127.0.0.1', r))
   const port = listener.address().port
   await new Promise(r => listener.close(r)) // porta livre por instancia, sem colidir com outra sandbox/e2e
-  // Sem ELECTRON_RENDERER_URL herdada (ex.: de um 'electron-vite dev' em execucao): o e2e testa o renderer COMPILADO em out/, nunca um servidor de desenvolvimento.
-  const { ELECTRON_RENDERER_URL: _dev, ...cleanEnv } = process.env
-  app = spawn(path.join(ROOT, 'node_modules/electron/dist/electron.exe'), [entry, `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`], {
-    env: { ...cleanEnv, PATH: `${bin};${process.env.PATH}`, E2E_LOG: logFile, E2E_PIDS: pidsFile, CODEX_HOME: path.join(work, 'codexhome'), ELECTRON_ENABLE_LOGGING: '1', GPD_DISPLAY: process.env.GPD_DISPLAY ?? '2' }, stdio: ['ignore', 'pipe', 'pipe']
-  })
+  app = spawn(electron, [entry, `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`, ...appArgs], { env: appEnv(), stdio: ['ignore', 'pipe', 'pipe'] })
   let log = ''
   app.stdout.on('data', d => (log += d)); app.stderr.on('data', d => (log += d))
   app.log = () => log
@@ -88,7 +103,10 @@ const sendD = async (ev, tid, sel, text, decision = 'reject') => {
   return r
 }
 const alive = pid => { try { process.kill(pid, 0); return true } catch { return false } }
-const kill = () => { try { execSync(`taskkill /pid ${app.pid} /T /F`, { stdio: 'ignore' }) } catch {} }
+// Off Windows kill the whole tree, like taskkill /T: the CLIs run in their own process groups (detached), outside Electron's group.
+const tree = pid => { const ps = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' }).trim().split('\n').map(l => l.trim().split(/\s+/).map(Number)); const out = [pid]; for (let i = 0; i < out.length; i++) for (const [p, pp] of ps) if (pp === out[i]) out.push(p); return out }
+const killTree = pid => { try { if (WIN) execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' }); else for (const p of tree(pid)) try { process.kill(p, 'SIGKILL') } catch {} } catch {} }
+const kill = () => app && killTree(app.pid)
 
 try {
   // ---- primeira abertura: pasta de dados nova (sem banco, sem contas, sem tarefas)
@@ -122,8 +140,8 @@ try {
   // ---- validacao da ponte IPC
   const bad = [
     ['readDoc com ..', await inv(ev, 'readDoc', gameArg, '../segredo.md')],
-    ['listDocs fora dos projetos', await inv(ev, 'listDocs', 'C:/Windows')],
-    ['openFolder fora dos projetos', await inv(ev, 'openFolder', 'C:/Windows')],
+    ['listDocs fora dos projetos', await inv(ev, 'listDocs', WIN ? 'C:/Windows' : '/etc')],
+    ['openFolder fora dos projetos', await inv(ev, 'openFolder', WIN ? 'C:/Windows' : '/etc')],
     ['tipo invalido em taskChat', await inv(ev, 'taskChat', '1; drop', { provider: 'codex' })],
     ['provedor desconhecido', await inv(ev, 'sendTask', legacy.id, { provider: 'rm -rf' }, 'oi')],
     ['tarefa inexistente', await inv(ev, 'sendTask', 99999, { provider: 'codex' }, 'oi')],
@@ -238,8 +256,9 @@ try {
     check('jarvis: padrao Sonnet 5.5 em esforco medio na conta principal; pergunta vazia e recusada sem chamar a CLI', j?.model === 'claude-sonnet-5-5' && j?.effort === 'medium' && !!j?.accountId && !empty.ok, JSON.stringify({ j, empty: empty.error }))
   }
   // Unica verificacao com a CLI real (so --help, gratis). Sem claude instalado (runner do CI) ela nao prova nada: fica de fora, sem contar como falha.
-  let hasClaude = true; try { execFileSync('where.exe', ['claude'], { stdio: 'ignore' }) } catch { hasClaude = false }
-  if (!hasClaude) console.log('SKIP claude (CLI real, so --help): claude nao instalado')
+  // Off Windows the app's PATH is isolated: the real CLI is never reachable, so this check is always skipped.
+  let hasClaude = WIN; if (WIN) try { execFileSync('where.exe', ['claude'], { stdio: 'ignore' }) } catch { hasClaude = false }
+  if (!hasClaude) console.log(`SKIP claude (CLI real, so --help): ${WIN ? 'claude nao instalado' : 'isolated e2e PATH (real CLIs out of reach)'}`)
   else check('claude (CLI real, so --help): apelidos e niveis de esforco lidos da versao instalada', cClaude.source === 'help' && cClaude.models.some(m => m.id === 'opus') && cClaude.efforts.includes('max'), JSON.stringify({ models: cClaude.models.map(m => m.id), efforts: cClaude.efforts }))
 
   const t5 = (await inv(ev, 'createTask', gameArg, 'config')).value
@@ -525,8 +544,9 @@ try {
   await inv(ev, 'sendTask', tg, { provider: 'codex' }, 'TRAVAR ao fechar')
   for (let i = 0; i < 40 && !(await inv(ev, 'taskChat', tg, { provider: 'codex' })).value.live.includes('parcial'); i++) await sleep(250)
   const [q1, q2] = fs.readFileSync(pidsFile, 'utf8').split(',').map(Number)
-  // o usuario fecha a janela (WM_CLOSE): window-all-closed -> app.quit -> before-quit
-  try { execFileSync('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${app.pid}).CloseMainWindow() | Out-Null`], { stdio: 'ignore' }) } catch {}
+  // the user closes the window (WM_CLOSE; off Windows, window.close() in the renderer): window-all-closed -> app.quit -> before-quit
+  if (WIN) try { execFileSync('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${app.pid}).CloseMainWindow() | Out-Null`], { stdio: 'ignore' }) } catch {}
+  else ev('window.close()').catch(() => {}) // no await: the window closes and CDP never answers
   for (let i = 0; i < 40 && alive(app.pid); i++) await sleep(250)
   for (let i = 0; i < 20 && (alive(q1) || alive(q2)); i++) await sleep(250) // taskkill do before-quit termina depois do app
   { const d = new DatabaseSync(path.join(ud, 'dashboard.db')); const st = d.prepare('SELECT status FROM runs ORDER BY id DESC LIMIT 1').get()?.status; d.close(); console.log('   estado da ultima execucao no banco apos fechar:', st) }
@@ -887,9 +907,9 @@ try {
   ;({ ev, send } = await start(ud,backupEntry))
   const info = (await inv(ev,'backupInfo')).value
   check('backup: startup restaura e informa cópia de segurança anterior', !!info?.lastRestore?.safetyPath && inspectBackup(info.lastRestore.safetyPath).schema === MIGRATIONS.length)
-  const secondInstance = spawn(path.join(ROOT,'node_modules/electron/dist/electron.exe'),[ROOT,`--user-data-dir=${ud}`],{stdio:'ignore'})
+  const secondInstance = spawn(electron,[ROOT,`--user-data-dir=${ud}`,...appArgs],WIN?{stdio:'ignore'}:{env:appEnv(),stdio:'ignore'})
   const secondExit = await Promise.race([new Promise(resolve=>secondInstance.once('exit',resolve)),sleep(8000).then(()=>null)])
-  if(secondExit===null){try{execFileSync('taskkill',['/pid',String(secondInstance.pid),'/T','/F'],{stdio:'ignore'})}catch{}}
+  if(secondExit===null)killTree(secondInstance.pid)
   check('backup: segunda instância com os mesmos dados sai antes de abrir o banco',secondExit===0,String(secondExit))
   const restoredDb = new DatabaseSync(path.join(ud,'dashboard.db'),{readOnly:true})
   const safetyDb = new DatabaseSync(path.join(info.lastRestore.safetyPath,'dashboard.db'),{readOnly:true})

@@ -4,6 +4,7 @@
 //   GPD_DISPLAY=2 abre no segundo monitor; GPD_SANDBOX_PORT fixa a porta de debug (padrao: livre a partir de 9400).
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -37,7 +38,8 @@ const port = process.env.GPD_SANDBOX_PORT ? Number(process.env.GPD_SANDBOX_PORT)
 
 // Sem ELECTRON_RENDERER_URL herdada (ex.: de um 'electron-vite dev' em execucao): a sandbox abre o renderer COMPILADO em out/, isolado do servidor de desenvolvimento.
 const { ELECTRON_RENDERER_URL: _dev, ...cleanEnv } = process.env
-const app = spawn(path.join(ROOT, 'node_modules/electron/dist/electron.exe'), [ROOT, `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`], {
+const electron = createRequire(import.meta.url)('electron') // binary path on any OS
+const app = spawn(electron, [ROOT, `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`], {
   env: { ...cleanEnv, CODEX_HOME: path.join(work, 'codexhome'), GPD_DISPLAY: process.env.GPD_DISPLAY ?? '2' }, stdio: 'inherit'
 })
 console.log(`sandbox: pid ${app.pid}, dados em ${userData}, debug em http://127.0.0.1:${port}/json/list`)
