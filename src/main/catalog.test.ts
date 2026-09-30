@@ -199,3 +199,34 @@ test('catalogo: consultas simultaneas compartilham a mesma em andamento (inclusi
   const again = getCatalog('gemini', undefined, true)
   assert.notEqual(again, a); assert.notEqual(await again, cat)
 })
+
+test('codex: rollouts e limites em cache por tamanho/mtime; expiracao recalculada; thread ausente nao revarre sem pasta nova', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-codexcache-'))
+  t.after(() => { try { fs.rmSync(home, { recursive: true, force: true }) } catch {} })
+  const sec = (iso: string) => Date.parse(iso) / 1000
+  const day = (d: string) => { const dir = path.join(home, 'sessions', '2026', '09', d); fs.mkdirSync(dir, { recursive: true }); return dir }
+  for (let d = 1; d <= 20; d++) day(String(d).padStart(2, '0'))
+  const dir = day('21'), id = '0199aaaa-bbbb-cccc-dddd-eeeeffff0002'
+  const file = path.join(dir, `rollout-2026-09-21T09-00-00-${id}.jsonl`)
+  const event = (used: number) => JSON.stringify({ timestamp: '2026-09-21T09:00:00Z', type: 'event_msg', payload: { type: 'token_count', rate_limits: { primary: { used_percent: used, window_minutes: 300, resets_at: sec('2026-09-21T13:00:00Z') } } } }) + '\n'
+  fs.writeFileSync(file, event(10))
+  const opens = t.mock.method(fs, 'openSync'), dirs = t.mock.method(fs, 'readdirSync')
+  const now = Date.parse('2026-09-21T12:00:00Z')
+  assert.equal(codexLimits(home, now)?.fiveHour?.utilization, 10)
+  assert.equal(codexLimits(home, now)?.fiveHour?.utilization, 10)
+  assert.equal(opens.mock.calls.length, 1) // segunda chamada: sem reler o rollout
+  assert.equal(codexLimits(home, Date.parse('2026-09-21T14:00:00Z'))?.expired, true) // expiracao usa o now da chamada, nao o cache
+  fs.appendFileSync(file, event(55)) // sessao continuou: arquivo mudou
+  assert.equal(codexLimits(home, now)?.fiveHour?.utilization, 55); assert.equal(opens.mock.calls.length, 2)
+  assert.equal(findRollout(id, home), file)
+  let before = dirs.mock.calls.length
+  assert.equal(findRollout(id, home), file); assert.equal(dirs.mock.calls.length, before) // achado: sem varrer de novo
+  const other = '0199aaaa-bbbb-cccc-dddd-eeeeffff0003'
+  assert.equal(findRollout(other, home), null)
+  before = dirs.mock.calls.length
+  assert.equal(findRollout(other, home), null); assert.ok(dirs.mock.calls.length - before <= 3) // so confere o dia mais recente
+  const created = path.join(day('22'), `rollout-2026-09-22T08-00-00-${other}.jsonl`)
+  fs.writeFileSync(created, event(1))
+  assert.equal(findRollout(other, home), created) // dia novo: procura de novo
+  fs.rmSync(created); assert.equal(findRollout(other, home), null) // removido: cache nao devolve caminho inexistente
+})
