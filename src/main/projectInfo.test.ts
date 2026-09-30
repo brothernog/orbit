@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { detectKind, parseStatus, parseWorktrees } from './projectInfo.ts'
+import { execFileSync } from 'node:child_process'
+import { detectKind, parseStatus, parseWorktrees, projectInfo } from './projectInfo.ts'
 
 test('status do git: branch, upstream, ahead/behind e arquivos por tipo', () => {
   const s = parseStatus('## main...origin/main [ahead 2, behind 1]\n M src/a.ts\nA  novo.ts\n D velho.ts\n?? solto.txt\nR  x.ts -> y.ts\n')
@@ -28,4 +29,14 @@ test('tipo do projeto vem dos arquivos da raiz', () => {
   assert.deepEqual(detectKind(d), { kind: 'app', stack: 'Electron' })
   fs.writeFileSync(path.join(d, 'project.godot'), '')
   assert.deepEqual(detectKind(d), { kind: 'game', stack: 'Godot' })
+})
+
+test('pasta principal aberta por outro caminho (symlink/nome curto) nao vira worktree', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pinfo-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const repo = path.join(root, 'repo'), alias = path.join(root, 'alias')
+  fs.mkdirSync(repo)
+  execFileSync('git', ['init', '-q'], { cwd: repo })
+  fs.symlinkSync(repo, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  assert.deepEqual((await projectInfo(alias, () => null)).worktrees, [])
 })

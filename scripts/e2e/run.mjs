@@ -597,7 +597,7 @@ try {
   }
   const wtConfirm=async label=>{await ev(`(() => {const b=[...document.querySelectorAll('.confirm button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b)throw Error('Confirmação de worktree ausente');b.click()})()`);await sleep(200)}
   const wtSelect=async()=>{
-    const predicate=`[...document.querySelectorAll('.br-dirs [role=tab]')].find(b=>b.title.replace(/\\\\/g,'/').toLowerCase()===${JSON.stringify(wtSource.replace(/\\/g,'/').toLowerCase())})`
+    const predicate=`[...document.querySelectorAll('.br-dirs [role=tab]')].find(b=>b.title.replace(/\\\\/g,'/').toLowerCase()===${JSON.stringify(fs.realpathSync.native(wtSource).replace(/\\/g,'/').toLowerCase())})` // abas mostram o caminho do git (real, sem nome curto 8.3)
     const until=Date.now()+20000
     while(Date.now()<until){if(await ev(`!!(${predicate})`)){await ev(`(${predicate}).click()`);await sleep(500);return}await sleep(200)}
     throw Error('Abas da worktree não carregaram: '+await ev("JSON.stringify({tabs:[...document.querySelectorAll('.br-dirs [role=tab]')].map(b=>b.title),branch:document.querySelector('.branch')?.textContent})"))
