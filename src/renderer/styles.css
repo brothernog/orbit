@@ -106,19 +106,14 @@ button.link:hover:not(:disabled) { background: none; text-decoration: underline;
 .rail button { -webkit-app-region: no-drag; }
 .rail .projects { flex: 1; min-height: 0; width: 100%; overflow-y: auto; scrollbar-width: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); margin: 4px 0; }
 .rail .projects::-webkit-scrollbar { display: none; }
-.rail-btn, .rail-proj { position: relative; width: 44px; height: 44px; padding: 0; display: grid; place-items: center; background: none; border: 0; border-radius: 12px; color: var(--muted); }
+.rail-btn { position: relative; width: 44px; height: 44px; padding: 0; display: grid; place-items: center; background: none; border: 0; border-radius: 12px; color: var(--muted); }
 .rail-btn:hover:not(:disabled), .rail-btn[aria-current=true] { background: var(--surface); color: var(--text); }
-.rail-proj:hover:not(:disabled) { background: var(--surface); }
 /* Icone do projeto: o da pasta (Godot, favicon...) ou um padrao gerado do caminho. */
 .picon { display: block; width: 34px; height: 34px; border-radius: 10px; object-fit: contain; transition: border-radius .2s var(--ease), box-shadow .2s; }
 img.picon { background: var(--surface); padding: 3px; }
 .picon-bg { fill: hsl(var(--h) 35% 17%); }
 .picon-cell { fill: hsl(var(--h) 75% 68%); }
-.rail-proj[aria-current=true] .picon { border-radius: 14px; box-shadow: 0 0 0 2px var(--side-bg), 0 0 0 3.5px var(--muted); }
-.rail-proj[aria-current=true]::before { content: ''; position: absolute; left: -10px; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--text); }
-.rail-proj.live::after { content: ''; position: absolute; right: 3px; top: 3px; width: 10px; height: 10px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 2px var(--side-bg), 0 0 10px var(--c); animation: pip 1.6s ease-in-out infinite; }
 @keyframes pip { 50% { opacity: .4; } }
-.rail-sep { width: 20px; border-top: 1px solid var(--line); margin: 4px 0; }
 .rail-tip {
   position: absolute; left: 54px; white-space: nowrap; z-index: 40; pointer-events: none;
   background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 5px 10px; font-size: 13px; color: var(--text); text-align: left;
@@ -130,10 +125,6 @@ img.picon { background: var(--surface); padding: 3px; }
 /* Coluna de conversas do projeto, ao lado do trilho. Busca e arquivadas ficam no Ctrl+K. */
 .chats { grid-column: 2; grid-row: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--side-bg); border-right: 1px solid var(--line-soft); animation: from-left .18s var(--ease); }
 @keyframes from-left { from { transform: translateX(-12px); opacity: 0; } }
-.chats-head { display: flex; align-items: center; gap: 4px; padding: 10px 8px 6px 8px; -webkit-app-region: drag; }
-.chats-head button { -webkit-app-region: no-drag; }
-.chats-proj { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 7px 10px; border-radius: var(--r); font: 600 15px/1.3 'Segoe UI Variable Display', 'Segoe UI', sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chats-proj:hover:not(:disabled), .chats-proj[aria-current=true] { background: var(--surface); }
 .chats .tasklist { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 1px; }
 .chats-group { padding: 14px 10px 4px; font-size: 12px; color: var(--faint); font-weight: 600; }
 .chats-empty { padding: 10px; color: var(--faint); font-size: 13px; }
@@ -158,7 +149,6 @@ button.task.active { background: var(--raised); color: var(--text); box-shadow: 
 .task-row:hover .task-when { visibility: hidden; }
 .task.editing { display: flex; align-items: center; gap: 10px; padding: 3px 4px 3px 10px; }
 input.rename { flex: 1; min-width: 0; padding: 4px 8px; font-size: 13.5px; background: var(--bg); }
-.chats-head input.rename { font: 600 15px/1.3 'Segoe UI Variable Display', 'Segoe UI', sans-serif; padding: 6px 10px; }
 .ctx-menu { position: fixed; z-index: 70; min-width: 180px; padding: 4px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--r); box-shadow: 0 16px 36px #000a; animation: tip-in .1s; }
 .ctx-menu button { width: 100%; text-align: left; padding: 7px 10px; background: none; border: 0; border-radius: var(--r-sm); }
 .ctx-menu button:hover:not(:disabled), .ctx-menu button:focus-visible { background: var(--hover); outline: none; }

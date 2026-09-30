@@ -30,20 +30,13 @@ input:focus, textarea:focus, select:focus { border-color: #7cc4ff66; }
 .rail .projects { border: 0; gap: 8px; padding: 10px 0; margin: 6px 0; position: relative; }
 .rail .projects::before, .rail .projects::after { content: ''; position: sticky; display: block; flex: none; width: 24px; height: 1px; background: var(--line); }
 .rail .projects::before { top: 0; } .rail .projects::after { bottom: 0; margin-top: auto; }
-.rail-btn, .rail-proj { border-radius: 14px; transition: background-color .2s var(--ease), transform .25s var(--spring), color .2s; }
+.rail-btn { border-radius: 14px; transition: background-color .2s var(--ease), transform .25s var(--spring), color .2s; }
 .rail-btn:hover:not(:disabled), .rail-btn[aria-current=true] { background: var(--surface); }
-.rail-proj:hover:not(:disabled) { background: none; transform: translateY(-1px); }
-.rail-proj:hover .picon { border-radius: 14px; box-shadow: 0 6px 16px -6px #000c; }
 .rail-logo img { transition: transform .6s var(--spring), filter .3s; filter: drop-shadow(0 0 6px #7cc4ff40); }
 .rail-logo:hover img { transform: rotate(-18deg) scale(1.06); filter: drop-shadow(0 0 10px #7cc4ff80); }
 .rail-logo[aria-current=true] { background: none !important; }
 .rail-logo[aria-current=true] img { filter: drop-shadow(0 0 12px #7cc4ffa0); }
 .picon { border-radius: 12px; transition: border-radius .3s var(--ease), box-shadow .3s var(--ease), transform .3s var(--spring); }
-.rail-proj[aria-current=true] .picon { border-radius: 14px; box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px #7cc4ff, 0 0 18px -2px #7cc4ff88; }
-.rail-proj::before { content: ''; position: absolute; left: -10px; top: 50%; width: 4px; height: 0; border-radius: 0 4px 4px 0; background: var(--orbit); transform: translateY(-50%); transition: height .3s var(--spring); }
-.rail-proj:hover::before { height: 12px; }
-.rail-proj[aria-current=true]::before { height: 26px; top: 50%; bottom: auto; }
-.rail-sep { width: 16px; border-color: var(--line-soft); }
 .rail-tip { background: var(--raised); border-color: var(--line); border-radius: var(--r-sm); box-shadow: 0 10px 24px -8px #000; }
 
 /* Dica flutuante do projeto no trilho: nome e caminho, sem interacao (clique no icone troca de projeto). */
@@ -61,8 +54,6 @@ input:focus, textarea:focus, select:focus { border-color: #7cc4ff66; }
 
 /* Coluna de conversas */
 .chats { background: var(--side-bg); border-right: 1px solid var(--line-soft); }
-.chats-head { padding: 12px 10px 4px; }
-.chats-proj { font-size: 15.5px; letter-spacing: -.015em; }
 .new-task {
   display: flex; align-items: center; gap: 8px; margin: 4px 10px 6px; padding: 8px 12px;
   background: #7cc4ff0f; border: 1px solid #7cc4ff2e; border-radius: var(--r); color: #bfe2ff; font-weight: 600; font-size: 13.5px; text-align: left;
@@ -99,7 +90,8 @@ button.task.active { background: linear-gradient(90deg, #7cc4ff17, #7cc4ff05 70%
 .ph-tasks button:hover:not(:disabled) { background: #ffffff07; transform: translateX(2px); }
 .now { border-color: #7cc4ff2a; background: radial-gradient(120% 140% at 0% 0%, #7cc4ff14, transparent 60%), var(--surface); border-radius: var(--r-lg); }
 .now-label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
-.git-card, .roadmap-card { background: var(--side-bg); border-color: var(--line-soft); border-radius: var(--r-lg); }
+.roadmap-card { background: var(--side-bg); border-color: var(--line-soft); border-radius: var(--r-lg); }
+.modal-back { background: #04060acc; backdrop-filter: blur(8px) saturate(120%); }
 
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
 
@@ -107,7 +99,6 @@ button.task.active { background: linear-gradient(90deg, #7cc4ff17, #7cc4ff05 70%
 .center > main:not(.settings), .center > section, .center > .empty { animation: rise .35s var(--ease) both; }
 
 /* Modais */
-.modal-back { background: #04060acc; backdrop-filter: blur(8px) saturate(120%); }
 .modal { background: #12161ff5; border-color: var(--line); box-shadow: 0 40px 90px -20px #000, 0 0 0 1px #ffffff08 inset; }
 
 /* Chat: leitura em primeiro lugar. Cabecalho leve, mensagens com entrada suave, compositor como painel de comando. */
@@ -187,7 +178,6 @@ button.task.active { background: linear-gradient(90deg, #7cc4ff17, #7cc4ff05 70%
 .rail-float .rf-list { direction: ltr; white-space: normal; font-family: inherit; font-size: 12px; color: var(--muted); }
 
 /* Arrastar um projeto solto: o workspace ou projeto que pode recebe-lo se acende */
-.rail-proj.dragging { opacity: .35; transform: scale(.9); }
 .projects li.drop .ws-tile { transform: scale(1.1); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--g), 0 0 24px -2px var(--g); }
 .projects li.drop .picon { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--accent); transform: scale(1.08); }
 .projects.drop-loose { background: #7cc4ff08; border-radius: 16px; }
