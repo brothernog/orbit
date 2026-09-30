@@ -1,67 +1,134 @@
-/* Configuracoes */
-.settings { flex: 1; overflow: auto; padding: 8px 24px 40px; }
-.settings > * { max-width: 760px; margin-left: auto; margin-right: auto; }
-.settings h1 { font-size: 22px; }
-.set-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0 14px; margin-bottom: 4px; }
-.set-head [role=tablist] { display: flex; gap: 2px; padding: 3px; background: var(--surface); border-radius: var(--r); }
-.set-head [role=tab] { background: none; border-color: transparent; color: var(--muted); padding: 6px 12px; font-size: 13px; border-radius: 7px; }
-.set-head [role=tab].on { color: var(--text); background: var(--raised); }
-.settings details > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; padding: 4px 0; }
+/* Configuracoes: abas no topo (fixas ao rolar), cartoes iguais em todas as abas, linhas de 32-36px, chips de estado com ponto. */
+.settings { flex: 1; overflow: auto; padding: 0 24px 40px; scroll-padding-top: 72px; }
+.settings > *, .set-panel > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+.settings h1 { font-size: 20px; }
+.set-head {
+  position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 16px;
+  padding: 20px 0 0; margin-bottom: 16px; background: var(--bg); box-shadow: inset 0 -1px 0 var(--line-soft);
+}
+.set-head h1 { padding-bottom: 10px; }
+.set-head [role=tablist] { position: relative; display: flex; gap: 2px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.set-head [role=tab] {
+  background: none; border: 0; border-radius: var(--r-sm) var(--r-sm) 0 0; color: var(--muted);
+  padding: 8px 10px 11px; font-size: 13.5px; font-weight: 500;
+}
+.set-head [role=tab]:hover:not(:disabled) { background: none; color: var(--text); }
+.set-head [role=tab]:active:not(:disabled) { transform: none; }
+.set-head [role=tab].on { color: var(--text); }
+.set-head [role=tab]:focus-visible { outline-offset: -2px; }
+/* Indicador da aba ativa: desliza com mola leve; no primeiro desenho aparece ja no lugar. */
+.set-ind { position: absolute; left: 0; bottom: 0; height: 2px; border-radius: 2px; background: var(--accent); pointer-events: none; }
+.set-ind.ready { transition: transform var(--dur-3) var(--ease-spring), width var(--dur-3) var(--ease-spring); }
+/* Troca de aba: o conteudo sobe curto (teclado nao passa de --dur-2). */
+.set-panel { animation: rise-in var(--dur-2) var(--ease-out) both; }
+
+/* Cartoes */
+.settings section { background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--r-lg); padding: 14px 18px 16px; margin-bottom: 12px; }
+.settings h2 { font-size: 15px; min-height: 26px; margin-bottom: 6px; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.settings h2 + .set-sub { margin-top: -4px; }
+.set-sub { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+.set-sub em { color: var(--text); font-style: normal; }
+.settings code { padding: 1px 6px; background: var(--bg); border-radius: 4px; font: 12.5px ui-monospace, 'Cascadia Code', Consolas, monospace; }
+.set-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.set-actions small { flex-basis: 100%; }
+button.set-sm { flex: none; font-size: 12.5px; padding: 3px 10px; background: var(--surface); border-color: var(--line); color: var(--text); }
+button.set-sm:hover:not(:disabled) { background: var(--raised); }
+
+/* Disclosures: seta que gira; a abertura anima pelo details::details-content de tokens.css */
+.settings details > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; padding: 4px 0; width: fit-content; border-radius: var(--r-sm); transition: color var(--dur-1); }
 .settings details > summary::-webkit-details-marker { display: none; }
-.settings details > summary::before { content: '›'; width: 10px; transition: transform .15s; }
+.settings details > summary::before { content: '›'; width: 10px; text-align: center; transition: transform var(--dur-2) var(--ease-out); }
 .settings details[open] > summary::before { transform: rotate(90deg); }
 .settings details > summary:hover { color: var(--text); }
 .settings details > summary h2 { margin: 0; color: var(--text); }
 .settings section > details > summary + * { margin-top: 10px; }
-.prov { padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
-.prov:last-child { border-bottom: 0; }
-.prov > summary b { color: var(--text); font-weight: 500; min-width: 90px; }
-.prov-body { display: flex; flex-direction: column; gap: 4px; padding: 4px 0 6px 18px; }
-.settings code { padding: 1px 6px; background: var(--bg); border-radius: 4px; font: 12.5px ui-monospace, 'Cascadia Code', Consolas, monospace; }
-.settings section { background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--r-lg); padding: 16px 18px; margin-bottom: 16px; }
-.settings h2 { font-size: 15px; margin-bottom: 8px; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
-.settings form.inline { margin-top: 12px; }
+.settings section > details:only-child > summary { width: 100%; }
+
+/* Chips de estado: mesmo formato para conta, provedor e regra */
+.state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; line-height: 20px; padding: 0 9px 0 8px; border-radius: 999px; background: var(--raised); color: var(--muted); white-space: nowrap; font-weight: 500; }
+.state::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.state.connected { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.state.connecting { color: var(--limit); background: color-mix(in srgb, var(--limit) 10%, transparent); }
+.state.error, .state.disconnected { color: var(--hot); background: color-mix(in srgb, var(--hot) 10%, transparent); }
+.state.unknown::before { background: none; box-shadow: inset 0 0 0 1.5px currentColor; }
+
+/* Contas */
 .account { padding: 12px 0; border-bottom: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 4px; }
+.account:first-of-type { padding-top: 4px; }
 .account:last-of-type { border-bottom: 0; }
 .account small { font-size: 12.5px; }
-.state { display: inline-block; font-size: 12px; padding: 1px 9px; border-radius: 20px; background: var(--raised); color: var(--muted); white-space: nowrap; }
-.state.connected { color: var(--ok); background: #5bd69a14; }
-.state.connecting { color: var(--limit); background: #f2b45c14; }
-.state.error, .state.disconnected { color: var(--hot); background: #ff7b6b14; }
-.usage { margin-top: 6px; font-size: 13px; }
-.usage-row { display: flex; align-items: baseline; gap: 10px; }
+.account-head { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+.account-head > b { font-weight: 600; }
+.account-head .account-id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-head > button { margin-left: auto; }
+.settings .add-account { display: flex; gap: 8px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.settings .add-account input { flex: 0 1 280px; min-width: 0; padding: 5px 10px; font-size: 13.5px; }
+.add-account button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; font-size: 13.5px; }
+
+/* Provedores: uma linha por CLI, detalhes recolhidos */
+.prov { border-bottom: 1px solid var(--line-soft); }
+.prov:last-child { border-bottom: 0; }
+.settings .prov > summary { width: 100%; min-height: 36px; color: var(--muted); }
+.prov > summary b { color: var(--text); font-weight: 500; min-width: 90px; }
+.prov-body { display: flex; flex-direction: column; gap: 4px; padding: 0 0 10px 18px; }
+.prov-body small { font-size: 12.5px; overflow-wrap: anywhere; }
+
+.settings .hidden-list { display: flex; flex-direction: column; }
+.settings .hidden-list li { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0; background: none; border-bottom: 1px solid var(--line-soft); }
+.settings .hidden-list li:last-child { border-bottom: 0; }
+.settings .hidden-list .mono-sm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font: 12.5px ui-monospace, 'Cascadia Code', Consolas, monospace; color: var(--muted); }
+
+/* Barras de uso (tambem no popup de limites e no medidor do chat) */
+.usage { margin-top: 10px; font-size: 13px; }
+.usage-row { display: flex; align-items: center; gap: 10px; }
 .usage-row b { flex: 1; min-width: 0; font-weight: 500; }
-.usage-row small { font-size: 12.5px; }
-.usage-row span { min-width: 34px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.usage-row small { font-size: 12.5px; color: var(--faint); }
+.usage-row span { min-width: 38px; text-align: right; color: var(--text); font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; }
 .tip .usage + .usage { margin-top: 4px; }
-.usage { margin-top: 10px; }
-.usage-row { align-items: center; }
-.usage-row small { color: var(--faint); }
-.usage-row span { min-width: 38px; color: var(--text); font-weight: 600; font-size: 14px; }
 /* Trilho escuro (mais fundo que o cartao) para o preenchimento sempre ter um fundo visivel. */
-.usage .bar { position: relative; height: 10px; margin: 8px 0 4px; background: color-mix(in srgb, var(--text) 9%, transparent); border-radius: 999px; box-shadow: inset 0 1px 3px #000a, 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent); overflow: hidden; }
+.usage .bar { position: relative; height: 8px; margin: 6px 0 4px; background: color-mix(in srgb, var(--text) 9%, transparent); border-radius: 999px; box-shadow: inset 0 1px 2px #0008; overflow: hidden; }
 .usage .bar div {
-  position: relative; overflow: hidden; min-width: 10px; border-radius: 999px; transform-origin: left;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--limit) 70%, #000), var(--limit) 70%, #ffd58a);
-  box-shadow: 0 0 10px -1px #f2b45c88;
-  transition: background .4s; animation: none;
+  min-width: 8px; height: 100%; border-radius: 999px; animation: none;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--limit) 70%, #000), var(--limit));
+  transition: width var(--dur-3) var(--ease-out), background-color var(--dur-2);
 }
-.usage .bar div.hot { background: linear-gradient(90deg, #c8503f, var(--hot) 70%, #ffa596); box-shadow: 0 0 10px -1px #ff7b6b99; }
-.usage .bar div::after { /* brilho que varre o preenchimento */
-  content: ''; position: absolute; inset: 0; width: 45%;
-  background: linear-gradient(90deg, transparent, #ffffff55, transparent); animation: bar-shine 2.8s ease-in-out 1s infinite;
-}
-.tip .usage .bar div { animation: none; } /* o balao vive escondido: a entrada toca a cada hover */
-@keyframes bar-shine { from { transform: translateX(-120%); } 60%, to { transform: translateX(260%); } }
-@media (prefers-reduced-motion: reduce) { .usage .bar div, .usage .bar div::after { animation: none; transition: none; } }
+.usage .bar div.hot { background: linear-gradient(90deg, color-mix(in srgb, var(--hot) 70%, #000), var(--hot)); }
+@media (prefers-reduced-motion: reduce) { .usage .bar div { transition: none; } }
+
+/* Formularios: grupos sem moldura, rotulo de secao pequeno */
 .deleg { display: flex; flex-direction: column; gap: 10px; }
+.deleg .check { min-height: 24px; }
 .deleg-report { display: flex; flex-direction: column; gap: 8px; }
 .deleg-report b { font-weight: 500; font-size: 13.5px; }
 .deleg-read { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.deleg-read small { display: inline-flex; align-items: center; gap: 6px; }
+.deleg-read .link { font-size: 12.5px; }
 .deleg-adv { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; padding: 6px 0 0 18px; }
 .deleg-adv small { flex-basis: 100%; }
 .deleg-adv input[type=number] { width: 64px; margin-left: 6px; }
 .deleg label:not(.check) { color: var(--muted); font-size: 13px; }
-.deleg fieldset { border: 1px solid var(--line); border-radius: var(--r); display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 12px; }
-.deleg legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+.deleg fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.deleg fieldset + fieldset { padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.deleg fieldset[disabled] { opacity: .55; }
+.deleg legend { float: left; width: 100%; padding: 0 0 6px; color: var(--faint); font-size: 12px; font-weight: 600; }
+.deleg legend + * { clear: left; }
 
+/* Nova e limites de contexto: estilos proprios aqui (antes espalhados em home.css/context.css) */
+.settings .jcfg-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.settings .jcfg-row .dd-btn { border: 1px solid var(--line); color: var(--text); }
+.settings .limits { display: flex; flex-direction: column; gap: 8px; }
+.settings .limits label { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 13.5px; min-height: 34px; }
+.settings .lim-in { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.settings .lim-in input { width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
+.settings .lim-in small { width: 72px; font-size: 12px; }
+.settings .check .lim-in input { width: 64px; padding: 3px 8px; }
+.settings .check .lim-in small { width: auto; }
+.settings .lvl { display: flex; flex-direction: column; gap: 6px; }
+.settings .lvl input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; padding: 0; border: 0; background: none; }
+.settings .lvl-names { display: flex; justify-content: space-between; }
+.settings .lvl-names button { background: none; border-color: transparent; padding: 2px 4px; color: var(--muted); font-size: 13px; }
+.settings .lvl-names button:hover:not(:disabled) { color: var(--text); }
+.settings .lvl-names button.on { color: var(--accent); font-weight: 600; }
+.settings .lvl.custom input[type=range] { opacity: .45; }
+.settings .lvl-adv { margin-top: 4px; }
+.settings .lvl-adv[open] { display: flex; flex-direction: column; gap: 8px; }

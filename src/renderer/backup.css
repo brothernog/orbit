@@ -1,21 +1,25 @@
 .backup-settings { min-width: 0; }
-.backup-lede { color: var(--text); max-width: 64ch; }
-.backup-exclusions { margin-top: 8px; color: var(--muted); font-size: 13px; max-width: 64ch; }
-.backup-current { display: flex; flex-direction: column; gap: 4px; margin-top: 16px; color: var(--muted); font-size: 12.5px; }
+.backup-what { margin-bottom: 4px; }
+.backup-what p { margin: 8px 0 0 18px; color: var(--text); font-size: 13px; max-width: 64ch; }
+.backup-what .backup-exclusions { color: var(--muted); }
+.backup-current { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; color: var(--faint); font-size: 12px; font-weight: 600; }
+.backup-current .backup-path { color: var(--muted); font-weight: 400; }
 .backup-path { overflow-wrap: anywhere; font: 12.5px/1.6 ui-monospace, 'Cascadia Code', Consolas, monospace; }
-.backup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.backup-result { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
+.backup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.backup-result { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line-soft); animation: rise-in var(--dur-2) var(--ease-out) both; }
 .backup-result h3 { font-size: 14px; margin-bottom: 8px; }
-.backup-success { color: var(--ok); font-weight: 500; }
-.backup-summary { margin: 8px 0 0; display: flex; flex-direction: column; gap: 8px; }
+.backup-success { display: flex; align-items: center; gap: 6px; color: var(--ok); font-weight: 500; }
+.backup-summary { margin: 8px 0 0; display: flex; flex-direction: column; gap: 6px; }
 .backup-summary > div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
 .backup-summary dt { color: var(--muted); font-size: 13px; }
 .backup-summary dd { margin: 0; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
-.backup-warning { margin-top: 16px; padding: 12px; border-left: 2px solid var(--limit); background: var(--bg); color: var(--text); font-size: 13px; border-radius: var(--r-sm); }
-.backup-actions .backup-restore-btn { color: var(--hot); }
+/* Acao destrutiva: cartao com borda quente, aviso com icone e botao de perigo separado do resto */
+.settings section.backup-restore:has(.backup-restore-btn) { border-color: color-mix(in srgb, var(--hot) 30%, transparent); }
+.backup-warning { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 10px 12px; background: color-mix(in srgb, var(--limit) 8%, var(--bg)); border: 1px solid color-mix(in srgb, var(--limit) 25%, transparent); color: var(--text); font-size: 13px; border-radius: var(--r); }
+.backup-warning svg { flex: none; margin-top: 2px; color: var(--limit); }
 .backup-status { margin: 8px 0; overflow-wrap: anywhere; }
-.backup-result > small { margin-top: 8px; }
-.set-head [role=tablist] { flex-wrap: wrap; max-width: 100%; }
+.backup-last > small { margin-top: 8px; }
+.backup-last p:first-child { font-size: 13px; }
 @media (max-width: 600px) {
   .backup-summary > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }

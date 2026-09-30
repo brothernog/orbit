@@ -80,7 +80,6 @@ export function AgentNames() {
   if (!rows) return <small>{err || 'Carregando…'}</small>
   return (
     <div className="an">
-      <p className="an-lede">Dê um nome a um provedor e modelo para delegar por nome: <em>“delegue para o Fabricio”</em>.</p>
       {rows.length === 0 && <small>Nenhum agente nomeado ainda.</small>}
       <ul className="an-list">
         {rows.map((r, i) => {
@@ -108,7 +107,7 @@ export function AgentNames() {
       </ul>
       <div className="an-actions">
         <button type="button" onClick={() => edit(rs => [...rs, empty()])}><Icon n="plus" size={14} /> Adicionar agente</button>
-        <button type="button" className="primary" disabled={!dirty || busy || problems.some(Boolean)} onClick={save}>{busy ? 'Salvando…' : 'Salvar'}</button>
+        {(dirty || busy) && <button type="button" className="primary enter-pop" disabled={busy || problems.some(Boolean)} onClick={save}>{busy ? 'Salvando…' : 'Salvar'}</button>}
         {ok && <small className="an-ok" role="status">Salvo. Vale na próxima execução.</small>}
       </div>
       {err && <small className="err" role="alert">{err}</small>}

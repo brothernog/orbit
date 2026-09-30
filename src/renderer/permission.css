@@ -24,14 +24,15 @@
 .pr-inline { color: var(--muted); font-size: 13px; padding-left: 23px; }
 .pr-inline input { width: 56px; margin: 0 4px; }
 .pr-rules, .pr-recent { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
-.pr-rules li, .pr-recent li { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 6px 6px 10px; border-radius: var(--r-sm); }
+.pr-rules li, .pr-recent li { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 34px; padding: 2px 4px 2px 8px; border-radius: var(--r-sm); transition: background-color var(--dur-1); }
 .pr-rules li:hover, .pr-recent li:hover { background: var(--raised); }
 .pr-rules code, .pr-recent code { flex: 1; min-width: 0; margin: 0; padding: 0; background: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-rules small, .pr-recent small { flex: none; }
 .pr-who { flex: none; color: var(--muted); font-size: 13px; }
-.pr-dec { flex: none; width: 58px; font-weight: 600; font-size: 13px; }
-.pr-dec.allow { color: var(--ok); }
-.pr-dec.deny { color: var(--hot); }
+.pr-dec { flex: none; min-width: 66px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; font-weight: 500; line-height: 20px; padding: 0 9px 0 8px; border-radius: 999px; }
+.pr-dec::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pr-dec.allow { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.pr-dec.deny { color: var(--hot); background: color-mix(in srgb, var(--hot) 10%, transparent); }
 .pr-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
 .pr-form input { flex: 1 1 220px; min-width: 0; }
 .pr-warn, .pr-note { flex-basis: 100%; }
