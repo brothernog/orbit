@@ -210,7 +210,7 @@ export function TodoBoard({ todo, projects, onOpen }: { todo: TodoApi; projects:
               <Dropdown down label="Agente sugerido" value={next.i.agent ?? ''} placeholder="Agente" options={AGENT_OPTS} onChange={a => todo.edit(next.t.id, next.i.id, { agent: a })} />
             </div>
           </div>
-        : <div className="now empty-now"><span className="now-label">Agora</span><p className="now-text">Nada pendente. Adicione um item abaixo ou peça à Nova.</p></div>}
+        : null}
 
       {todo.warn && <p className="err">{todo.warn}</p>}
 
