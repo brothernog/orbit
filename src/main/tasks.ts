@@ -67,7 +67,8 @@ export const titleIn = (s: string) => s.match(TITLE_TAG)?.[1].replace(/\s+/g, ' 
 export const summaryTitle = (db: DatabaseSync, id: number, title: string, provisional: string) =>
   db.prepare('UPDATE tasks SET title=? WHERE id=? AND title=?').run(clip(title, 60), id, provisional)
 
-export const taskMessages = (db: DatabaseSync, id: number) => all(db, 'SELECT * FROM messages WHERE task_id=? ORDER BY id', id)
+// So as colunas que o chat mostra (renderer/api.ts Msg): clean/clean_parts (transferencia de contexto) nao vao a cada abertura.
+export const taskMessages = (db: DatabaseSync, id: number) => all(db, 'SELECT id, role, text, status, provider, account_id, model, effort, created_at FROM messages WHERE task_id=? ORDER BY id', id)
 
 // ---- Sessoes nativas: uma por (tarefa, provedor, perfil). Provedores diferentes nunca compartilham sessao.
 export const profileOf = (provider: string, accountId?: number | null) => (provider === 'claude' ? String(accountId ?? '') : '')
@@ -120,19 +121,23 @@ export function contextFor(db: DatabaseSync, taskId: number, provider: string, a
     after = get(db, "SELECT MAX(id) id FROM messages WHERE task_id=? AND role='agent' AND provider=? AND COALESCE(account_id,0)=COALESCE(?,0) AND (status IS NULL OR status IN ('completed','cancelled'))", taskId, provider, accountId ?? null)?.id ?? Infinity
     if (after === Infinity) return null // sessao migrada sem historico proprio: ela ja tem o que precisa
   }
-  const rows = all(db, "SELECT id, role, provider, text, clean, clean_parts FROM messages WHERE task_id=? AND id>? AND role IN ('user','agent') AND text<>'' AND NOT (role='agent' AND status='failed') ORDER BY id", taskId, after)
+  const where = "task_id=? AND id>? AND role IN ('user','agent') AND text<>'' AND NOT (role='agent' AND status='failed')"
   const lines: string[] = []
-  let size = 0, considered = 0, full = false
-  for (const m of rows.reverse()) { // do mais novo para o mais antigo, ate o limite (janela contigua: nunca pula uma mensagem grande para pegar uma antiga)
+  let size = 0, considered = 0, full = 0
+  // Do mais novo para o mais antigo, uma linha por vez, ate o limite (janela contigua: nunca pula uma mensagem grande para pegar uma antiga).
+  // O historico inteiro nao e carregado: so as mensagens da janela vem com todas as colunas.
+  for (const m of db.prepare(`SELECT id, role, provider, text, clean, clean_parts FROM messages WHERE ${where} ORDER BY id DESC`).iterate(taskId, after) as Iterable<any>) {
     const body = m.role === 'agent' ? agentBody(m) : m.text
     if (!body) continue
     considered++ // as que nao couberem continuam contadas: o usuario ve quantas ficaram de fora
-    if (full) continue
     const line = `${m.role === 'user' ? 'Usuario' : `Agente (${m.provider ?? 'desconhecido'})`}: ${clip(body, MESSAGE_CHARS)}`
-    if (size + line.length > maxChars && lines.length) { full = true; continue }
+    if (size + line.length > maxChars && lines.length) { full = m.id; break }
     lines.unshift(line)
     size += line.length + 2 // + separador entre mensagens: o corpo final nunca passa de maxChars
   }
+  // Mais antigas que nao couberam: so a contagem (corpo nao vazio = agentBody nao vazio = texto sem marcadores nao vazio).
+  if (full) for (const r of db.prepare(`SELECT role, COALESCE(clean, text) AS body FROM messages WHERE ${where} AND id<?`).iterate(taskId, after, full) as Iterable<any>)
+    if (r.role === 'user' || stripActivity(r.body)) considered++
   if (!lines.length) return null
   const text = `[Contexto transferido pelo dashboard: esta sessao nao viu a conversa abaixo, que aconteceu antes na mesma tarefa (mais antigo primeiro). Use-a como contexto, sem refazer o que ja foi feito.]\n\n${lines.join('\n\n')}\n\n[Fim do contexto transferido]\n\n`
   return { text, body: lines.join('\n\n'), count: lines.length, omitted: considered - lines.length } // body = so as mensagens (vira o item do pacote); omitted = mensagens mais antigas que nao couberam
