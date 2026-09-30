@@ -5,7 +5,8 @@ import { effortLabel, modelName } from './Chat'
 import { Markdown } from './Markdown'
 import { Dropdown } from './Dropdown'
 import { Icon, PROVIDER } from './icons'
-import { dirtyCount, minutesSince, useProjects } from './projects'
+import { dirtyCount, useProjects } from './projects'
+import { minutesSince, same } from './time'
 import { TodoBoard, useTodo, type TodoApi, type TodoDraft } from './Todo'
 import { ProjectIcon } from './Nav'
 import { PulseCore, usePulse } from './PulseCore'
@@ -30,7 +31,6 @@ const SHOWN = 4 // o resto fica recolhido: poucas coisas na tela por vez
 
 const greeting = () => { const h = new Date().getHours(); return h < 5 ? 'Boa noite' : h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite' }
 const since = (min: number) => (min < 2 ? 'agora' : min < 90 ? `há ${min} min` : min < 2160 ? `há ${Math.round(min / 60)} h` : `há ${Math.round(min / 1440)} d`)
-const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
 // Roadmap de um projeto: progresso e os proximos itens, com marcar feito (grava no .md) e mandar para a to-do.
 const LINE = /^(\s*[-*] )\[( |x)\] (.*)$/i

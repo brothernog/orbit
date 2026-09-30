@@ -20,6 +20,7 @@ import { Confirm, ContextMenu, GroupDialog, ProjectIcon, RenameInput, type MenuI
 import { groupOf, initials, moveTo, newGroup, placeBefore, taskToRemember, type Group } from './groups'
 import { expireRead, loadRead, readSnapshot, setRead } from './readCache'
 import type { QuotaSnapshot } from './usageText'
+import { ago, clock, same } from './time'
 
 const ls = (k: string) => { try { return localStorage.getItem(k) } catch { return null } }
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch {} }
@@ -65,21 +66,6 @@ function useMinuteTick() {
   }, [])
 }
 
-const ago = (iso: string) => {
-  const s = (Date.now() - new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z')).getTime()) / 1000
-  if (!(s >= 0)) return ''
-  if (s < 90) return 'agora'
-  if (s < 5400) return `${Math.round(s / 60)} min`
-  if (s < 129600) return `${Math.round(s / 3600)} h`
-  return `${Math.round(s / 86400)} d`
-}
-const elapsed = (from: number) => {
-  const s = Math.max(0, Math.floor((Date.now() - from) / 1000))
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60
-  return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}:${String(r).padStart(2, '0')}`
-}
-const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
-
 // Dock no canto superior direito: quem esta trabalhando agora, em que e ha quanto tempo.
 function AgentDock({ active, onOpen }: { active: Active[]; onOpen: (a: Active) => void }) {
   const [open, setOpen] = useState(false)
@@ -117,7 +103,7 @@ function AgentDock({ active, onOpen }: { active: Active[]; onOpen: (a: Active) =
                     <span className="dock-task">{a.title}</span>
                     <span className="dock-meta">{PROVIDER[a.provider]?.label ?? a.provider}{a.model ? ` ${a.model}` : ''} em {name(a.game)}{a.kind === 'delegation' ? ', delegação' : ''}</span>
                   </span>
-                  <span className="dock-time">{a.startedAt ? elapsed(a.startedAt) : ''}</span>
+                  <span className="dock-time">{a.startedAt ? clock(a.startedAt) : ''}</span>
                 </button>
               </li>
             ))}

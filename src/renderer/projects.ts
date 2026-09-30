@@ -1,6 +1,7 @@
 // Estado real dos projetos (tipo, Git, atividade), com cache curto: varias telas pedem o mesmo projeto.
 import { useEffect, useState } from 'react'
 import { api, onChat } from './api'
+import { same } from './time'
 
 export type FileChange = { path: string; status: 'M' | 'A' | 'D' | '?' }
 export type GitState = { branch: string | null; upstream: string | null; ahead: number; behind: number; files: FileChange[] }
@@ -23,7 +24,6 @@ const get = (g: string, maxAge: number) => {
   }
   return p
 }
-const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 // Projetos que um evento mudou de verdade (worktree, agente terminou: o Git provavelmente mudou); done sem projeto vale para todos.
 const changedBy = (ev: any, games: string[]) =>
   typeof ev.worktreesChanged === 'string' ? games.filter(g => same(g, ev.worktreesChanged))
@@ -52,4 +52,3 @@ export function useProjects(games: string[], everyMs = 60_000) {
 }
 
 export const dirtyCount = (i?: Info) => (i?.git?.files.length ?? 0) + (i?.worktrees.reduce((n, w) => n + w.files.length, 0) ?? 0)
-export const minutesSince = (iso: string | null) => (iso ? (Date.now() - new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z')).getTime()) / 60000 : Infinity)

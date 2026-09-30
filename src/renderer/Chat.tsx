@@ -15,6 +15,7 @@ import { imageRefs, stripMarks } from './msgImages'
 import { loadRead } from './readCache'
 import { useCachedRead } from './useCachedRead'
 import { usageNote, type QuotaSnapshot } from './usageText'
+import { agoText } from './time'
 
 const parseSel = (s: string | null | undefined): Sel | null => {
   try { const v = JSON.parse(s ?? 'null'); return v && typeof v.provider === 'string' ? v : null } catch { return null }
@@ -54,10 +55,6 @@ const label = (m: Msg, accounts: Account[]) => {
 }
 
 const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : String(n))
-const ago = (iso: string) => {
-  const s = (Date.now() - new Date(iso.replace(' ', 'T') + 'Z').getTime()) / 1000
-  return s < 90 ? 'agora' : s < 5400 ? `há ${Math.round(s / 60)} min` : s < 129600 ? `há ${Math.round(s / 3600)} h` : `há ${Math.round(s / 86400)} d`
-}
 const NO_CONTEXT: Record<string, string> = {
   codex: 'o codex exec não informa o contexto e o arquivo da sessão não trouxe a medida',
   gemini: 'o Gemini CLI não informa contexto ocupado nem janela',
@@ -93,7 +90,7 @@ function ContextRing({ m, sel }: { m: Metric | null; sel: Sel }) {
               {(m.consumed_in != null || m.consumed_out != null) && <span>
                 Consumo {m.scope === 'thread' ? 'acumulado' : 'da última execução'}: {[m.consumed_in != null && `entrada ${fmt(m.consumed_in)}`, m.consumed_out != null && `saída ${fmt(m.consumed_out)}`].filter(Boolean).join(', ')}
               </span>}
-              <small>Fonte: {m.source ?? 'desconhecida'}, {ago(m.at)}{stale ? `. Medida do modelo ${m.model ?? 'padrão'}; atualiza na próxima execução.` : ''}</small>
+              <small>Fonte: {m.source ?? 'desconhecida'}, {agoText(m.at)}{stale ? `. Medida do modelo ${m.model ?? 'padrão'}; atualiza na próxima execução.` : ''}</small>
             </>}
       </span>
     </span>

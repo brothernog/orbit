@@ -7,13 +7,8 @@ import { useProjects } from './projects'
 import { useTodo } from './Todo'
 import { coverTitle, totalText, type TotalLike } from './usageText'
 import { Production } from './Production'
+import { agoText, elapsedMin, same } from './time'
 
-const ago = (iso: string) => {
-  const s = (Date.now() - new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z')).getTime()) / 1000
-  return s < 90 ? 'agora' : s < 5400 ? `há ${Math.round(s / 60)} min` : s < 129600 ? `há ${Math.round(s / 3600)} h` : `há ${Math.round(s / 86400)} d`
-}
-const elapsed = (from: number) => { const m = Math.max(0, Math.round((Date.now() - from) / 60000)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}min` }
-const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 const STATE = { aberta: 'Aberta', andamento: 'Em andamento', concluida: 'Concluída' }
 
 // Parte de baixo da Nova de uma pasta: proximo passo, recentes, branch e roadmap. O topo (roda, titulo, chat) e o da Nova.
@@ -41,7 +36,7 @@ export function ProjectHome({ game, tasks, active, onOpenTask, onNewTask, onErr 
                   {here.map(a => (
                     <button key={`${a.kind}${a.id}`} className="now-agent" onClick={() => onOpenTask(a.taskId)}>
                       <Avatar provider={a.provider} live />
-                      <span className="now-body"><span className="now-text">{a.title}</span><small>{PROVIDER[a.provider]?.label ?? a.provider}{a.model ? ` ${a.model}` : ''}, há {elapsed(a.startedAt)}{a.kind === 'delegation' ? ', delegação' : ''}</small></span>
+                      <span className="now-body"><span className="now-text">{a.title}</span><small>{PROVIDER[a.provider]?.label ?? a.provider}{a.model ? ` ${a.model}` : ''}, há {elapsedMin(a.startedAt)}{a.kind === 'delegation' ? ', delegação' : ''}</small></span>
                       <Icon n="chevron" size={16} />
                     </button>
                   ))}
@@ -68,7 +63,7 @@ export function ProjectHome({ game, tasks, active, onOpenTask, onNewTask, onErr 
                             {who && <Avatar provider={who.provider} live size="sm" />}
                             <span className="pt-state">{STATE[t.state]}</span>
                             <span className="pt-tokens" title={`Tokens informados pelos provedores (entrada + saída). ${coverTitle(usage[t.id])}`}>{totalText(usage[t.id])}</span>
-                            <span className="pt-when">{ago(t.updated_at)}</span>
+                            <span className="pt-when">{agoText(t.updated_at)}</span>
                           </button>
                         </li>
                       )

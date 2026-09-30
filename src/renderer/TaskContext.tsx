@@ -3,6 +3,7 @@ import { api, errText, onChat, type Account } from './api'
 import { Avatar, Icon, PROVIDER } from './icons'
 import { coverTitle, totalText, type TotalLike } from './usageText'
 import { useCachedRead } from './useCachedRead'
+import { sqlDate as when } from './time'
 
 // Contexto da tarefa: pedidos de aprovacao (o que vai para outro agente), memoria, uso e pacotes ja enviados.
 // A aprovacao manda so ID + hash do que foi exibido (e, se o usuario desmarcou itens, as refs mantidas); o processo principal valida e decide o resto.
@@ -16,7 +17,6 @@ type Pkg = {
 }
 // Mensagem retida ate a decisao sobre o contexto de que depende (nenhum agente foi iniciado).
 export type PendingSend = { id: number; task_id: number; package_id: number | null; text: string; sel: { provider: string; model?: string; effort?: string }; state: 'awaiting_context_approval' | 'starting' | 'sent' | 'cancelled' | 'expired'; reason: string | null; created_at: string }
-const when = (iso: string) => new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z'))
 const fmt = (n: number | null | undefined) => (n == null ? '—' : n >= 1000 ? `${(n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : String(n))
 const SOURCE = { delegation: 'para a delegação', history: 'anterior da tarefa (memória pertinente e histórico)', memory: 'memória da tarefa' } as Record<string, string>
 const who = (r: Recipient) => [PROVIDER[r.provider]?.label ?? r.provider, r.model, r.effort].filter(Boolean).join(' ')
