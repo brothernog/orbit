@@ -34,11 +34,11 @@ import { codexContextFromRollout, codexLimits, findRollout } from './codexSessio
 import { projectIconData } from './projectIcon.ts'
 import { changedFiles, dirtOf, fileDiff, recentCommits, stopWatching, watchDir } from './fileWatch.ts'
 import { createPulse } from './pulse.ts'
+import { createAccounts } from './accounts.ts'
 import { branchHandlers } from './branchIpc.ts'
-import { push } from './gitOps.ts'
 import { checkpointDb, openDb } from './db.ts'
 import { asAllowedPath, asInt, asStr, cleanGroups, fail, inside, pickGames, safeJoin, samePath } from './guard.ts'
-import { cancelLogin, claudeEnv, claudeStatus, hostlessEnv, logEvent, loginShellPath, loginState, mergePath, openTerminal, probeProvider, providerAuth, startLogin, type LogEntry } from './providers.ts'
+import { cancelLogin, claudeStatus, hostlessEnv, logEvent, loginShellPath, loginState, mergePath, openTerminal, probeProvider, providerAuth, startLogin, type LogEntry } from './providers.ts'
 import { parseAliases, validateAliases } from './agents.ts'
 import { delegateTool, DEFAULT_SETTINGS, mcpWire, normalizeSettings, reconcileDelegations, runDelegation, TOOL_NAME, WorkspaceGuard, type Deps, type McpWire, type ParentCtx } from './delegation.ts'
 import { ApprovalWaiters, getPackage, type Decision } from './consent.ts'
@@ -161,22 +161,10 @@ async function createWorktree(game: string, prefix: 'pin' | 'task', id: number, 
   return { wt, branch, setup: copyNote(await copyIntoWorktree(game, wt, copyList(db, game))) } // .env, cache .godot/...: so o que o usuario listou
 }
 
-const accountRow = (id?: number | null) => (id ? (db.prepare('SELECT * FROM accounts WHERE id=?').get(id) as any) : null)
-// Pasta de perfil efetiva; contas que apontam para a mesma pasta compartilham (e sobrescrevem) o mesmo login.
-const dirKey = (a: any) => path.resolve(a.config_dir ?? path.join(os.homedir(), '.claude')).toLowerCase()
-const accountEnv = (accountId?: number | null) => claudeEnv(accountRow(accountId)?.config_dir ?? null).env
+const { accountRow, dirKey, accountEnv, listAccounts, fetchUsage } = createAccounts(db)
 const diagLog = path.join(app.getPath('userData'), 'diagnostics.log')
 const attachRoot = path.join(app.getPath('userData'), 'attachments') // imagens coladas no chat, por tarefa (fora do projeto)
 const logFor = (provider: string, profile?: string) => (e: Partial<LogEntry>) => logEvent(diagLog, { provider, profile, ...e })
-
-function listAccounts() {
-  const rows = db.prepare('SELECT * FROM accounts ORDER BY id').all() as any[]
-  return rows.map(a => ({
-    ...a,
-    collision: rows.some(o => o.id !== a.id && dirKey(o) === dirKey(a)),
-    login: loginState(dirKey(a)) ?? null
-  }))
-}
 
 // Provedores: instalacao, versao, capacidades e login. Consultas gratuitas, sem inferencia.
 async function diagnose() {
@@ -580,26 +568,6 @@ const handover = createHandover({
 // Perfis antigos podem compartilhar a mesma pasta: trocar login invalida todas essas contas.
 const invalidateAccountUsage = (account: any) => {
   for (const acc of listAccounts()) if (dirKey(acc) === dirKey(account)) accountUsageService.invalidate(acc.id)
-}
-
-// Endpoint nao documentado usado pelo /usage do Claude Code; nao prova o estado do login.
-async function fetchUsage(accountId: number, signal: AbortSignal) {
-  const acc = accountRow(accountId) ?? fail('Conta inexistente.')
-  const dir = acc.config_dir ?? path.join(os.homedir(), '.claude')
-  const file = path.join(dir, '.credentials.json')
-  if (!fs.existsSync(file)) throw new Error('Sem credencial local para consultar uso (recurso opcional; o chat nao depende dele).')
-  let token: unknown
-  try { token = JSON.parse(fs.readFileSync(file, 'utf8')).claudeAiOauth?.accessToken } catch { throw Error('Credencial local invalida para consultar uso.') }
-  if (typeof token !== 'string' || !token) throw Error('Sem credencial local para consultar uso (recurso opcional; o chat nao depende dele).')
-  const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
-    headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' }, signal
-  })
-  // Endpoint nao documentado e opcional: recusa aqui NAO prova que o login falhou (veja o estado da conta).
-  if (res.status === 401) throw new Error('Consulta de uso recusada (401). O estado do login e verificado a parte.')
-  if (res.status === 429) throw new Error('Muitas consultas de uso. Tente de novo em alguns minutos.')
-  if (!res.ok) throw new Error(`Falha ao ler uso (${res.status}).`)
-  const j = await res.json()
-  return { fiveHour: j.five_hour ?? null, sevenDay: j.seven_day ?? null }
 }
 
 const { liStatus, liConnect, liPost, cancelConnect } = createLinkedInService({ getSetting, setSetting, safeStorage, openExternal: url => shell.openExternal(url), linkedinDir })
