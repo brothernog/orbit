@@ -4,8 +4,6 @@
 .gd-body .gd-godot input[type=checkbox] { width: 16px; height: 16px; padding: 0; border-radius: 0; flex: none; }
 .group-dlg .gd-body { max-height: 65vh; overflow-y: auto; }
 :is(.godot-panel, .engine-panel) { min-width: 0; }
-:is(.godot-panel, .engine-panel) > summary { color: var(--text); }
-:is(.godot-panel, .engine-panel) > summary span { color: var(--muted); }
 :is(.godot-panel, .engine-panel) .workflow-body { display: grid; gap: 12px; }
 :is(.godot-panel, .engine-panel) .godot-head, :is(.godot-panel, .engine-panel) .step-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 :is(.godot-panel, .engine-panel) .godot-head { justify-content: space-between; }

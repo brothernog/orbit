@@ -24,7 +24,7 @@ export function Handover() {
           <span><b>{title}</b><br /><small>{hint}</small></span>
         </label>
       ))}
-      <small>O resumo é montado pelo app, sem IA e sem gastar tokens: arquivos editados, comandos, testes e o fim da resposta. Por enquanto só para Claude.</small>
+      <small title="Arquivos editados, comandos, testes e o fim da resposta.">O resumo é montado pelo app, sem IA e sem gastar tokens. Por enquanto só para Claude.</small>
       {err && <small className="err" role="alert">{err}</small>}
     </div>
   )

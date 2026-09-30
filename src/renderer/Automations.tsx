@@ -22,7 +22,7 @@ export function Automations() {
         <span className="lim-in"><input type="number" min={1} max={100} defaultValue={r.when.percent} key={r.when.percent} aria-label="Percentual do limite"
           onBlur={e => +e.target.value !== r.when.percent && put({ when: { kind: 'usage_above', percent: +e.target.value } })} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }} /><small>%</small></span>
       </label>
-      <small>Antes de cada envio, usa a próxima conta com uso livre (na ordem acima). O histórico só vai para a outra conta se você aprovar.</small>
+      <small>Antes de cada envio, usa a próxima conta com uso livre, na ordem acima. O histórico só segue se você aprovar.</small>
       {err && <small className="err" role="alert">{err}</small>}
     </div>
   )

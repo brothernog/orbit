@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { api, errText, type Account, type Auth, type Provider } from './api'
 import { AgentNames } from './AgentNames'
 import { PermissionRules } from './PermissionRules'
@@ -52,12 +52,12 @@ function AccountRow({ a, reload }: { a: Account; reload: () => void }) {
   }
   return (
     <div className="account">
-      <b>{a.name}</b> <span className={`state ${state}`}>{STATE[state]}</span>
-      {status?.email && <small>{status.email}{status.plan ? ` · ${status.plan}` : ''}</small>}
-      <div className="row">
+      <div className="account-head">
+        <b>{a.name}</b><span className={`state ${state}`}>{STATE[state]}</span>
+        {status?.email && <small className="account-id" title={status.email}>{status.email}{status.plan ? ` · ${status.plan}` : ''}</small>}
         {connecting
-          ? <button onClick={() => run(() => api.cancelLogin(a.id))}>Cancelar login</button>
-          : <button onClick={() => { setErr(''); run(() => api.loginAccount(a.id)) }}>{state === 'connected' ? 'Refazer login' : 'Login'}</button>}
+          ? <button className="set-sm" onClick={() => run(() => api.cancelLogin(a.id))}>Cancelar login</button>
+          : <button className="set-sm" onClick={() => { setErr(''); run(() => api.loginAccount(a.id)) }}>{state === 'connected' ? 'Refazer login' : 'Login'}</button>}
       </div>
       {connecting && <small>Conclua o login no navegador que abriu (expira em 5 minutos).</small>}
       {a.login?.state === 'error' && <small className="err">{a.login.error}</small>}
@@ -97,7 +97,7 @@ function ProviderRow({ p }: { p: Provider }) {
 }
 
 type Deleg = { enabled: boolean; maxPerTask: number; timeoutMin: number; allowEdit: boolean; allowedProviders: string[]; readAgent: string; providers: string[]; mcpProviders: string[] }
-function Delegation() {
+function Delegation({ goAgents }: { goAgents: () => void }) {
   const read = useCachedRead<Deleg>('getDelegationSettings', () => api.getDelegationSettings())
   const aliases = useCachedRead<{ name: string }[]>('getAgentAliases', () => api.getAgentAliases())
   const d = read.data, names = (aliases.data ?? []).map(a => a.name)
@@ -118,7 +118,8 @@ function Delegation() {
         <Dropdown down label="Leitura e testes vão para" value={d.readAgent} placeholder="O agente escolhe" disabled={!d.enabled}
           options={[{ value: '', label: 'O agente escolhe' }, ...[...new Set([...names, ...(d.readAgent ? [d.readAgent] : [])])].map(n => ({ value: n, label: names.includes(n) ? n : `${n} (removido)` }))]}
           onChange={v => save({ readAgent: v })} />
-        <small>{names.length ? 'Delegações de leitura sem destino vão para este agente.' : 'Crie um agente nomeado (aba Agentes) com um modelo barato.'}</small>
+        {names.length ? <small>Leituras sem destino vão para este agente.</small>
+          : <small>Nenhum agente nomeado. <button type="button" className="link" onClick={goAgents}>Criar um com modelo barato</button></small>}
       </div>
       <fieldset disabled={!d.enabled}>
         <legend>Podem receber</legend>
@@ -168,7 +169,6 @@ function JarvisConfig({ accounts }: { accounts: Account[] }) {
   const models = (cat?.models ?? []).map((m: any) => ({ value: m.id, label: (m.label ?? modelName(m.id)) + (m.id === 'claude-sonnet-5-5' ? ' (recomendado)' : '') }))
   return (
     <div className="jcfg">
-      <p className="an-lede">Assistente da home. Não lê os arquivos dos projetos.</p>
       <div className="jcfg-row">
         {accounts.length > 1 && <Dropdown down label="Conta da Nova" value={String(j.accountId ?? '')} placeholder="Conta" options={accounts.map(a => ({ value: String(a.id), label: a.name }))} onChange={v => save({ accountId: +v })} />}
         <Dropdown down search custom label="Modelo da Nova" value={j.model} placeholder="Modelo" options={models.length ? models : [{ value: j.model, label: modelName(j.model) }]} onChange={v => save({ model: v })} />
@@ -240,8 +240,7 @@ function SummaryTitles() {
   if (on === undefined) return <small>{err || 'Carregando…'}</small>
   return (
     <div className="deleg">
-      <label className="check"><input type="checkbox" checked={on} onChange={e => api.setSummaryTitles(e.target.checked).then(read.set, x => setErr(errText(x)))} /> O agente resume o pedido no nome do chat</label>
-      <small>Vale para chats novos. Custa algumas palavras a mais só na primeira resposta; desligado, o nome é o começo da sua mensagem.</small>
+      <label className="check" title="Custa algumas palavras a mais só na primeira resposta. Desligado, o nome é o começo da sua mensagem."><input type="checkbox" checked={on} onChange={e => api.setSummaryTitles(e.target.checked).then(read.set, x => setErr(errText(x)))} /> O agente resume o pedido no nome do chat</label>
       {err && <small className="err" role="alert">{err}</small>}
     </div>
   )
@@ -266,7 +265,6 @@ function NotifySettings() {
   return (
     <div className="deleg">
       <fieldset>
-        <legend>Avisar</legend>
         {NOTIFY.map(([k, label]) => <label key={k} className="check"><input type="checkbox" checked={n[k]} onChange={e => save({ [k]: e.target.checked })} /> {label}</label>)}
       </fieldset>
       <fieldset>
@@ -274,10 +272,10 @@ function NotifySettings() {
         <label className="check"><input type="checkbox" checked={n.system} onChange={e => save({ system: e.target.checked })} /> Mostrar o aviso no canto da tela e piscar na barra de tarefas</label>
         <label className="check"><input type="checkbox" checked={n.sound} disabled={!n.system} onChange={e => save({ sound: e.target.checked })} /> Tocar som</label>
       </fieldset>
-      <small>Clicar no aviso só abre a tarefa: nada é aprovado nem executado por ele.</small>
-      <div className="step-actions">
+      <div className="set-actions">
         <button type="button" onClick={() => api.testNotice(false).catch((e: any) => setErr(errText(e)))}>Mostrar um exemplo</button>
         <button type="button" onClick={() => api.testNotice(true).catch((e: any) => setErr(errText(e)))}>Exemplo com vários avisos do mesmo projeto</button>
+        <small>Clicar no aviso só abre a tarefa: nada é aprovado nem executado por ele.</small>
       </div>
       {err && <small className="err" role="alert">{err}</small>}
     </div>
@@ -289,12 +287,55 @@ function HiddenFolders({ onChange }: { onChange: () => void }) {
   const read = useCachedRead<string[]>('listHidden', () => api.listHidden())
   const list = read.data
   if (!list) return <small>{read.error ? errText(read.error) : 'Carregando pastas…'}</small>
-  if (!list.length) return <small>Nenhuma pasta removida. Remover da lista nunca apaga nada; as removidas aparecem aqui para voltar.</small>
+  if (!list.length) return <small>Nenhuma pasta removida.</small>
   return (
     <ul className="hidden-list">
       {list.map(p => <li key={p}><span className="mono-sm" title={p}>{p}</span>
-        <button className="mini" onClick={() => api.unhideGame(p).then(() => { void read.reload().catch(() => {}); onChange() })}>Restaurar</button></li>)}
+        <button className="set-sm" onClick={() => api.unhideGame(p).then(() => { void read.reload().catch(() => {}); onChange() })}>Restaurar</button></li>)}
     </ul>
+  )
+}
+
+// Cartao das Configuracoes: titulo, uma linha opcional de contexto e uma acao no canto.
+export function Card({ title, sub, action, children }: { title: ReactNode; sub?: ReactNode; action?: ReactNode; children: ReactNode }) {
+  return (
+    <section>
+      <h2>{title}{action}</h2>
+      {sub && <p className="set-sub">{sub}</p>}
+      {children}
+    </section>
+  )
+}
+
+type Tab = (typeof TABS)[number][0]
+// Abas no topo com indicador que desliza; setas, Home e End trocam de aba (padrao ARIA de tablist).
+function Tabs({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
+  const list = useRef<HTMLDivElement>(null)
+  const [ind, setInd] = useState<{ x: number; w: number; ready: boolean } | null>(null)
+  useLayoutEffect(() => {
+    const el = list.current, place = () => {
+      const b = el?.querySelector<HTMLElement>('[aria-selected=true]')
+      if (b) setInd(i => ({ x: b.offsetLeft, w: b.offsetWidth, ready: !!i }))
+    }
+    place()
+    const ro = new ResizeObserver(place)
+    if (el) ro.observe(el)
+    return () => ro.disconnect()
+  }, [tab])
+  const key = (e: KeyboardEvent) => {
+    const i = TABS.findIndex(([id]) => id === tab)
+    const j = e.key === 'ArrowRight' ? (i + 1) % TABS.length : e.key === 'ArrowLeft' ? (i + TABS.length - 1) % TABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : -1
+    if (j < 0) return
+    e.preventDefault()
+    onTab(TABS[j][0])
+    list.current?.querySelectorAll<HTMLElement>('[role=tab]')[j]?.focus()
+  }
+  return (
+    <div role="tablist" aria-label="Seções das configurações" ref={list} onKeyDown={key}>
+      {TABS.map(([id, text]) => <button key={id} role="tab" id={`set-tab-${id}`} aria-controls="set-panel" aria-selected={tab === id} tabIndex={tab === id ? 0 : -1}
+        className={tab === id ? 'on' : ''} onClick={() => onTab(id)}>{text}</button>)}
+      {ind && <span className={`set-ind ${ind.ready ? 'ready' : ''}`} aria-hidden="true" style={{ transform: `translateX(${ind.x}px)`, width: ind.w }} />}
+    </div>
   )
 }
 
@@ -302,7 +343,7 @@ export function Settings({ accounts, reload, providers, refreshProviders, onGame
   accounts: Account[]; reload: () => void; providers: Provider[] | null; refreshProviders: () => void; onGamesChange: () => void
 }) {
   const [newName, setNewName] = useState('')
-  const [tab, setTab] = useState<(typeof TABS)[number][0]>('contas')
+  const [tab, setTab] = useState<Tab>('contas')
   useEffect(() => { // acompanha logins em andamento
     if (!accounts.some(a => a.login?.state === 'connecting')) return
     const t = setInterval(reload, 2000)
@@ -312,45 +353,43 @@ export function Settings({ accounts, reload, providers, refreshProviders, onGame
     <main className="settings">
       <header className="set-head">
         <h1>Configurações</h1>
-        <div role="tablist" aria-label="Seções das configurações">
-          {TABS.map(([id, text]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>{text}</button>)}
-        </div>
+        <Tabs tab={tab} onTab={setTab} />
       </header>
-      {tab === 'contas' && <>
-        <section>
-          <h2>Contas Claude</h2>
-          {accounts.map(a => <AccountRow key={a.id} a={a} reload={reload} />)}
-          <form className="inline" onSubmit={e => { e.preventDefault(); if (newName.trim()) api.addAccount(newName.trim()).then(() => { setNewName(''); reload() }) }}>
-            <input aria-label="Nome da nova conta" placeholder="Nome da nova conta" value={newName} onChange={e => setNewName(e.target.value)} />
-            <button className="primary">Adicionar conta</button>
-          </form>
-        </section>
-        {accounts.length > 1 && <section><h2>Automações</h2><Automations /></section>}
-        {accounts.length > 1 && <section><h2>Quando a conta atingir o limite</h2><Handover /></section>}
-        <section>
-          <h2>Provedores <button className="icon sm" onClick={refreshProviders} aria-label="Diagnosticar de novo" title="Diagnosticar de novo"><Icon n="refresh" size={16} /></button></h2>
-          {providers ? providers.map(p => <ProviderRow key={p.id} p={p} />) : <small>Consultando as CLIs…</small>}
-        </section>
-        <section><h2>Pastas removidas da lista</h2><HiddenFolders onChange={onGamesChange} /></section>
-      </>}
-      {tab === 'agentes' && <>
-        <section><h2>Nova</h2><JarvisConfig accounts={accounts} /></section>
-        <section><h2>Agentes nomeados</h2><AgentNames /></section>
-        <section><h2>Nome dos chats</h2><SummaryTitles /></section>
-      </>}
-      {tab === 'permissoes' && <PermissionRules />}
-      {tab === 'avisos' && <section><h2>Avisos</h2><NotifySettings /></section>}
-      {tab === 'dados' && <BackupSettings />}
-      {tab === 'delegacao' && <>
-        <section><h2>Delegação entre provedores</h2><Delegation /></section>
-        <section><h2>Quanto os agentes podem gastar</h2><Limits /></section>
-        <section>
-          <details>
-            <summary><h2>Últimos 7 dias</h2></summary>
-            <DelegationReport />
-          </details>
-        </section>
-      </>}
+      <div className="set-panel" role="tabpanel" id="set-panel" aria-labelledby={`set-tab-${tab}`} key={tab}>
+        {tab === 'contas' && <>
+          <Card title="Contas Claude">
+            {accounts.map(a => <AccountRow key={a.id} a={a} reload={reload} />)}
+            <form className="inline add-account" onSubmit={e => { e.preventDefault(); if (newName.trim()) api.addAccount(newName.trim()).then(() => { setNewName(''); reload() }) }}>
+              <input aria-label="Nome da nova conta" placeholder="Nome da nova conta" value={newName} onChange={e => setNewName(e.target.value)} />
+              <button disabled={!newName.trim()}><Icon n="plus" size={14} /> Adicionar conta</button>
+            </form>
+          </Card>
+          {accounts.length > 1 && <Card title="Automações"><Automations /></Card>}
+          {accounts.length > 1 && <Card title="Quando a conta atingir o limite"><Handover /></Card>}
+          <Card title="Provedores" action={<button className="icon sm" onClick={refreshProviders} aria-label="Diagnosticar de novo" title="Diagnosticar de novo"><Icon n="refresh" size={16} /></button>}>
+            {providers ? providers.map(p => <ProviderRow key={p.id} p={p} />) : <small>Consultando as CLIs…</small>}
+          </Card>
+          <Card title="Pastas removidas da lista" sub="Remover da lista nunca apaga a pasta. Restaure aqui."><HiddenFolders onChange={onGamesChange} /></Card>
+        </>}
+        {tab === 'agentes' && <>
+          <Card title="Nova" sub="Assistente da home. Não lê os arquivos dos projetos."><JarvisConfig accounts={accounts} /></Card>
+          <Card title="Agentes nomeados" sub={<>Dê um nome a um provedor e modelo para delegar por nome: <em>“delegue para o Fabricio”</em>.</>}><AgentNames /></Card>
+          <Card title="Nome dos chats" sub="Vale para chats novos."><SummaryTitles /></Card>
+        </>}
+        {tab === 'permissoes' && <PermissionRules />}
+        {tab === 'avisos' && <Card title="Quando avisar"><NotifySettings /></Card>}
+        {tab === 'dados' && <BackupSettings />}
+        {tab === 'delegacao' && <>
+          <Card title="Delegação entre provedores"><Delegation goAgents={() => setTab('agentes')} /></Card>
+          <Card title="Quanto os agentes podem gastar"><Limits /></Card>
+          <section>
+            <details>
+              <summary><h2>Últimos 7 dias</h2></summary>
+              <DelegationReport />
+            </details>
+          </section>
+        </>}
+      </div>
     </main>
   )
 }

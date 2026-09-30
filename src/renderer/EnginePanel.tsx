@@ -56,7 +56,7 @@ export function EnginePanel<D>({ engine, label, taskId, game, disabled, commands
     if (mounted.current && n === request.current) { setPrepared(result); await onPrepared() }
   })
   return <details className={`workflow engine-panel ${engine}-panel`} name="task-tools" onToggle={e => { expanded.current = e.currentTarget.open; setOpen(expanded.current); if (expanded.current) void load(true) }}>
-    <summary>{label} local <span>{state.organizer.name}</span></summary>
+    <summary title={`Organizador ${state.organizer.name}`}>{label} local</summary>
     {open && <div className="workflow-body">
       <div className="godot-head"><p className="muted">Na pasta desta tarefa, incluindo worktree.</p><button className="text-btn" disabled={busy || loading} onClick={() => { setPrepared(null); setProbe(null); void load() }}>{loading ? 'Atualizando…' : 'Atualizar projeto'}</button></div>
       {state.error && <p role="alert" className="err">{state.error}</p>}

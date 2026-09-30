@@ -1,6 +1,6 @@
 /* Avisos de atencao. Mesmo cartao dentro do app (.toasts) e no planeta do canto da tela (.nw, Planet.tsx). Uma cor por tipo em --k. */
 .toasts {
-  position: fixed; top: 62px; right: 16px; z-index: 60; width: 380px; max-width: calc(100vw - 32px);
+  position: fixed; top: 60px; right: 16px; z-index: 60; width: 380px; max-width: calc(100vw - 32px);
   display: flex; flex-direction: column; gap: 10px; pointer-events: none;
 }
 .nw { display: flex; flex-direction: column; gap: 10px; padding: 14px 12px 12px; }
@@ -15,7 +15,7 @@
   border: 1px solid color-mix(in srgb, var(--k) 22%, var(--line));
   border-radius: 18px;
   box-shadow: 0 18px 44px #000a, 0 2px 6px #0006, inset 0 1px 0 #ffffff0d;
-  animation: nc-in .34s var(--ease);
+  animation: slide-in-right var(--dur-3) var(--ease-out);
 }
 .nc.k-review { --k: var(--accent); }
 .nc.k-failed { --k: var(--hot); }

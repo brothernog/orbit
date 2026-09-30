@@ -95,9 +95,8 @@ export function FilesPanel({ task, provider, onClose }: { task: Task; provider?:
   return (
     <aside className="panel files-panel" aria-label="Arquivos alterados" style={{ '--c': provider ? `var(--p-${provider})` : 'var(--accent)' } as CSSProperties}>
       <header>
-        <h2>Arquivos</h2>
-        <span className="fp-src" title="Lidos do disco e do Git pelo próprio app. Não usa IA nem tokens.">do disco, sem tokens</span>
-        <button className="icon sm" aria-label="Fechar arquivos" onClick={onClose}><Icon n="close" size={15} /></button>
+        <h2 className="panel-title" title="Lidos do disco e do Git pelo próprio app. Não usa IA nem tokens.">Arquivos alterados</h2>
+        <button className="icon" aria-label="Fechar arquivos" title="Fechar arquivos" onClick={onClose}><Icon n="close" size={16} /></button>
       </header>
       <Seismo ticks={ticks} />
       {st && !st.isolated && <p className="fp-note">Pasta do projeto: pode incluir mudanças suas ou de outras tarefas. Isolar a tarefa em worktree separa só as dela.</p>}

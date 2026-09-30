@@ -2,7 +2,7 @@
 .ctx-req {
   display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; padding: 12px 14px;
   border-radius: 14px; background: linear-gradient(180deg, #f2b45c12, transparent 80%), var(--surface);
-  border: 1px solid #f2b45c55; animation: now-in .3s var(--ease);
+  border: 1px solid color-mix(in srgb, var(--limit) 33%, transparent); animation: rise-in var(--dur-3) var(--ease-out);
 }
 .cr-head { display: flex; align-items: center; gap: 10px; }
 .cr-title { flex: 1; min-width: 0; font-size: 14px; }

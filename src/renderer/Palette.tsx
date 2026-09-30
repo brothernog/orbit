@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { api, name, type Active, type Task } from './api'
-import { Avatar, Icon } from './icons'
+import { Icon } from './icons'
+import { ATTENTION_LABEL, type Attention } from './attention'
 
-type Item = { key: string; group: string; label: string; hint?: string; provider?: string; run: () => void }
+type Item = { key: string; group: string; label: string; hint?: string; att?: Attention; kbd?: string; run: () => void }
 
 // Ctrl+K: ir para tarefa, projeto ou acao pelo teclado. Busca as tarefas do projeto atual (inclusive arquivadas, sob pedido).
 // ponytail: busca de tarefas so no projeto atual; busca global pede um listTasks sem projeto no processo principal.
-export function Palette({ game, games, active, onClose, onProject, onTask, onNewTask, onHome, onSettings }: {
-  game: string | null; games: string[]; active: Active[]; onClose: () => void
-  onProject: (g: string) => void; onTask: (id: number) => void; onNewTask: () => void; onHome: () => void; onSettings: () => void
+// Com a busca vazia, o que precisa de voce (de qualquer pasta) vem primeiro: Enter abre a mais urgente.
+export function Palette({ game, games, active, queue, attOf, onClose, onProject, onTask, onOpenTask, onNewTask, onHome, onSettings }: {
+  game: string | null; games: string[]; active: Active[]; queue: { t: Task; a: Attention }[]; attOf: (t: Task) => Attention; onClose: () => void
+  onProject: (g: string) => void; onTask: (id: number) => void; onOpenTask: (t: Task) => void; onNewTask: () => void; onHome: () => void; onSettings: () => void
 }) {
   const [q, setQ] = useState('')
   const [archived, setArchived] = useState(false)
@@ -27,16 +29,19 @@ export function Palette({ game, games, active, onClose, onProject, onTask, onNew
   const done = (f: () => void) => () => { onClose(); f() }
   const running = (id: number) => active.find(a => a.taskId === id)
   const sorted = [...tasks].sort((a, b) => Number(!!running(b.id)) - Number(!!running(a.id)) || Number(a.state === 'concluida') - Number(b.state === 'concluida'))
+  const urgent = s || archived ? [] : queue.slice(0, 5)
   const items: Item[] = [
-    ...sorted.slice(0, 12).map(t => ({
-      key: `t${t.id}`, group: archived ? `Arquivadas em ${name(game!)}` : `Tarefas em ${name(game!)}`, label: t.title, provider: running(t.id)?.provider,
+    ...urgent.map(q => ({ key: `q${q.t.id}`, group: 'Precisa de você', label: q.t.title, att: q.a, hint: `${ATTENTION_LABEL[q.a]} · ${name(q.t.game)}`, run: done(() => onOpenTask(q.t)) })),
+    ...sorted.filter(t => !urgent.some(q => q.t.id === t.id)).slice(0, 12).map(t => ({
+      key: `t${t.id}`, group: archived ? `Arquivadas em ${name(game!)}` : `Tarefas em ${name(game!)}`, label: t.title, att: archived ? undefined : attOf(t),
       hint: archived ? 'Restaurar e abrir' : t.state === 'concluida' ? 'Concluída' : undefined,
       run: done(() => archived ? api.archiveTask(t.id, false).then(() => onTask(t.id)) : onTask(t.id)),
     })),
     ...games.filter(g => g !== game && (!s || name(g).toLowerCase().includes(s))).slice(0, 6)
       .map(g => ({ key: `p${g}`, group: 'Projetos', label: name(g), hint: active.some(a => a.game.toLowerCase() === g.toLowerCase()) ? 'Agente trabalhando' : undefined, run: done(() => onProject(g)) })),
     ...([
-      game && { key: 'new', group: 'Ações', label: `Nova tarefa em ${name(game)}`, run: done(onNewTask) },
+      queue.length > 0 && { key: 'next', group: 'Ações', label: 'Próxima que precisa de você', kbd: 'Ctrl J', run: done(() => onOpenTask(queue[0].t)) },
+      game && { key: 'new', group: 'Ações', label: `Nova tarefa em ${name(game)}`, kbd: 'Ctrl N', run: done(onNewTask) },
       game && { key: 'arch', group: 'Ações', label: archived ? 'Voltar às tarefas ativas' : 'Mostrar tarefas arquivadas', run: () => setArchived(!archived) },
       { key: 'home', group: 'Ações', label: 'Início', run: done(onHome) },
       { key: 'set', group: 'Ações', label: 'Configurações', run: done(onSettings) },
@@ -64,9 +69,10 @@ export function Palette({ game, games, active, onClose, onProject, onTask, onNew
           {items.map((it, i) => [
             (i === 0 || items[i - 1].group !== it.group) && <li key={`g${it.group}`} className="pal-group" role="presentation">{it.group}</li>,
             <li key={it.key} id={`pal-${it.key}`} role="option" aria-selected={i === cur} className={i === cur ? 'hi' : ''} onMouseMove={() => setHi(i)} onClick={it.run}>
-              {it.provider ? <Avatar provider={it.provider} live size="sm" /> : <span className="pal-dot" />}
+              {it.att ? <span className="att" data-att={it.att} /> : <span className="pal-dot" />}
               <span className="pal-label">{it.label}</span>
               {it.hint && <small>{it.hint}</small>}
+              {it.kbd && <kbd>{it.kbd}</kbd>}
             </li>,
           ])}
           {items.length === 0 && <li className="pal-empty">Nada encontrado.</li>}

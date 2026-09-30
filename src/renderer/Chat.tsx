@@ -154,7 +154,7 @@ function ModelPicker({ cat, sel, disabled, onChange }: { cat: Catalog | null; se
   const models: Opt[] = [{ value: '', label: 'Modelo padrão' }, ...cat.models.map(m => ({ value: m.id, label: modelLabel(m), group: grouped ? (m.id.includes('/') ? m.id.split('/')[0] : 'outros') : undefined }))]
   return (
     <>
-      <Dropdown label="Modelo" title={cat.note ?? 'Modelo'} value={sel.model ?? ''} options={models} placeholder="Modelo padrão" disabled={disabled}
+      <Dropdown label="Modelo" title={cat.note ?? 'Modelo (vale a partir da próxima mensagem)'} value={sel.model ?? ''} options={models} placeholder="Modelo padrão" disabled={disabled}
         search={cat.models.length > 8 || !native} custom={!native} onChange={v => onChange({ ...sel, model: v || undefined, effort: undefined })} />
       <Dropdown label="Esforço" value={sel.effort ?? ''} placeholder="Esforço padrão" disabled={disabled || !efforts.length || needsModel}
         title={!efforts.length ? 'Este provedor/modelo não expõe esforço nesta versão' : needsModel ? 'Escolha um modelo para definir o esforço' : 'Esforço de raciocínio (vale a partir da próxima execução)'}
@@ -182,6 +182,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
   const msgs = useRef<HTMLDivElement>(null)
   const stick = useRef(true) // so acompanha o fim se o usuario nao estiver lendo mensagens antigas
   const req = useRef(0) // descarta respostas antigas (troca rapida de tarefa/provedor)
+  const known = useRef<{ task: number; ids: Set<number> } | null>(null) // mensagens ja na tela ao abrir: so as novas entram com animacao
   const cat = useCatalog(sel.provider)
   const pkgs = usePackages(task.id)
   const [inspect, setInspect] = useState(false)
@@ -208,6 +209,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
     const n = ++req.current
     return api.taskChat(task.id, sel).then(h => {
       if (n !== req.current) return
+      if (known.current?.task !== task.id) known.current = { task: task.id, ids: new Set(h.messages.map((m: Msg) => m.id)) }
       setHist(h)
       setLive(h.live || (h.running ? '…' : '')) // volta a mostrar o streaming de uma execucao ativa
       // Sem escolha gravada: sugere o provedor/conta da ultima resposta desta tarefa.
@@ -232,6 +234,14 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
     const m = msgs.current
     if (m && stick.current) m.scrollTop = m.scrollHeight
   }, [hist, live])
+  // A area das mensagens encolhe (janela menor, painel de etapas aberto, cartao de contexto): quem estava no fim continua vendo o fim.
+  useEffect(() => {
+    const m = msgs.current
+    if (!m) return
+    const ro = new ResizeObserver(() => { if (stick.current) m.scrollTop = m.scrollHeight })
+    ro.observe(m)
+    return () => ro.disconnect()
+  }, [])
 
   const provider = providers?.find(p => p.id === sel.provider)
   const claudeEnabled = sel.provider === 'claude' && accounts.find(a => a.id === sel.accountId)?.login?.state !== 'connecting'
@@ -281,14 +291,14 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
             <p>Escreva abaixo para começar. O histórico fica na tarefa, mesmo se você trocar de provedor.</p>
           </div>}
           {hist?.messages.map(m => (
-            <div key={m.id} className={`msg ${m.role} ${m.status ?? ''}`}>
+            <div key={m.id} className={`msg ${m.role} ${m.status ?? ''} ${m.role !== 'agent' && known.current && !known.current.ids.has(m.id) ? 'enter-rise' : ''}`}>
               {m.role === 'agent' && <div className="who">{m.provider && <Avatar provider={m.provider} size="sm" />}<span>{label(m, accounts)}</span>
                 {m.status === 'failed' && <span className="flag">falhou</span>}{m.status === 'cancelled' && <span className="flag">interrompida</span>}</div>}
               {m.role === 'agent' ? <Markdown text={m.text} /> : stripMarks(m.text) && <p>{stripMarks(m.text)}</p>}
               <MsgImages taskId={task.id} text={m.text} marksOnly={m.role !== 'agent'} onOpen={setView} />
             </div>
           ))}
-          {running && <div className="msg agent streaming">
+          {running && <div className="msg agent streaming enter-rise">
             <div className="who"><Avatar provider={sel.provider} size="sm" live /><span>{PROVIDER[sel.provider]?.label ?? sel.provider} trabalhando</span></div>
             {live && live !== '…' && <Markdown text={live} />}
             <span className="typing" aria-label="Trabalhando"><i /><i /><i /></span>
@@ -298,15 +308,18 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
       {!atEnd && <button className="jump" aria-label="Ir para o fim" onClick={() => { const m = msgs.current!; m.scrollTop = m.scrollHeight }}><Icon n="down" size={16} /></button>}
 
       <div className="dock-composer">
-        <ProjectCommands taskId={task.id} game={task.game} disabled={running || awaiting} />
-        <Workflow taskId={task.id} disabled={running || awaiting} onPrepare={s => { setText(s.instruction); setImages([]); setStepId(s.id) }} />
-        {stepId && <p className="muted">Ordem da etapa #{stepId} preparada. Revise e envie pelo chat. <button className="link" onClick={() => setStepId(undefined)}>Enviar como mensagem comum</button></p>}
+        {/* Faixa de ferramentas da tarefa: chips que abrem um painel por vez (details name=task-tools); Esc fecha */}
+        <div className="task-tools" onKeyDown={e => { if (e.key !== 'Escape') return; const d = (e.target as HTMLElement).closest('.task-tools > details[open]') as HTMLDetailsElement | null; if (d) { e.stopPropagation(); d.open = false; d.querySelector('summary')?.focus() } }}>
+          <Workflow taskId={task.id} disabled={running || awaiting} onPrepare={s => { setText(s.instruction); setImages([]); setStepId(s.id) }} />
+          <ProjectCommands taskId={task.id} game={task.game} disabled={running || awaiting} />
+        </div>
+        {stepId && <p className="muted step-note">Ordem da etapa #{stepId} preparada. Revise e envie pelo chat. <button className="link" onClick={() => setStepId(undefined)}>Enviar como mensagem comum</button></p>}
         {err && <div className="banner" role="alert">{err}<button className="icon sm" aria-label="Fechar aviso" onClick={() => setErr('')}><Icon n="close" size={14} /></button></div>}
         <ContextRequests pkgs={pkgs.list} sends={pkgs.sends} accounts={accounts} reload={() => { pkgs.load(); load(); onChange() }} />
         <UnsentMessages sends={pkgs.sends} reload={pkgs.load} onRecover={t => setText(cur => (cur.trim() ? `${cur}\n\n${t}` : t))} />
         <PermissionPrompt inline taskId={task.id} />
         <form className={`composer ${running ? 'running' : ''}`} onSubmit={e => { e.preventDefault(); send() }}>
-          <textarea aria-label="Mensagem" placeholder={awaiting ? 'Decida sobre o contexto pendente acima para continuar' : `Mensagem para ${PROVIDER[sel.provider]?.label ?? sel.provider}`} value={text} rows={1}
+          <textarea aria-label="Mensagem" placeholder={awaiting ? 'Decida sobre o contexto pendente acima para continuar' : `Mensagem para ${PROVIDER[sel.provider]?.label ?? sel.provider} (Ctrl+Enter envia)`} value={text} rows={1}
             onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && e.ctrlKey) send() }}
             onPaste={e => { const imgs = [...e.clipboardData.files].filter(f => f.type.startsWith('image/')); if (imgs.length) { e.preventDefault(); attach(imgs) } }} />
           {images.length > 0 && <div className="composer-imgs"><Thumbs images={images} onOpen={setView} onRemove={i => setImages(im => im.filter((_, j) => j !== i))} /></div>}
@@ -324,13 +337,12 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
               <ContextRing m={liveMetric ? withLive(hist?.metric ?? null, liveMetric, sel) : hist?.metric ?? null} sel={sel} />
               <LimitRing u={usage} provider={sel.provider} />
             </div>
+            <button type="button" className="icon sm" aria-label="Anexar imagem" title="Anexar imagem (ou cole com Ctrl+V)" disabled={running || awaiting || images.length >= 6} onClick={() => file.current?.click()}><Icon n="image" size={16} /></button>
+            <input ref={file} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={e => { attach([...(e.target.files ?? [])]); e.target.value = '' }} />
+            {/* Enviar e Parar ocupam o mesmo lugar: o botao e o mesmo elemento, so o icone troca (com entrada curta) */}
             {running
-              ? <button type="button" className="send stop" aria-label="Parar" title="Parar" onClick={() => api.stopTask(task.id).then(load)}><Icon n="stop" size={16} /></button>
-              : <>
-                <button type="button" className="icon sm" aria-label="Anexar imagem" title="Anexar imagem (ou cole com Ctrl+V)" disabled={awaiting || images.length >= 6} onClick={() => file.current?.click()}><Icon n="image" size={16} /></button>
-                <input ref={file} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={e => { attach([...(e.target.files ?? [])]); e.target.value = '' }} />
-                <button className="send" aria-label="Enviar" title={awaiting ? 'Há uma mensagem retida aguardando a sua decisão sobre contexto' : 'Enviar (Ctrl+Enter)'} disabled={!!missing || (!text.trim() && !images.length) || awaiting}><Icon n="send" size={18} /></button>
-              </>}
+              ? <button type="button" className="send stop" aria-label="Parar" title="Parar" onClick={() => api.stopTask(task.id).then(load)}><Icon key="stop" n="stop" size={16} /></button>
+              : <button type="submit" className="send" aria-label="Enviar" title={awaiting ? 'Há uma mensagem retida aguardando a sua decisão sobre contexto' : 'Enviar (Ctrl+Enter)'} disabled={!!missing || (!text.trim() && !images.length) || awaiting}><Icon key="send" n="send" size={18} /></button>}
           </div>
         </form>
         {view && <div className="lightbox" role="dialog" aria-label="Imagem" tabIndex={-1} ref={el => el?.focus()} onClick={() => setView(null)} onKeyDown={e => { if (e.key === 'Escape') setView(null) }}><img src={view} alt="" /></div>}
@@ -338,7 +350,6 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
         {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
         {cps && <Checkpoints taskId={task.id} onClose={() => { setCps(false); load(); onChange() }} />}
         {ask && <Confirm title={ask.title} body={ask.body} action={ask.action} tone="primary" onConfirm={ask.run} onClose={() => setAsk(null)} />}
-        <small className="kbd-hint">Ctrl+Enter envia. Modelo e esforço valem a partir da próxima mensagem.</small>
       </div>
     </section>
   )

@@ -1,7 +1,9 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useContext, useEffect, useState, type CSSProperties } from 'react'
 import { api, type Active, type Task } from './api'
-import { RoadmapCard } from './Home'
-import { Avatar, Icon, PROVIDER } from './icons'
+import { NewInHeader, RoadmapCard } from './Home'
+import { Icon, PROVIDER } from './icons'
+import { ATTENTION_LABEL, attentionOf, RANK, useSeen } from './attention'
+import { doingText, useBriefs } from './TaskBrief'
 import { BranchPanel } from './Branch'
 import { useProjects } from './projects'
 import { useTodo } from './Todo'
@@ -14,7 +16,7 @@ const ago = (iso: string) => {
 }
 const elapsed = (from: number) => { const m = Math.max(0, Math.round((Date.now() - from) / 60000)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}min` }
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
-const STATE = { aberta: 'Aberta', andamento: 'Em andamento', concluida: 'Concluída' }
+const SHOWN = 8
 
 // Parte de baixo da Nova de uma pasta: proximo passo, recentes, branch e roadmap. O topo (roda, titulo, chat) e o da Nova.
 export function ProjectHome({ game, tasks, active, onOpenTask, onNewTask, onErr }: {
@@ -26,7 +28,12 @@ export function ProjectHome({ game, tasks, active, onOpenTask, onNewTask, onErr 
   useEffect(() => { api.projectUsage(game).then((rows: { taskId: number; tokens: number | null; state: TotalLike['state']; estimated: boolean }[]) => setUsage(Object.fromEntries(rows.map(r => [r.taskId, { sum: r.tokens, state: r.state, estimated: r.estimated }]))), () => {}) }, [game, tasks])
 
   const here = active.filter(a => same(a.game, game))
-  const recent = [...(tasks ?? [])].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 6)
+  const briefs = useBriefs(game, tasks, active)
+  const seen = useSeen()
+  const inHeader = useContext(NewInHeader)
+  // Mesma ordem da fila do Inicio: o que pede voce, depois o que esta rodando, depois o mais recente.
+  const rows = (tasks ?? []).map(t => { const who = here.find(a => a.taskId === t.id); return { t, who, att: attentionOf(t, briefs.get(t.id), who, seen[t.id]) } })
+    .sort((a, b) => RANK[a.att] - RANK[b.att] || b.t.updated_at.localeCompare(a.t.updated_at)).slice(0, SHOWN)
   const nextTodo = todo.topics.flatMap(t => t.items.map(i => ({ t, i }))).find(x => !x.i.done && x.i.project && same(x.i.project, game))
   // Pasta principal e worktrees das tarefas isoladas: o painel de branch troca entre elas.
   const dirs = [{ path: game, label: info?.git?.branch ?? 'principal' }, ...(info?.worktrees ?? []).map(w => ({ path: w.path, label: w.task ?? w.branch ?? 'worktree' }))]
@@ -35,40 +42,30 @@ export function ProjectHome({ game, tasks, active, onOpenTask, onNewTask, onErr 
     <>
         <div className="ph-grid">
           <div className="ph-main">
-            {here.length
-              ? <div className="now live-now">
-                  <span className="now-label">Agora</span>
-                  {here.map(a => (
-                    <button key={`${a.kind}${a.id}`} className="now-agent" onClick={() => onOpenTask(a.taskId)}>
-                      <Avatar provider={a.provider} live />
-                      <span className="now-body"><span className="now-text">{a.title}</span><small>{PROVIDER[a.provider]?.label ?? a.provider}{a.model ? ` ${a.model}` : ''}, há {elapsed(a.startedAt)}{a.kind === 'delegation' ? ', delegação' : ''}</small></span>
-                      <Icon n="chevron" size={16} />
-                    </button>
-                  ))}
-                </div>
-              : <div className="now">
-                  <span className="now-label">Próximo passo</span>
-                  <p className="now-text">{nextTodo ? nextTodo.i.text : recent.find(t => t.state !== 'concluida')?.title ?? 'Nada pendente nesta pasta.'}</p>
-                  <small className="muted">{nextTodo ? `Da sua to-do, em ${nextTodo.t.title}` : recent.find(t => t.state !== 'concluida') ? 'Tarefa aberta mais recente' : 'Use "Nova tarefa" para começar.'}</small>
-                </div>}
+            {nextTodo && <div className="now ph-next">
+              <span className="now-label">Próximo passo</span>
+              <p className="now-text">{nextTodo.i.text}</p>
+              <small className="muted">Da sua to-do, em {nextTodo.t.title}</small>
+            </div>}
 
             <section className="ph-sec">
-              <div className="ph-sec-head"><h2>Recentes</h2>
-                <button className="text-btn" onClick={() => onNewTask()}><Icon n="plus" size={14} />Nova tarefa<kbd>Ctrl N</kbd></button></div>
+              <div className="ph-sec-head"><h2 className="sec-label">Tarefas</h2>
+                {!inHeader && <button className="text-btn" title="Nova tarefa (Ctrl+N)" onClick={() => onNewTask()}><Icon n="plus" size={14} />Nova tarefa</button>}</div>
               {tasks === null ? <span className="loader" aria-label="Carregando tarefas" />
-                : recent.length === 0 ? <p className="muted">Nenhuma tarefa ainda.</p>
-                : <ul className="ph-tasks">
-                    {recent.map((t, i) => {
-                      const who = here.find(a => a.taskId === t.id)
+                : rows.length === 0 ? <p className="muted ph-empty">Nenhuma tarefa ainda. {inHeader ? 'Use "Nova tarefa" para começar.' : ''}</p>
+                : <ul className="ph-tasks stagger">
+                    {rows.map(({ t, who, att }, i) => {
+                      const b = briefs.get(t.id)
+                      const state = who ? `${PROVIDER[who.provider]?.label ?? who.provider} · ${doingText(who.doing) ?? 'trabalhando'}`
+                        : att === 'wait' && b?.permission ? `Permitir: ${b.permission}` : att === 'wait' ? 'Aprovar contexto' : ATTENTION_LABEL[att]
                       return (
                         <li key={t.id} style={{ '--i': i } as CSSProperties}>
-                          <button onClick={() => onOpenTask(t.id)}>
-                            <span className={`task-dot s-${t.state}`} aria-hidden="true" />
+                          <button className={`a-${att}`} onClick={() => onOpenTask(t.id)}>
+                            <span className="att" data-att={att} />
                             <span className="pt-title">{t.title}</span>
-                            {who && <Avatar provider={who.provider} live size="sm" />}
-                            <span className="pt-state">{STATE[t.state]}</span>
-                            <span className="pt-tokens" title={`Tokens informados pelos provedores (entrada + saída). ${coverTitle(usage[t.id])}`}>{totalText(usage[t.id])}</span>
-                            <span className="pt-when">{ago(t.updated_at)}</span>
+                            <span className="pt-state" title={state}>{state}</span>
+                            <span className="pt-tokens" title={`Tokens informados pelos provedores (entrada + saída). ${coverTitle(usage[t.id])}`}>{totalText(usage[t.id]) === '—' ? '' : totalText(usage[t.id])}</span>
+                            <span className="pt-when">{who ? elapsed(who.startedAt) : ago(t.updated_at)}</span>
                           </button>
                         </li>
                       )
