@@ -17,7 +17,7 @@ import { FilesPanel } from './FilesPanel'
 import { LinkedIn } from './LinkedIn'
 import orbitMark from './orbit-mark.svg'
 import { Confirm, ContextMenu, GroupDialog, ProjectIcon, RenameInput, type MenuItem } from './Nav'
-import { groupOf, initials, moveTo, newGroup, placeBefore, type Group } from './groups'
+import { groupOf, initials, moveTo, newGroup, placeBefore, taskToRemember, type Group } from './groups'
 import { expireRead, loadRead, readSnapshot, setRead } from './readCache'
 import type { QuotaSnapshot } from './usageText'
 
@@ -250,7 +250,10 @@ export default function App() {
   }
   useEffect(() => { setTasks(null); setTaskId(null); setErr('') }, [game])
   useEffect(() => { loadTasks() }, [game])
-  useEffect(() => { if (game && taskId != null) lsSet(`task:${game}`, String(taskId)) }, [game, taskId])
+  useEffect(() => { // so a tarefa que e desta pasta (openIn ja gravou a escolhida antes de trocar)
+    const id = game ? taskToRemember(game, taskId, tasks) : null
+    if (id != null) lsSet(`task:${game}`, String(id))
+  }, [game, taskId, tasks])
 
   const pick = (g: string) => {
     const w = groupOf(groups, g)
