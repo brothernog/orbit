@@ -37,18 +37,18 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60 # a notarizacao da Apple costuma levar minutos, as vezes mais
+    timeout-minutes: 60 # Apple notarization usually takes minutes, sometimes longer
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       - run: npm ci
-      # Windows e Linux sem assinatura de codigo: o Windows mostra o SmartScreen.
+      # Windows and Linux without code signing: Windows shows SmartScreen.
       - if: runner.os != 'macOS'
         run: npm run build && npx electron-builder --publish never
         env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
-      # macOS: assina e notariza se os segredos existirem (build/macos-signing.md); sem eles (forks, repo sem
-      # configuracao) sai como antes, sem assinatura. Os segredos ficam so neste passo: o Windows leria CSC_LINK.
+      # macOS: signs and notarizes if the secrets exist (build/macos-signing.md); without them (forks, repo not
+      # configured) it builds unsigned, as before. Secrets stay in this step only: Windows would read CSC_LINK.
       - if: runner.os == 'macOS'
         shell: bash
         env:
@@ -65,13 +65,13 @@ jobs:
             echo "::error::CSC_LINK e CSC_KEY_PASSWORD precisam existir juntos."
             exit 1
           else
-            # Variavel vazia ainda conta como definida para o electron-builder: remove.
+            # electron-builder treats an empty variable as set: unset it.
             unset CSC_LINK CSC_KEY_PASSWORD
             export CSC_IDENTITY_AUTO_DISCOVERY=false
             echo "::warning::Sem CSC_LINK/CSC_KEY_PASSWORD: dmg sem assinatura Developer ID (so ad-hoc)."
           fi
           if [ -n "${APPLE_API_KEY_P8:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
-            # O notarytool quer o caminho do .p8, nao o conteudo.
+            # notarytool wants the path to the .p8, not its contents.
             key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
             (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$key")
             trap 'rm -f "$key"' EXIT
@@ -101,8 +101,8 @@ jobs:
             dist/*.deb
           if-no-files-found: error
 
-  # Tag v*: um job so, depois das tres maquinas, cria o Release e anexa os instaladores (sem corrida entre elas).
-  # Se alguma maquina falhar, nao publica nada. O Run workflow manual so gera os artefatos.
+  # v* tag: a single job, after all three runners, creates the Release and attaches the installers (no race between them).
+  # If any runner fails, nothing is published. A manual Run workflow only produces artifacts.
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: package
@@ -123,7 +123,7 @@ jobs:
           set -euo pipefail
           ls -l installers
           if gh release view "$TAG" > /dev/null 2>&1; then
-            # Reexecucao do workflow: substitui os arquivos do Release existente.
+            # Workflow re-run: replace the files on the existing Release.
             gh release upload "$TAG" installers/* --clobber
           else
             pre=()

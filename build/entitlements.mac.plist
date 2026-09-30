@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Entitlements do Hardened Runtime (app e helpers). So o minimo que o Electron exige:
-  o V8 gera codigo JIT. Sem sandbox: as CLIs (claude, codex, gemini, opencode) rodam como
-  processos filhos com a propria assinatura e nao precisam de entitlement.
-  Nao ha modulos nativos de terceiros, entao disable-library-validation nao e necessario.
+  Hardened Runtime entitlements (app and helpers). Only the minimum Electron needs:
+  V8 generates JIT code. No sandbox: the CLIs (claude, codex, gemini, opencode) run as
+  child processes under their own signatures and need no entitlement.
+  There are no third-party native modules, so disable-library-validation is not needed.
 -->
 <plist version="1.0">
   <dict>
