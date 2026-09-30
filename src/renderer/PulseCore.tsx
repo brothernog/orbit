@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { api, onChat } from './api'
 import { ProjectIcon } from './Nav'
 
@@ -73,7 +73,7 @@ export function PulseCore({ events, commits, dirt, agents, thinking, focus }: {
           if (!s.v) return null
           const len = Math.min(RMAX, 4 + Math.log2(1 + s.v) * 5.5), [x1, y1] = at(i, R0), [x2, y2] = at(i, R0 + len)
           return <line key={i} className={`core-seis ${i === last ? 'new' : ''}`} x1={x1} y1={y1} x2={x2} y2={y2}
-            stroke={s.down > s.up ? 'var(--hot)' : `var(--p-${s.provider ?? 'claude'}, var(--accent))`} opacity={(.25 + .75 * i / (N - 1)).toFixed(2)} />
+            style={{ '--c': s.down > s.up ? 'var(--hot)' : `var(--p-${s.provider ?? 'claude'}, var(--accent))` } as CSSProperties} opacity={(.25 + .75 * i / (N - 1)).toFixed(2)} />
         })}
         {commits.map(t => {
           const i = slotOf(t)

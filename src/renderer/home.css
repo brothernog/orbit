@@ -18,17 +18,14 @@
 .core-sweep { opacity: .5; }
 .core.busy .core-sweep { animation-duration: 6s; opacity: 1; }
 .core.thinking .core-sweep { animation-duration: 1.6s; }
-.core-seis { stroke-width: 2.6; stroke-linecap: round; }
+.core-seis { stroke: var(--c); stroke-width: 2.6; stroke-linecap: round; }
 .core-seis.new { animation: seis-in .6s var(--ease); }
-@keyframes seis-in { from { stroke-width: 6; filter: brightness(1.8); } }
+@keyframes seis-in { from { stroke-width: 6; stroke: color-mix(in srgb, var(--c), #fff 45%); } } /* clareia sem filtro */
 .core-commit { fill: var(--text); filter: drop-shadow(0 0 4px #fff8); }
 .core-commit-line { stroke: #e6ebf266; stroke-width: 1; stroke-dasharray: 2 3; }
 .core-dirt-track { fill: none; stroke: var(--line-soft); stroke-width: 7; }
 .core-dirt { fill: none; stroke-width: 7; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 190px 190px; transition: stroke-dasharray .9s var(--ease), stroke .9s; }
 .core-inner { fill: url(#coreInner); stroke: #7cc4ff40; stroke-width: 1; }
-.core.busy .core-inner { animation: breathe 2.4s ease-in-out infinite; }
-.core.thinking .core-inner { animation: breathe .8s ease-in-out infinite; }
-@keyframes breathe { 50% { stroke: #7cc4ffb0; filter: drop-shadow(0 0 12px #7cc4ff70); } }
 .core-dash { fill: none; stroke: #7cc4ff50; stroke-width: 1; stroke-dasharray: 3 7; }
 .core-dash-spin { animation-duration: 40s; animation-direction: reverse; }
 .core.thinking .core-dash-spin { animation-duration: 3s; }
