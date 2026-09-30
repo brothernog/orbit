@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, errText, onChat } from './api'
 import type { ProjectCommand, CommandRun } from '../main/commands'
+import { GodotPanel } from './GodotPanel'
 import './workflow.css'
 const labels: Record<string,string>={test:'Teste',build:'Build',run:'Jogo',running:'Executando',completed:'Concluído',failed:'Falhou',cancelled:'Cancelado'}
 export function ProjectCommands({taskId,game,disabled}:{taskId:number;game:string;disabled:boolean}) {
@@ -8,12 +9,11 @@ export function ProjectCommands({taskId,game,disabled}:{taskId:number;game:strin
   const [editing,setEditing]=useState(false),[name,setName]=useState(''),[program,setProgram]=useState(''),[args,setArgs]=useState('[]'),[purpose,setPurpose]=useState<ProjectCommand['purpose']>('test')
   useEffect(()=>{let live=true;const load=()=>Promise.all([api.projectCommands(game),api.listCommandRuns(taskId)]).then(([c,r])=>{if(live){setCommands(c);setRuns(r)}},e=>live&&setError(errText(e)));load();const off=onChat(e=>{if(e.commandChanged&&(e.taskId===taskId||!e.taskId))load()});return()=>{live=false;off()}},[game,taskId])
   const action=async(f:()=>Promise<unknown>)=>{setSaving(true);setError('');try{await f();setCommands(await api.projectCommands(game));setRuns(await api.listCommandRuns(taskId))}catch(e){setError(errText(e))}finally{setSaving(false)}}
-  const preset=(kind:'test'|'run')=>{setEditing(true);setName(kind==='test'?'Validar Godot':'Executar Godot');setProgram('godot');setPurpose(kind);setArgs(JSON.stringify(kind==='test'?['--headless','--path','.','--editor','--quit']:['--path','.']))}
   const active=runs.some(r=>r.status==='running')
-  return <details className="workflow project-commands" name="task-tools"><summary>Comandos do projeto <span>{active?'Executando':commands.length}</span></summary><div className="workflow-body">
+  return <><GodotPanel taskId={taskId} game={game} disabled={disabled} commands={commands} runs={runs} onPrepared={async()=>{setCommands(await api.projectCommands(game))}}/><details className="workflow project-commands" name="task-tools"><summary>Comandos do projeto <span>{active?'Executando':commands.length}</span></summary><div className="workflow-body">
     <p className="muted">Executa na pasta desta tarefa (incluindo worktree). Revise o programa e os argumentos antes de executar.</p>
     <ul className="command-list">{commands.map(c=><li key={c.name}><div><b>{c.name}</b><span>{labels[c.purpose]}</span></div><code>{c.program} {JSON.stringify(c.args)}</code><div className="step-actions"><button className="primary" disabled={disabled||saving||active} onClick={()=>action(()=>api.runProjectCommand(taskId,c.name))}>Executar</button><button className="text-btn" disabled={saving} onClick={()=>{setName(c.name);setProgram(c.program);setArgs(JSON.stringify(c.args));setPurpose(c.purpose);setEditing(true)}}>Editar</button><button className="text-btn" disabled={saving||active} onClick={()=>action(()=>api.saveProjectCommands(game,commands.filter(x=>x.name!==c.name)))}>Remover</button></div></li>)}</ul>
-    <div className="step-actions"><button className="text-btn" onClick={()=>{setEditing(!editing);setName('');setProgram('');setArgs('[]')}}>Configurar comando</button><button className="text-btn" onClick={()=>preset('test')}>Preset validar Godot</button><button className="text-btn" onClick={()=>preset('run')}>Preset executar Godot</button></div>
+    <div className="step-actions"><button className="text-btn" onClick={()=>{setEditing(!editing);setName('');setProgram('');setArgs('[]')}}>Configurar comando</button></div>
     {editing&&<form onSubmit={e=>{e.preventDefault();action(async()=>{const cmd={name,program,args:JSON.parse(args),purpose};await api.saveProjectCommands(game,[...commands.filter(c=>c.name!==name),cmd]);setEditing(false)})}}>
       <input aria-label="Nome do comando" placeholder="Nome do comando" value={name} maxLength={100} onChange={e=>setName(e.target.value)}/>
       <select aria-label="Finalidade" value={purpose} onChange={e=>setPurpose(e.target.value as ProjectCommand['purpose'])}><option value="test">Teste</option><option value="build">Build</option><option value="run">Executar jogo</option></select>
@@ -23,6 +23,26 @@ export function ProjectCommands({taskId,game,disabled}:{taskId:number;game:strin
       <button className="primary" disabled={saving||!name.trim()||!program.trim()}>Salvar comando</button>
     </form>}
     {!!runs.length&&<details><summary>Histórico desta tarefa ({runs.length})</summary>{runs.map(r=><details key={r.id} className="command-result"><summary>#{r.id} {r.name} · {labels[r.status]} · exit {r.exit_code??'—'}{r.duration_ms!=null&&` · ${(r.duration_ms/1000).toFixed(1)}s`}</summary><small>{r.workspace}</small>{r.status==='running'&&<button className="text-btn" onClick={()=>action(()=>api.cancelProjectCommand(taskId,r.id))}>Cancelar comando</button>}{r.error&&<p className="err">{r.error}</p>}<pre>{r.output||'Sem saída registrada.'}</pre>{!!r.truncated&&<p className="muted">Saída cortada após 1.000.000 caracteres.</p>}</details>)}</details>}
+    <WorktreeCopy game={game}/>
     {error&&<p role="alert" className="err">{error}</p>}
-  </div></details>
+  </div></details></>
+}
+// Ao isolar em worktree: o que copiar da pasta do projeto (o git nao leva arquivos ignorados, como .env ou o cache .godot/).
+function WorktreeCopy({game}:{game:string}) {
+  const [list,setList]=useState<string[]|null>(null),[sug,setSug]=useState<string[]>([]),[add,setAdd]=useState(''),[error,setError]=useState('')
+  useEffect(()=>{api.worktreeCopy(game).then((r:{list:string[];suggestions:string[]})=>{setList(r.list);setSug(r.suggestions)},e=>setError(errText(e)))},[game])
+  if(!list)return null
+  const save=(next:string[])=>{setError('');api.saveWorktreeCopy(game,next).then(setList,e=>setError(errText(e)))}
+  const has=(p:string)=>list.some(x=>x.toLowerCase()===p.toLowerCase())
+  const all=[...list,...sug.filter(s=>!has(s))]
+  return <details className="wt-copy"><summary>Ao isolar em worktree, copiar <span>{list.length||'nada'}</span></summary>
+    <p className="muted">O Git não leva arquivos ignorados para a worktree. Marque o que copiar da pasta do projeto; o que a worktree já tem não é sobrescrito.</p>
+    {all.length?<div className="wt-chips">{all.map(p=><label key={p} className={`wt-chip ${has(p)?'on':''}`}><input type="checkbox" checked={has(p)} onChange={()=>save(has(p)?list.filter(x=>x.toLowerCase()!==p.toLowerCase()):[...list,p])}/>{p}</label>)}</div>
+      :<p className="muted">Nenhum arquivo ignorado pelo Git na pasta do projeto.</p>}
+    <form className="wt-add" onSubmit={e=>{e.preventDefault();if(add.trim()){save([...list,add.trim()]);setAdd('')}}}>
+      <input aria-label="Outro caminho para copiar" placeholder="Outro caminho, ex.: config/local.json" value={add} maxLength={260} onChange={e=>setAdd(e.target.value)}/>
+      <button className="text-btn" disabled={!add.trim()}>Adicionar</button>
+    </form>
+    {error&&<p role="alert" className="err">{error}</p>}
+  </details>
 }

@@ -265,6 +265,9 @@ button.task.active { background: linear-gradient(90deg, #7cc4ff17, #7cc4ff05 70%
 .rf-hint { font-size: 11px; color: var(--faint); margin-top: 2px; }
 .rail-new { color: var(--faint); border: 1px dashed var(--line) !important; width: 40px; height: 40px; }
 .rail-new:hover:not(:disabled) { color: var(--accent); border-color: #7cc4ff66 !important; background: #7cc4ff0d !important; }
+.rail-planet { color: var(--faint); }
+.rail-planet.on { color: var(--accent); }
+.rail-planet.on svg { filter: drop-shadow(0 0 6px #7cc4ff66); }
 /* Arrastar pasta da gaveta: some um pouco e os organizadores do trilho viram alvos */
 .folder.dragging { opacity: .4; }
 .projects.dragging .ws-tile { animation: wiggle .5s var(--ease); }

@@ -5,19 +5,23 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { openDb } from './db.ts'
+import { openDb, MIGRATIONS } from './db.ts'
 import { attachImages } from './attachments.ts'
 import { createTask } from './tasks.ts'
 import { createProductionService } from './production.ts'
 import { createPlaytestService } from './playtests.ts'
 import { createBackup, inspectBackup, stageRestore, applyPendingRestore, backupInfo } from './backups.ts'
+import { pathKey } from './guard.ts'
 
 const pixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/UAAAAAASUVORK5CYII='
 const secret = 'DO-NOT-COPY-LINKEDIN-SECRET-' + 'x'.repeat(200)
-function fixture() {
+function fixture(version = MIGRATIONS.length) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-backups-')), data = path.join(root, 'data'), backups = path.join(root, 'backups'), game = path.join(root, 'game')
   fs.mkdirSync(backups); fs.mkdirSync(game)
-  const db = openDb(path.join(data, 'dashboard.db'))
+  fs.mkdirSync(data)
+  const db = new DatabaseSync(path.join(data, 'dashboard.db'))
+  for (const migration of MIGRATIONS.slice(0, version)) migration(db)
+  db.exec(`PRAGMA user_version=${version}`)
   return { root, data, backups, game, db, cleanup() { try { db.close() } catch {} fs.rmSync(root, { recursive: true, force: true }) } }
 }
 const row = (db: DatabaseSync, q: string) => db.prepare(q).get() as any
@@ -42,7 +46,7 @@ async function populated(f: ReturnType<typeof fixture>) {
   fs.writeFileSync(path.join(linkedin, 'perfil.md'), 'Perfil humano'); fs.writeFileSync(path.join(linkedin, 'rascunhos', 'publicados', 'post.md'), 'Publicado'); fs.writeFileSync(path.join(linkedin, 'videos', 'video.mp4'), 'video')
   fs.mkdirSync(path.join(linkedin, '.claude')); fs.writeFileSync(path.join(linkedin, '.claude', 'credentials.json'), secret)
   fs.writeFileSync(path.join(data, 'Cookies'), secret)
-  set(db, 'extraGames', [game, linkedin]); set(db, 'hiddenGames', [linkedin]); set(db, 'projectNames', { [linkedin]: 'Minha mesa' }); set(db, 'projectGroups', [{ games: [linkedin] }]); set(db, 'todoBoard', { revision: 1, topics: [{ items: [{ project: linkedin }] }] }); set(db, 'commands:' + linkedin.toLowerCase(), [])
+  set(db, 'extraGames', [game, linkedin]); set(db, 'hiddenGames', [linkedin]); set(db, 'projectNames', { [linkedin]: 'Minha mesa' }); set(db, 'projectGroups', [{ games: [linkedin] }]); set(db, 'todoBoard', { revision: 1, topics: [{ items: [{ project: linkedin }] }] }); set(db, 'commands:' + pathKey(linkedin), [])
   db.prepare('UPDATE tasks SET worktree=? WHERE id=?').run(linkedin, liTask)
   const production = createProductionService(db, path.join(data, 'production'))
   fs.writeFileSync(path.join(game, 'sprite.png'), Buffer.from(pixel.split(',')[1], 'base64'))
@@ -61,7 +65,7 @@ test('backup completo: restaura em outro diretório, preserva evidência/NULL e 
   const f = fixture()
   try {
     const records = await populated(f), backup = createBackup(f.db, f.data, f.backups)
-    assert.equal(backup.schema, 19); assert.ok(backup.files >= 7); assert.ok(backup.bytes > 0)
+    assert.equal(backup.schema, MIGRATIONS.length); assert.ok(backup.files >= 7); assert.ok(backup.bytes > 0)
     assert.equal(inspectBackup(backup.path).sourceDataDir, f.data)
     const bytes = fs.readFileSync(path.join(backup.path, 'dashboard.db'))
     assert.equal(bytes.includes(Buffer.from(secret)), false)
@@ -92,7 +96,7 @@ test('backup completo: restaura em outro diretório, preserva evidência/NULL e 
       assert.equal(row(restored, "SELECT game FROM tasks WHERE title='LinkedIn'").game, path.join(other, 'linkedin'))
       assert.deepEqual(JSON.parse(row(restored, "SELECT value FROM settings WHERE key='extraGames'").value), [f.game, path.join(other, 'linkedin')])
       assert.equal(JSON.parse(row(restored, "SELECT value FROM settings WHERE key='todoBoard'").value).topics[0].items[0].project, path.join(other, 'linkedin'))
-      assert.ok(restored.prepare('SELECT value FROM settings WHERE key=?').get('commands:' + path.join(other, 'linkedin').toLowerCase()))
+      assert.ok(restored.prepare('SELECT value FROM settings WHERE key=?').get('commands:' + pathKey(path.join(other, 'linkedin'))))
       assert.equal(fs.readFileSync(path.join(other, 'linkedin', 'rascunhos', 'publicados', 'post.md'), 'utf8'), 'Publicado')
       assert.equal(fs.existsSync(path.join(other, '.restore-transaction')), false)
     } finally { restored.close() }
@@ -103,6 +107,55 @@ test('backup completo: restaura em outro diretório, preserva evidência/NULL e 
     const undone = new DatabaseSync(path.join(other, 'dashboard.db'), { readOnly: true })
     try { assert.equal(row(undone, "SELECT value FROM settings WHERE key='before'").value, 'original'); assert.equal(row(undone, 'SELECT COUNT(*) n FROM messages').n, 0) } finally { undone.close() }
     assert.equal(fs.readFileSync(path.join(other, 'attachments', 'old.txt'), 'utf8'), 'original')
+  } finally { f.cleanup() }
+})
+
+test('backup v20: retenção lógica não exige bytes removidos e preserva tombstones na restauração', async () => {
+  const f = fixture(), s = createProductionService(f.db, path.join(f.data, 'production'))
+  try {
+    fs.writeFileSync(path.join(f.game, 'sprite.png'), 'antiga')
+    const id = await s.captureAsset(f.game, { title: 'Asset', path: 'sprite.png', note: 'Original' }), old = s.listAssets(f.game)[0].versions[0]
+    await s.reviewAssetVersion(f.game, old.id, old.hash, 'rejected')
+    fs.writeFileSync(path.join(f.game, 'sprite.png'), 'nova'); await s.captureAssetVersion(f.game, id, '')
+    s.setAssetArchived(f.game, id, 1, true)
+    const plan = s.previewRetention(f.game, 1); assert.equal(s.pruneRetention(f.game, 1, plan.token).files, 1)
+    const backup = createBackup(f.db, f.data, f.backups)
+    assert.equal(inspectBackup(backup.path).schema, MIGRATIONS.length)
+    const target = path.join(f.root, 'restored'); fs.mkdirSync(target)
+    stageRestore(target, backup.path); applyPendingRestore(target)
+    const db = openDb(path.join(target, 'dashboard.db'))
+    try {
+      assert.ok((db.prepare('SELECT pruned_at FROM asset_versions WHERE id=?').get(old.id) as any).pruned_at)
+      const restored = createProductionService(db, path.join(target, 'production'))
+      assert.ok(restored.listAssets(f.game)[0].archived_at); assert.equal(restored.listAssets(f.game)[0].versions.length, 1)
+      assert.equal(fs.existsSync(path.join(target, 'production', 'blobs', old.hash)), false)
+      fs.writeFileSync(path.join(f.game, 'sprite.png'), 'antiga')
+      assert.equal(await restored.captureAssetVersion(f.game, id, 'Novo texto'), old.id)
+      const version = restored.listAssets(f.game)[0].versions.find(v => v.id === old.id)!
+      assert.equal(version.note, 'Original'); assert.equal(version.state, 'rejected')
+    } finally { db.close() }
+  } finally { f.cleanup() }
+})
+
+test('backup v19 continua exigindo todos os snapshots e migra para v20 depois da restauração', () => {
+  const f = fixture(19)
+  try {
+    const bytes = Buffer.from('versão legada'), hash = crypto.createHash('sha256').update(bytes).digest('hex'), blobs = path.join(f.data, 'production', 'blobs')
+    fs.mkdirSync(blobs, { recursive: true }); fs.writeFileSync(path.join(blobs, hash), bytes)
+    f.db.prepare('INSERT INTO project_assets(game,title,path,kind,license,source,tags) VALUES (?,?,?,?,?,?,?)').run(f.game, 'Legado', 'asset.txt', '', '', '', '')
+    f.db.prepare('INSERT INTO asset_versions(asset_id,hash,size,file_name,note,state) VALUES (?,?,?,?,?,?)').run(1, hash, bytes.length, 'asset.txt', 'Nota legada', 'approved')
+    const backup = createBackup(f.db, f.data, f.backups)
+    assert.equal(backup.schema, 19); assert.equal(inspectBackup(backup.path).schema, 19)
+    fs.unlinkSync(path.join(blobs, hash))
+    assert.throws(() => createBackup(f.db, f.data, f.backups), /snapshot ausente/)
+    const target = path.join(f.root, 'legacy-restored'); fs.mkdirSync(target)
+    stageRestore(target, backup.path); applyPendingRestore(target)
+    const db = openDb(path.join(target, 'dashboard.db'))
+    try {
+      assert.equal(row(db, 'PRAGMA user_version').user_version, MIGRATIONS.length)
+      const restored = createProductionService(db, path.join(target, 'production')), a = restored.listAssets(f.game)[0]
+      assert.deepEqual([a.title, a.revision, a.archived_at, a.versions[0].state, a.versions[0].pinned, a.versions[0].pruned_at], ['Legado', 1, null, 'approved', 0, null])
+    } finally { db.close() }
   } finally { f.cleanup() }
 })
 

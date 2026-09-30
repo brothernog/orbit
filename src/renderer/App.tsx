@@ -10,6 +10,7 @@ import { Avatar, Icon, PROVIDER } from './icons'
 import { ProjectPanel } from './ProjectPanel'
 import { Settings } from './Settings'
 import { PermissionPrompt } from './PermissionPrompt'
+import { Toasts } from './Toasts'
 import { Limits } from './Limits'
 import { Palette } from './Palette'
 import { FilesPanel } from './FilesPanel'
@@ -137,6 +138,19 @@ const transition = (f: () => void) => {
   else f()
 }
 
+// Liga/desliga o planeta da area de trabalho (Planet.tsx). Desligado, os avisos com a Orbita fora de foco continuam aparecendo.
+function PlanetToggle() {
+  const [on, setOn] = useState<boolean | null>(null)
+  useEffect(() => { api.planetState().then((s: { on: boolean }) => setOn(s.on), () => {}) }, [])
+  const label = on ? 'Planeta na área de trabalho: ligado' : 'Planeta na área de trabalho: desligado'
+  return (
+    <button className={`rail-btn rail-planet ${on ? 'on' : ''}`} aria-label={label} aria-pressed={!!on} disabled={on === null}
+      onClick={() => api.setPlanet(!on).then((s: { on: boolean }) => setOn(s.on), () => {})}>
+      <Icon n="planet" /><span className="rail-tip">{label}</span>
+    </button>
+  )
+}
+
 export default function App() {
   const [draft, setDraft] = useState<TodoDraft | undefined>()
   const [games, setGames] = useState<string[]>([])
@@ -178,7 +192,11 @@ export default function App() {
   const refreshProviders = () => { setProviders(null); api.diagnose().then(setProviders, () => setProviders([])) }
   const loadAliases = () => api.projectNames().then((a: Record<string, string>) => { setAliases(a); setAliasVer(v => v + 1) }, () => {})
   const saveGroups = (n: Group[]) => { setGroups(n); api.setProjectGroups(n).catch((e: any) => setErr(errText(e))) }
-  useEffect(() => { api.getProjectGroups().then(setGroups, () => {}) }, [])
+  useEffect(() => {
+    const load = () => api.getProjectGroups().then(setGroups, () => {})
+    load()
+    return onChat(e => { if (e.groupsChanged) load() })
+  }, [])
   useEffect(() => { api.listGames().then(setGames); loadAccounts(); loadAliases(); api.diagnose().then(setProviders, () => setProviders([])) }, [])
   // Atalhos que dependem da pasta aberta: Ctrl+N nova tarefa, Ctrl+B mostra/oculta a gaveta, F2 renomeia a conversa aberta.
   const keys = useRef<(e: KeyboardEvent) => void>(() => {})
@@ -383,7 +401,7 @@ export default function App() {
     { label: 'Recolher todas as pastas', run: () => x.games.forEach(g => toggleFolder(g, false)) },
   ] : [
     { label: 'Adicionar pasta…', run: () => addGame(x.id) },
-    { label: 'Renomear ou mudar cor', hint: 'Ou duplo clique no nome da gaveta', run: () => setGroupDlg({ games: [], edit: x }) },
+    { label: 'Configurar organizador…', hint: 'Nome, cor e integração Godot', run: () => setGroupDlg({ games: [], edit: x }) },
     { label: 'Recolher todas as pastas', run: () => x.games.forEach(g => toggleFolder(g, false)) },
     { label: 'Desfazer organizador', hint: 'As pastas vão para "Sem organizador"; nada é apagado', run: () => saveGroups(groups.filter(y => y.id !== x.id)) },
   ] })
@@ -417,7 +435,7 @@ export default function App() {
       <div className="rail-float" role="tooltip" style={{ top: tip.y, '--g': tip.group.color } as CSSProperties}>
         <b className="rf-group">{tip.group.name}</b>
         <span className="rf-path rf-list">{tip.group.games.length ? tip.group.games.filter(g => games.includes(g)).map(name).join(' · ') : 'Vazio: clique para escolher a primeira pasta'}</span>
-        {!drag && <span className="rf-hint">{tip.group.id === INBOX ? 'Arraste pastas daqui para um organizador' : 'Botão direito: adicionar pasta, renomear, cor'}</span>}
+        {!drag && <span className="rf-hint">{tip.group.id === INBOX ? 'Arraste pastas daqui para um organizador' : 'Botão direito: adicionar pasta ou configurar'}</span>}
       </div>
     )
   }
@@ -427,9 +445,10 @@ export default function App() {
       <nav className="rail" aria-label="Projetos">
         <button className="rail-btn rail-logo" aria-label="Início" aria-current={home && !settings && !li} onClick={goHome}><img src={orbitMark} alt="" width={30} height={30} draggable={false} /><span className="rail-tip">Início</span></button>
         <button className={`rail-btn rail-li ${active.some(a => /[\\/]linkedin$/i.test(a.game)) ? 'live' : ''}`} aria-label="LinkedIn" aria-current={li && !settings} onClick={goLi}><span className="li-glyph" aria-hidden="true">in</span><span className="rail-tip">LinkedIn</span></button>
+        <button className="rail-btn rail-new" aria-label="Novo organizador" onClick={() => setGroupDlg({ games: [] })}><Icon n="plus" /><span className="rail-tip">Novo organizador</span></button>
         <ul className={`projects ${drag ? 'dragging' : ''}`}>{shownGroups.map(groupItem)}</ul>
         {tipCard()}
-        <button className="rail-btn rail-new" aria-label="Novo organizador" onClick={() => setGroupDlg({ games: [] })}><Icon n="plus" /><span className="rail-tip">Novo organizador</span></button>
+        <PlanetToggle />
         <button className="rail-btn" aria-label="Configurações" aria-current={settings} onClick={goSettings}><Icon n="gear" /><span className="rail-tip">Configurações</span></button>
       </nav>
 
@@ -496,9 +515,10 @@ export default function App() {
       {inProject && panel && <ProjectPanel key={game} game={game} accounts={accounts} onOpenTask={openTask} onClose={() => setPanel(false)} />}
       {palette && <Palette game={game} games={games} active={active} onClose={() => setPalette(false)} onProject={pick} onTask={openTask}
         onNewTask={() => create()} onHome={goHome} onSettings={goSettings} />}
+      <Toasts openTaskId={inProject && taskView ? task?.id : undefined} onOpen={(g, id, f) => { openIn(g, id); if (f) { setFiles(true); setPanel(false) } }} />
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
       {groupDlg && <GroupDialog edit={groupDlg.edit} count={groupDlg.games.length} onClose={() => setGroupDlg(null)}
-        onSave={(n, c) => saveGroups(groupDlg.edit ? groups.map(y => (y.id === groupDlg.edit!.id ? { ...y, name: n, color: c } : y)) : newGroup(groups, n, c, groupDlg.games))} />}
+        onSave={(n, c, godot) => saveGroups(groupDlg.edit ? groups.map(y => (y.id === groupDlg.edit!.id ? { ...y, name: n, color: c, godot } : y)) : newGroup(groups, n, c, groupDlg.games, godot))} />}
       {toHide && <Confirm title={`Remover "${name(toHide)}" da lista?`} action="Remover da lista" onClose={() => setToHide(null)} onConfirm={() => hideProject(toHide)}
         body="Nada é apagado: a pasta, as conversas e o histórico continuam onde estão. Para trazer de volta, adicione a pasta de novo pelo +." />}
       {toDelete && <Confirm title={`Excluir "${toDelete.title}"?`} action="Excluir conversa" onClose={() => setToDelete(null)} onConfirm={() => deleteTask(toDelete)}

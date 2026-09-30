@@ -14,10 +14,19 @@ const ROOT = path.resolve(here, '../..')
 const WIN = process.platform === 'win32'
 const electron = createRequire(import.meta.url)('electron') // binary path on any OS
 // Off Windows the tmp dir may be a symlink (macOS: /var -> /private/var) and the CLIs' process.cwd() returns the real path.
-const work = fs.mkdtempSync(path.join(WIN ? os.tmpdir() : fs.realpathSync(os.tmpdir()), 'gpd-e2e-'))
-const ud = path.join(work, 'userdata'), proj = path.join(work, 'projeto'), projGit = path.join(work, 'projgit'), bin = path.join(work, 'bin')
+const tmp = WIN ? os.tmpdir() : fs.realpathSync(os.tmpdir())
+const work = fs.mkdtempSync(path.join(tmp, 'gpd-e2e-'))
+if (path.dirname(path.resolve(work)) !== path.resolve(tmp) || !path.basename(work).startsWith('gpd-e2e-') || fs.lstatSync(work).isSymbolicLink()) throw Error('Pasta temporária do E2E fora do destino esperado.')
+const ud = path.join(work, 'userdata'), proj = path.join(work, 'projeto'), projGit = path.join(work, 'projgit'), projGodot = path.join(work, 'godot-project'), bin = path.join(work, 'bin')
 const logFile = path.join(work, 'argv.log'), pidsFile = path.join(work, 'pids.txt')
-for (const d of [ud, proj, projGit, bin]) fs.mkdirSync(d, { recursive: true })
+for (const d of [ud, proj, projGit, projGodot, bin]) fs.mkdirSync(d, { recursive: true })
+// A engine real recebe só esta cena mínima; seu executável vem de GPD_GODOT_EXE, sem caminho pessoal no teste.
+fs.writeFileSync(path.join(projGodot,'project.godot'),'config_version=5\n\n[application]\nconfig/name="Fixture Godot E2E"\nconfig/features=PackedStringArray("4.0", "GL Compatibility")\nrun/main_scene="res://main.tscn"\n\n[rendering]\nrenderer/rendering_method="gl_compatibility"\n')
+fs.writeFileSync(path.join(projGodot,'main.tscn'),'[gd_scene load_steps=2 format=3]\n\n[ext_resource type="Script" path="res://main.gd" id="1"]\n\n[node name="Main" type="Node2D"]\nscript = ExtResource("1")\n')
+fs.writeFileSync(path.join(projGodot,'main.gd'),'extends Node2D\n\nvar frames: int = 0\n\nfunc _ready() -> void:\n\tprint("GODOT_E2E_READY")\n\nfunc _physics_process(_delta: float) -> void:\n\tframes += 1\n\tif frames == 3:\n\t\tprint("GODOT_E2E_FRAME3")\n\t\tget_tree().quit(0)\n')
+fs.writeFileSync(path.join(projGodot,'good.gd'),'extends SceneTree\n\nfunc _init() -> void:\n\tquit(0)\n')
+fs.writeFileSync(path.join(projGodot,'export_presets.cfg'),'[preset.0]\nname="Windows E2E"\nplatform="Windows Desktop"\nrunnable=true\nexport_filter="all_resources"\ninclude_filter=""\nexclude_filter=""\nexport_path="build/godot-e2e.exe"\n\n[preset.0.options]\nbinary_format/embed_pck=true\nbinary_format/architecture="x86_64"\nbinary_format/console_wrapper=0\n')
+fs.mkdirSync(path.join(projGodot,'build'));fs.mkdirSync(path.join(projGodot,'logs'))
 fs.writeFileSync(path.join(projGit, 'a.txt'), 'x')
 execSync('git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init', { cwd: projGit })
 fs.writeFileSync(path.join(proj, 'roadmap.md'), '# Roadmap\n- [ ] x\n')
@@ -46,7 +55,7 @@ const { MIGRATIONS } = await import(pathToFileURL(path.join(ROOT, 'src/main/db.t
   const db = new DatabaseSync(path.join(ud, 'dashboard.db'))
   MIGRATIONS[0](db)
   db.prepare("INSERT INTO accounts (name, config_dir) VALUES ('Principal', NULL)").run()
-  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('extraGames', JSON.stringify([proj, projGit]))
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('extraGames', JSON.stringify([proj, projGit, projGodot]))
   db.prepare("INSERT INTO pins (game, title, status) VALUES (?, 'Bug antigo', 'andamento')").run(proj)
   const key = `game:${proj}|codex|`
   db.prepare("INSERT INTO messages (chat_key, role, text) VALUES (?, 'user', 'pergunta legada')").run(key)
@@ -72,7 +81,7 @@ async function start(userData = ud, entry = ROOT) {
   let page
   for (let i = 0; i < 60 && !page; i++) {
     await sleep(500)
-    try { page = (await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1000) })).json()).find(p => p.type === 'page') } catch {}
+    try { page = (await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1000) })).json()).find(p => p.type === 'page' && !p.url.includes('#')) } catch {} // janela principal, nao o planeta do canto (#planet)
   }
   if (!page) throw new Error('renderer nao abriu: ' + log.slice(-500))
   const ws = new WebSocket(page.webSocketDebuggerUrl)
@@ -106,6 +115,8 @@ const alive = pid => { try { process.kill(pid, 0); return true } catch { return 
 // Off Windows kill the whole tree, like taskkill /T: the CLIs run in their own process groups (detached), outside Electron's group.
 const tree = pid => { const ps = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' }).trim().split('\n').map(l => l.trim().split(/\s+/).map(Number)); const out = [pid]; for (let i = 0; i < out.length; i++) for (const [p, pp] of ps) if (pp === out[i]) out.push(p); return out }
 const killTree = pid => { try { if (WIN) execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' }); else for (const p of tree(pid)) try { process.kill(p, 'SIGKILL') } catch {} } catch {} }
+// taskkill é assíncrono; aguardar os PIDs com prazo, em vez de presumir encerramento em 800 ms.
+const waitStopped = async (...pids) => { for (let i = 0; i < 20 && pids.some(alive); i++) await sleep(250) }
 const kill = () => app && killTree(app.pid)
 
 try {
@@ -400,7 +411,7 @@ try {
   check('filho ativo (processo e descendente vivos) antes de cancelar o pai', alive(kp) && alive(kk))
   await inv(ev, 'stopTask', tD)
   c = await waitDone(ev, tD)
-  await sleep(1200)
+  await waitStopped(kp, kk)
   check('cancelar o pai cancela o filho: processos encerrados e delegacao cancelada', !alive(kp) && !alive(kk) && (await delegs())[0].status === 'cancelled', (await delegs())[0].status)
 
   // um escritor por area: edicao ativa reserva a pasta para outras tarefas
@@ -440,9 +451,9 @@ try {
   check('processo e filho estao vivos antes de cancelar', alive(p1) && alive(p2))
   await inv(ev, 'stopTask', tid2)
   c = await waitDone(ev, tid2)
-  await sleep(800)
+  await waitStopped(p1, p2)
   check('cancelar: estado cancelled com texto parcial preservado', c.messages.at(-1).status === 'cancelled' && c.messages.at(-1).text.includes('texto parcial'), c.messages.at(-1).text.slice(0, 60))
-  check('cancelar: processo e descendentes encerrados', !alive(p1) && !alive(p2))
+  check('cancelar: processo e descendentes encerrados', !alive(p1) && !alive(p2), `provedor vivo=${alive(p1)} filho vivo=${alive(p2)}`)
   const again = await sendD(ev, tid2, { provider: 'codex' }, 'depois do cancelamento')
   check('UI nao fica presa: nova mensagem aceita apos cancelar', again.ok === true)
   await waitDone(ev, tid2)
@@ -544,16 +555,123 @@ try {
   await inv(ev, 'sendTask', tg, { provider: 'codex' }, 'TRAVAR ao fechar')
   for (let i = 0; i < 40 && !(await inv(ev, 'taskChat', tg, { provider: 'codex' })).value.live.includes('parcial'); i++) await sleep(250)
   const [q1, q2] = fs.readFileSync(pidsFile, 'utf8').split(',').map(Number)
-  // the user closes the window (WM_CLOSE; off Windows, window.close() in the renderer): window-all-closed -> app.quit -> before-quit
-  if (WIN) try { execFileSync('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${app.pid}).CloseMainWindow() | Out-Null`], { stdio: 'ignore' }) } catch {}
-  else ev('window.close()').catch(() => {}) // no await: the window closes and CDP never answers
+  // Fecha a janela principal identificada no CDP (qualquer sistema), mesmo com um aviso flutuante aberto.
+  // CloseMainWindow do Windows pode escolher a janela de aviso em vez do dashboard.
+  void close().catch(() => {})
   for (let i = 0; i < 40 && alive(app.pid); i++) await sleep(250)
-  for (let i = 0; i < 20 && (alive(q1) || alive(q2)); i++) await sleep(250) // taskkill do before-quit termina depois do app
+  await waitStopped(q1, q2) // taskkill do before-quit termina depois do app
   { const d = new DatabaseSync(path.join(ud, 'dashboard.db')); const st = d.prepare('SELECT status FROM runs ORDER BY id DESC LIMIT 1').get()?.status; d.close(); console.log('   estado da ultima execucao no banco apos fechar:', st) }
-  check('fechar o app: processo do provedor e descendentes encerrados', !alive(q1) && !alive(q2), `app vivo=${alive(app.pid)} provedor vivo=${alive(q1)} filho vivo=${alive(q2)}`)
+  check('fechar o app: processo do provedor e descendentes encerrados', !alive(app.pid) && !alive(q1) && !alive(q2), `app vivo=${alive(app.pid)} provedor vivo=${alive(q1)} filho vivo=${alive(q2)}`)
   ;({ ev, send, close } = await start())
   c = (await inv(ev, 'taskChat', tg, { provider: 'codex' })).value
   check('fechar o app: execucao gravada como cancelada (nao como falha), sem duplicar', c.messages.at(-1).status === 'cancelled' && c.messages.filter(m => m.status === 'cancelled').length === 1, c.messages.at(-1).status)
+
+  // ---- Entrega local da worktree: Git real, somente nas pastas temporárias deste teste.
+  const wtGit=(dir,...args)=>execFileSync('git',args,{cwd:dir,encoding:'utf8'}).trim()
+  // O painel consulta status e pode atualizar o índice enquanto a fixture faz staging manual.
+  const wtWrite=async(dir,...args)=>{const end=Date.now()+5000;for(;;){try{return execFileSync('git',args,{cwd:dir,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim()}catch(e){if(Date.now()>=end||!/Unable to create [\s\S]*index\.lock['"]?: File exists/.test(String(e.stderr??e.message)))throw e;await sleep(100)}}}
+  wtGit(projGit,'config','user.name','Fixture');wtGit(projGit,'config','user.email','fixture@users.noreply.github.com')
+  wtGit(projGit,'config','core.autocrlf','false') // bytes da fixture independem da configuração global do Windows
+  const wtSource=iso.value.worktree,wtBranch=iso.value.branch,wtCalls=argvLog().length
+  const wtHistory=(await inv(ev,'taskChat',tg,{provider:'codex'})).value.messages
+  fs.writeFileSync(path.join(wtSource,'delivery-e2e.txt'),'Entrega revisada E2E\n')
+  fs.writeFileSync(path.join(wtSource,'.gitignore'),'ignored-e2e.txt\n')
+  wtGit(wtSource,'add','delivery-e2e.txt','.gitignore');wtGit(wtSource,'commit','-m','Entrega local E2E')
+  const obsoleteMerge=(await inv(ev,'previewWorktreeMerge',gameGit,wtSource)).value
+  fs.writeFileSync(path.join(wtSource,'newer-e2e.txt'),'Mudança depois da prévia\n')
+  wtGit(wtSource,'add','newer-e2e.txt');wtGit(wtSource,'commit','-m','Atualiza entrega E2E')
+  check('worktrees: prévia obsoleta não inicia merge nem avança destino',!(await inv(ev,'beginWorktreeMerge',gameGit,wtSource,obsoleteMerge.token)).ok&&wtGit(projGit,'rev-parse','HEAD')===obsoleteMerge.target.head&&!(await inv(ev,'worktreeView',gameGit)).value.pending)
+  const validMerge=(await inv(ev,'previewWorktreeMerge',gameGit,wtSource)).value
+  check('worktrees: prévia mostra origem, destino, commits e arquivos exatos',validMerge.source.path.toLowerCase()===wtSource.toLowerCase()&&validMerge.target.path.toLowerCase()===projGit.toLowerCase()&&validMerge.commits.length===2&&['.gitignore','delivery-e2e.txt','newer-e2e.txt'].every(p=>validMerge.files.includes(p)))
+  const wtWait=async predicate=>{const end=Date.now()+15000;let last;while(Date.now()<end){last=await inv(ev,'worktreeView',gameGit);if(last.ok&&predicate(last.value)){await sleep(150);return last.value}await sleep(150)}throw Error('Estado da worktree não chegou: '+JSON.stringify(last))}
+  const wtUI=async(expression,label)=>{const end=Date.now()+20000;while(Date.now()<end){if(await ev(expression))return;await sleep(200)}throw Error('Interface não chegou: '+label)}
+  const wtProject=async()=>{
+    await ev("document.querySelector('.group-toggle[aria-expanded=false]')?.click()");await sleep(200)
+    await ev("document.querySelector('.rail-ws.inbox')?.click()");await sleep(450)
+    await ev("(() => { const b=[...document.querySelectorAll('.chats [data-path]')].find(b=>(b.dataset.path||'').toLowerCase().endsWith('projgit')); if(!b)throw Error('Projeto da worktree ausente na gaveta'); b.click() })()");await sleep(800)
+  }
+  const wtButton=async label=>{
+    const until=Date.now()+20000
+    while(Date.now()<until){if(await ev(`(() => {const b=[...document.querySelectorAll('.wt button')].find(b=>b.textContent===${JSON.stringify(label)}&&!b.disabled);if(!b)return false;b.click();return true})()`)){await sleep(350);return}await sleep(200)}
+    throw Error('Ação de worktree não ficou disponível: '+label)
+  }
+  const wtConfirm=async label=>{await ev(`(() => {const b=[...document.querySelectorAll('.confirm button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b)throw Error('Confirmação de worktree ausente');b.click()})()`);await sleep(200)}
+  const wtSelect=async()=>{
+    const predicate=`[...document.querySelectorAll('.br-dirs [role=tab]')].find(b=>b.title.replace(/\\\\/g,'/').toLowerCase()===${JSON.stringify(wtSource.replace(/\\/g,'/').toLowerCase())})`
+    const until=Date.now()+20000
+    while(Date.now()<until){if(await ev(`!!(${predicate})`)){await ev(`(${predicate}).click()`);await sleep(500);return}await sleep(200)}
+    throw Error('Abas da worktree não carregaram: '+await ev("JSON.stringify({tabs:[...document.querySelectorAll('.br-dirs [role=tab]')].map(b=>b.title),branch:document.querySelector('.branch')?.textContent})"))
+  }
+  const wtShots=async name=>{
+    const dir=path.join(os.tmpdir(),'gpd-e2e-shots');fs.mkdirSync(dir,{recursive:true})
+    for(const [w,h] of [[1400,900],[768,1024]]){
+      await send('Emulation.setDeviceMetricsOverride',{width:w,height:h,deviceScaleFactor:1,mobile:false});await sleep(250)
+      await ev("document.querySelector('.wt').scrollIntoView({block:'start'})");await sleep(150)
+      const m=await ev("(() => {const root=document.querySelector('.wt'),b=root.getBoundingClientRect();return {w:innerWidth,scroll:document.documentElement.scrollWidth,over:[...root.querySelectorAll('button,select,code')].filter(e=>{const r=e.getBoundingClientRect();return r.width&&(r.right>b.right+1||r.left<b.left-1)}).map(e=>e.getAttribute('aria-label')||e.tagName)}})()")
+      check(`worktrees ${name} em ${w}: revisão e ações cabem no painel`,m.scroll<=m.w&&!m.over.length,JSON.stringify(m))
+      fs.writeFileSync(path.join(dir,`worktree-${name}-${w}.png`),Buffer.from((await send('Page.captureScreenshot',{format:'png'})).result.data,'base64'))
+    }
+    await send('Emulation.clearDeviceMetricsOverride');await sleep(250)
+  }
+  await wtProject()
+  await wtSelect()
+  await wtButton('Prévia da integração')
+  await wtUI("!!document.querySelector('.wt-preview')",'prévia da integração')
+  check('worktrees UI: prévia contém commits e arquivos antes de confirmar',await ev("document.querySelector('.wt-preview').textContent.includes('Entrega local E2E')&&document.querySelector('.wt-preview').textContent.includes('delivery-e2e.txt')"))
+  await wtButton('Iniciar integração');await wtConfirm('Iniciar integração')
+  let wtPending=(await wtWait(v=>!!v.pending)).pending
+  check('worktrees UI: iniciar prepara merge e exige aceite, mantendo HEAD original',wtPending.mergeStarted&&wtPending.owned&&!wtPending.conflicts.length&&wtGit(projGit,'rev-parse','HEAD')===validMerge.target.head&&wtGit(projGit,'rev-parse','MERGE_HEAD')===validMerge.source.head)
+  await wtUI("document.querySelector('.wt-pending')?.textContent.includes('Integração em revisão')",'revisão do merge')
+  const wtTargetTask=(await inv(ev,'createTask',gameGit,'Destino em revisão E2E')).value
+  check('worktrees: revisão pendente bloqueia IA e commit comum no destino',!(await inv(ev,'sendTask',wtTargetTask,{provider:'codex'},'não executar durante revisão')).ok&&!(await inv(ev,'branchCommit',projGit,'Não contornar revisão')).ok&&argvLog().length===wtCalls)
+  await wtShots('pending')
+  kill();await sleep(1200);({ev,send,close}=await start())
+  const restartedMerge=(await inv(ev,'worktreeView',gameGit)).value.pending
+  check('worktrees: revisão pendente sobrevive ao reinício sem commit ou inferência',restartedMerge?.token===wtPending.token&&restartedMerge.owned&&wtGit(projGit,'rev-parse','HEAD')===validMerge.target.head&&argvLog().length===wtCalls)
+  await wtProject();await wtButton('Concluir integração');await wtConfirm('Concluir integração')
+  await wtWait(v=>!v.pending)
+  check('worktrees UI: aceite cria merge local e mantém branch de origem',fs.readFileSync(path.join(projGit,'delivery-e2e.txt'),'utf8')==='Entrega revisada E2E\n'&&wtGit(projGit,'rev-list','--parents','-n','1','HEAD').split(' ').length===3&&wtGit(projGit,'show-ref','--verify',`refs/heads/${wtBranch}`).endsWith(`refs/heads/${wtBranch}`))
+
+  fs.writeFileSync(path.join(wtSource,'a.txt'),'mudança da origem\n');await wtWrite(wtSource,'add','a.txt');await wtWrite(wtSource,'commit','-m','Origem em conflito E2E')
+  fs.writeFileSync(path.join(projGit,'a.txt'),'mudança do destino\n');await wtWrite(projGit,'add','a.txt');await wtWrite(projGit,'commit','-m','Destino em conflito E2E')
+  const conflictHead=wtGit(projGit,'rev-parse','HEAD'),conflictPreview=(await inv(ev,'previewWorktreeMerge',gameGit,wtSource)).value
+  wtPending=(await inv(ev,'beginWorktreeMerge',gameGit,wtSource,conflictPreview.token)).value.pending
+  check('worktrees: conflitos ficam listados e impedem conclusão',wtPending.conflicts.includes('a.txt')&&!(await inv(ev,'finishWorktreeMerge',gameGit,wtPending.token)).ok)
+  await wtButton('Atualizar worktrees');await wtUI("document.querySelector('.wt-pending')?.textContent.includes('Conflitos (1)')",'conflito na revisão');await wtShots('conflict')
+  await wtButton('Abortar integração');await wtConfirm('Abortar integração');await wtWait(v=>!v.pending)
+  check('worktrees UI: abortar conserva HEAD e bytes anteriores do destino',wtGit(projGit,'rev-parse','HEAD')===conflictHead&&fs.readFileSync(path.join(projGit,'a.txt'),'utf8')==='mudança do destino\n')
+  const retryPreview=(await inv(ev,'previewWorktreeMerge',gameGit,wtSource)).value
+  wtPending=(await inv(ev,'beginWorktreeMerge',gameGit,wtSource,retryPreview.token)).value.pending
+  fs.writeFileSync(path.join(projGit,'a.txt'),'resolução humana E2E\n')
+  wtPending=(await inv(ev,'worktreeView',gameGit)).value.pending
+  check('worktrees: editar conflito não autoriza staging automático',!(await inv(ev,'finishWorktreeMerge',gameGit,wtPending.token)).ok&&wtGit(projGit,'diff','--name-only','--diff-filter=U').includes('a.txt'))
+  await wtWrite(projGit,'add','a.txt')
+  wtPending=(await inv(ev,'worktreeView',gameGit)).value.pending
+  check('worktrees: resolução manual seguida de aceite conclui sem modificar os bytes',(await inv(ev,'finishWorktreeMerge',gameGit,wtPending.token)).ok&&fs.readFileSync(path.join(projGit,'a.txt'),'utf8')==='resolução humana E2E\n'&&!(await inv(ev,'worktreeView',gameGit)).value.pending)
+
+  fs.writeFileSync(path.join(wtSource,'ignored-e2e.txt'),'Arquivo ignorado precisa de revisão\n')
+  const blockedRemoval=(await inv(ev,'previewWorktreeRemoval',gameGit,wtSource)).value
+  check('worktrees: arquivo ignorado bloqueia remoção sem perder bytes',blockedRemoval.blockers.length>0&&!(await inv(ev,'removeWorktree',gameGit,wtSource,blockedRemoval.token)).ok&&fs.existsSync(path.join(wtSource,'ignored-e2e.txt')))
+  fs.unlinkSync(path.join(wtSource,'ignored-e2e.txt'))
+  for(const flag of ['skip-worktree','assume-unchanged']){
+    const guardedFile=path.join(wtSource,'delivery-e2e.txt'),original=fs.readFileSync(guardedFile)
+    await wtWrite(wtSource,'update-index',`--${flag}`,'delivery-e2e.txt');fs.writeFileSync(guardedFile,'Mudança escondida precisa ser preservada\n')
+    const hiddenRemoval=(await inv(ev,'previewWorktreeRemoval',gameGit,wtSource)).value
+    check(`worktrees: ${flag} não permite apagar alterações ocultas`,!wtGit(wtSource,'status','--porcelain')&&hiddenRemoval.blockers.length>0&&!(await inv(ev,'removeWorktree',gameGit,wtSource,hiddenRemoval.token)).ok&&fs.readFileSync(guardedFile,'utf8').includes('Mudança escondida'))
+    await wtWrite(wtSource,'update-index',`--no-${flag}`,'delivery-e2e.txt');fs.writeFileSync(guardedFile,original)
+  }
+  await wtSelect();await wtButton('Atualizar worktrees');await wtButton('Prévia da limpeza')
+  await wtButton('Remover worktree');await wtConfirm('Remover worktree')
+  await wtWait(v=>!v.sources.some(s=>s.path.toLowerCase()===wtSource.toLowerCase()))
+  const afterWTCleanup=(await inv(ev,'taskChat',tg,{provider:'codex'})).value
+  check('worktrees UI: remoção libera vínculos e sessão preservando histórico e branch',!fs.existsSync(wtSource)&&!afterWTCleanup.task.worktree&&afterWTCleanup.session===null&&wtHistory.every(m=>afterWTCleanup.messages.some(n=>n.id===m.id&&n.text===m.text))&&!!wtGit(projGit,'show-ref','--verify',`refs/heads/${wtBranch}`))
+  const cleanupPin=Number((await inv(ev,'addPin',gameGit,'Limpeza de problema E2E','Ordem humana E2E')).value.lastInsertRowid)
+  const cleanupTask=(await inv(ev,'taskForPin',cleanupPin)).value
+  const cleanupIsolation=(await inv(ev,'isolateTask',typeof cleanupTask==='number'?cleanupTask:cleanupTask.id)).value
+  const pinRemoval=(await inv(ev,'previewWorktreeRemoval',gameGit,cleanupIsolation.worktree)).value
+  check('worktrees: limpeza de worktree integrada de problema limpa ambos os vínculos',(await inv(ev,'removeWorktree',gameGit,cleanupIsolation.worktree,pinRemoval.token)).ok&&!(await inv(ev,'listPins',gameGit)).value.find(p=>p.id===cleanupPin).worktree&&!(await inv(ev,'taskChat',typeof cleanupTask==='number'?cleanupTask:cleanupTask.id,{provider:'codex'})).value.task.worktree&&!fs.existsSync(cleanupIsolation.worktree))
+  check('worktrees: integração e limpeza local não iniciam inferência nem publicam',argvLog().length===wtCalls)
+  await ev("[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Início'||b.getAttribute('title')==='Início')?.click()");await sleep(650)
 
   // ---- home: /fixar no campo do Jarvis manda o texto para a to-do e ele vira o foco "Agora"
   await ev(`(() => {
@@ -644,14 +762,24 @@ try {
   await ev("[...document.querySelectorAll('.workflow:not(.project-commands) button')].find(b=>b.textContent==='Preparar no chat'&&!b.disabled)?.click()")
   await sleep(300)
   check('etapas: preparar no chat preenche ordem, ainda sem inferência', await ev("document.querySelector('.composer textarea')?.value==='Investigar o pulo'") && argvLog().length===beforePlan)
-  await ev("document.querySelector('.composer .send')?.click()")
-  await waitDone(ev,productionId); await sleep(600)
-  check('etapas: execução concluída exige revisão humana', (await inv(ev,'listSteps',productionId)).value[0].state==='review')
-  await ev("[...document.querySelectorAll('.workflow button')].find(b=>b.textContent==='Aceitar etapa')?.click()")
-  await sleep(400)
+  await wtUI("!!document.querySelector('.composer button[aria-label=Enviar]:not(:disabled)')", 'envio da etapa habilitado')
+  await ev("document.querySelector('.composer button[aria-label=Enviar]:not(:disabled)').click()")
+  // O IPC faz checkpoint antes do spawn; running=false durante essa preparação não significa conclusão.
+  let firstStep
+  for(let i=0;i<100;i++){firstStep=(await inv(ev,'listSteps',productionId)).value.find(s=>s.id===stepA);if(['review','failed','cancelled','awaiting_context'].includes(firstStep?.state))break;await sleep(200)}
+  check('etapas: execução concluída exige revisão humana', firstStep?.state==='review', JSON.stringify(firstStep))
+  if(firstStep?.state!=='review'){
+    const failedStepChat=await inv(ev,'taskChat',productionId,{provider:'codex'})
+    throw Error('A etapa não chegou à revisão: '+JSON.stringify({step:firstStep,chat:failedStepChat.ok?{running:failedStepChat.value.running,awaitingContext:failedStepChat.value.awaitingContext,messages:failedStepChat.value.messages.slice(-2)}:failedStepChat.error})+' · '+await ev("[...document.querySelectorAll('.chat [role=alert],.chat .err')].map(e=>e.textContent).join(' | ')"))
+  }
+  await waitDone(ev,productionId)
+  await wtUI("!![...document.querySelectorAll('.workflow button')].find(b=>b.textContent==='Aceitar etapa'&&!b.disabled)", 'aceite da etapa disponível')
+  await ev("[...document.querySelectorAll('.workflow button')].find(b=>b.textContent==='Aceitar etapa'&&!b.disabled).click()")
+  for(let i=0;i<50&&(await inv(ev,'listSteps',productionId)).value[0].state!=='accepted';i++)await sleep(100)
   check('etapas: aceite pela UI libera próxima etapa', (await inv(ev,'listSteps',productionId)).value[0].state==='accepted')
   const stepHeld=await inv(ev,'sendTask',productionId,{provider:'opencode'},'Implementar o pulo',[],stepB)
-  check('etapas: troca de provedor aguarda consentimento', stepHeld.ok && stepHeld.value.status==='awaiting_context_approval' && (await inv(ev,'listSteps',productionId)).value[1].state==='awaiting_context')
+  check('etapas: troca de provedor aguarda consentimento', stepHeld.ok && stepHeld.value.status==='awaiting_context_approval' && (await inv(ev,'listSteps',productionId)).value[1].state==='awaiting_context', JSON.stringify(stepHeld))
+  if(!stepHeld.ok||stepHeld.value?.status!=='awaiting_context_approval')throw Error('O envio da segunda etapa não ficou retido: '+JSON.stringify(stepHeld))
   const stepPk=(await inv(ev,'listContextPackages',productionId)).value.find(p=>p.id===stepHeld.value.packageId)
   check('etapas: hash inválido não inicia e mantém a etapa pendente', !(await inv(ev,'decideSend',stepHeld.value.sendId,'f'.repeat(64),'approve')).ok && (await inv(ev,'listSteps',productionId)).value[1].state==='awaiting_context')
   await inv(ev,'decideSend',stepHeld.value.sendId,stepPk.hash,'cancel')
@@ -663,10 +791,10 @@ try {
   const reviewed=(await inv(ev,'listSteps',productionId)).value[1]
   check('etapas: após aprovação vincula a execução correta e exige revisão', stepApproved.ok && reviewed.state==='review' && reviewed.run_id===stepApproved.value.runId)
 
-  // Preset é uma configuração para revisar; substituímos Godot por Node local sem engine ou rede.
+  // Comando genérico explícito, sem depender de uma integração de engine ativa.
   await ev("document.querySelector('.project-commands > summary')?.click()")
-  await ev("[...document.querySelectorAll('.project-commands button')].find(b=>b.textContent==='Preset validar Godot')?.click()")
-  check('comandos: preset Godot só preenche configuração para revisão', await ev("document.querySelector('.project-commands input[aria-label=Programa]')?.value==='godot'") && argvLog().length===beforePlan+2)
+  await ev("[...document.querySelectorAll('.project-commands button')].find(b=>b.textContent==='Configurar comando')?.click()")
+  check('comandos: configurar abre campos vazios sem executar engine ou IA', await ev("document.querySelector('.project-commands input[aria-label=Programa]')?.value==='' && !document.querySelector('.godot-panel')") && argvLog().length===beforePlan+2)
   const localArgs=['-e','require("node:fs").writeFileSync("game-demo.zip","distribuível falso E2E");console.log("build local verificado");console.log(process.cwd())']
   await ev(`(() => { for(const [label,value] of ${JSON.stringify([['Nome do comando','Teste local E2E'],['Programa',process.execPath],['Argumentos JSON',JSON.stringify(localArgs)]])}){const e=document.querySelector('.project-commands [aria-label="'+label+'"]');const proto=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(e,value);e.dispatchEvent(new Event('input',{bubbles:true}))} })()`)
   await sleep(100)
@@ -793,6 +921,105 @@ try {
   await ev("[...document.querySelectorAll('.production-record > summary')].find(s=>s.textContent.includes('Build pela UI')).click()")
   await ev("[...document.querySelectorAll('.production-record[open] button')].find(b=>b.textContent==='Aprovar build').click()"); await sleep(400)
   check('builds UI: aprovação habilita exportação sem publicar ou executar', (await inv(ev,'listBuilds',gameArg)).value.find(b=>b.id===uiBuild.id).state==='approved' && await ev("[...document.querySelectorAll('.production-record[open] button')].some(b=>b.textContent==='Exportar cópia')") && argvLog().length===productionCalls)
+  // ---- Gestão do catálogo: metadados e arquivo reversível não substituem evidência.
+  const catalogRow = (kind,id) => `.production-record[data-catalog-kind="${kind}"][data-catalog-id="${id}"]`
+  const catalogButton = async (kind,id,text) => {
+    await ev(`(() => { const row=document.querySelector(${JSON.stringify(catalogRow(kind,id))});if(!row)throw Error('Registro do catálogo ausente');row.open=true;const b=[...row.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(text)});if(!b)throw Error('Ação do catálogo ausente: '+${JSON.stringify(text)});b.click() })()`)
+    await sleep(400)
+  }
+  const catalogTab = async tab => { await ev(`[...document.querySelectorAll('.production-nav button')].find(b=>b.textContent.includes(${JSON.stringify(tab)})).click()`);await sleep(150) }
+  const catalogSubmit = async (kind,id) => { await ev(`document.querySelector(${JSON.stringify(catalogRow(kind,id)+' .production-editor')}).requestSubmit()`);await sleep(450) }
+  const catalogShots = async (name,selector) => {
+    for(const [w,h] of [[1400,900],[768,1024]]) {
+      await send('Emulation.setDeviceMetricsOverride',{width:w,height:h,deviceScaleFactor:1,mobile:false});await sleep(250)
+      await ev(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'start'})`);await sleep(150)
+      const m=await ev("(() => {const root=document.querySelector('.production'),b=root.getBoundingClientRect();return {w:innerWidth,scroll:document.documentElement.scrollWidth,over:[...root.querySelectorAll('input,textarea,select,button,code')].filter(e=>{const r=e.getBoundingClientRect();return r.width&&(r.right>b.right+1||r.left<b.left-1)}).map(e=>e.getAttribute('aria-label')||e.tagName)}})()")
+      check(`catálogo ${name} em ${w}: campos e ações cabem no painel`,m.scroll<=m.w&&!m.over.length,JSON.stringify(m))
+      fs.writeFileSync(path.join(shotDir,`catalog-${name}-${w}.png`),Buffer.from((await send('Page.captureScreenshot',{format:'png'})).result.data,'base64'))
+    }
+    await send('Emulation.setDeviceMetricsOverride',{width:1400,height:900,deviceScaleFactor:1,mobile:false});await sleep(150)
+  }
+  const approvedUiBuild=(await inv(ev,'listBuilds',gameArg)).value.find(b=>b.id===uiBuild.id)
+  await catalogButton('build',uiBuild.id,'Editar metadados')
+  await setProductionFields([[`Nome de build ${uiBuild.id}`,'Build editada pela UI'],[`Versão de build ${uiBuild.id}`,'0.2.1'],[`Plataforma de build ${uiBuild.id}`,'Windows x64'],[`Notas de build ${uiBuild.id}`,'Metadados revisados manualmente']])
+  await catalogShots('build-editor',catalogRow('build',uiBuild.id)+' .production-editor')
+  await catalogSubmit('build',uiBuild.id)
+  const editedUiBuild=(await inv(ev,'listBuilds',gameArg)).value.find(b=>b.id===uiBuild.id)
+  check('builds UI: editar metadados conserva hash, aprovação e comando de origem',editedUiBuild.title==='Build editada pela UI'&&editedUiBuild.version==='0.2.1'&&editedUiBuild.platform==='Windows x64'&&editedUiBuild.notes==='Metadados revisados manualmente'&&editedUiBuild.hash===approvedUiBuild.hash&&editedUiBuild.state==='approved'&&editedUiBuild.reviewed_at===approvedUiBuild.reviewed_at&&editedUiBuild.command===approvedUiBuild.command&&editedUiBuild.source_task_id===approvedUiBuild.source_task_id)
+
+  await catalogTab('Playtests')
+  const beforeEditPlaytest=(await inv(ev,'listPlaytests',gameArg)).value.find(p=>p.id===uiPlaytest.id)
+  const beforeEditImages=(await inv(ev,'playtestImages',gameArg,uiPlaytest.id)).value
+  await catalogButton('playtest',uiPlaytest.id,'Editar metadados')
+  await setProductionFields([[`Nome de playtest ${uiPlaytest.id}`,'Playtest editado pela UI'],[`Severidade de playtest ${uiPlaytest.id}`,'high'],[`Notas de playtest ${uiPlaytest.id}`,'Triagem manual posterior']])
+  await catalogSubmit('playtest',uiPlaytest.id)
+  const editedUiPlaytest=(await inv(ev,'listPlaytests',gameArg)).value.find(p=>p.id===uiPlaytest.id)
+  check('playtests UI: metadados mudam sem alterar observação, resultado, imagens ou vínculos',editedUiPlaytest.title==='Playtest editado pela UI'&&editedUiPlaytest.severity==='high'&&editedUiPlaytest.notes==='Triagem manual posterior'&&['scenario','expected','observed','outcome','build_id','pin_id','state','created_at'].every(k=>editedUiPlaytest[k]===beforeEditPlaytest[k])&&JSON.stringify((await inv(ev,'playtestImages',gameArg,uiPlaytest.id)).value)===JSON.stringify(beforeEditImages))
+
+  await catalogTab('Assets')
+  const beforeEditAsset=(await inv(ev,'listAssets',gameArg)).value.find(a=>a.id===uiAsset.id)
+  await catalogButton('asset',uiAsset.id,'Editar metadados')
+  await setProductionFields([[`Nome de asset ${uiAsset.id}`,'Asset editado pela UI'],[`Licença de asset ${uiAsset.id}`,'Autoral revisada'],[`Tags de asset ${uiAsset.id}`,'ui, revisado']])
+  await catalogSubmit('asset',uiAsset.id)
+  const editedUiAsset=(await inv(ev,'listAssets',gameArg)).value.find(a=>a.id===uiAsset.id)
+  check('assets UI: metadados mudam mantendo arquivo e versões aprovadas intactos',editedUiAsset.title==='Asset editado pela UI'&&editedUiAsset.license==='Autoral revisada'&&editedUiAsset.tags==='ui, revisado'&&editedUiAsset.path===beforeEditAsset.path&&JSON.stringify(editedUiAsset.versions)===JSON.stringify(beforeEditAsset.versions))
+  await catalogButton('asset',uiAsset.id,'Editar metadados')
+  await setProductionFields([[`Nome de asset ${uiAsset.id}`,'Rascunho local do asset']])
+  const competingAssetEdit=await inv(ev,'editAsset',gameArg,uiAsset.id,{revision:editedUiAsset.revision,title:'Asset concorrente',kind:editedUiAsset.kind,license:editedUiAsset.license,source:editedUiAsset.source,tags:editedUiAsset.tags})
+  await sleep(450)
+  await catalogSubmit('asset',uiAsset.id)
+  check('catálogo UI: revisão concorrente recusa salvar e mantém rascunho local',competingAssetEdit.ok&&(await inv(ev,'listAssets',gameArg)).value.find(a=>a.id===uiAsset.id).title==='Asset concorrente'&&await ev(`!!document.querySelector('.production-error')&&document.querySelector('[aria-label="Nome de asset ${uiAsset.id}"]').value==='Rascunho local do asset'`))
+  await catalogShots('asset-editor',catalogRow('asset',uiAsset.id)+' .production-editor')
+  await catalogButton('asset',uiAsset.id,'Cancelar edição')
+  await catalogButton('asset',uiAsset.id,'Editar metadados')
+  check('catálogo UI: reabrir editor carrega metadados da revisão atual',await ev(`document.querySelector('[aria-label="Nome de asset ${uiAsset.id}"]').value==='Asset concorrente'`))
+  await setProductionFields([[`Nome de asset ${uiAsset.id}`,'Asset editado pela UI']]);await catalogSubmit('asset',uiAsset.id)
+
+  for(const [kind,id,tab,list,filter] of [['asset',uiAsset.id,'Assets','listAssets','assets'],['playtest',uiPlaytest.id,'Playtests','listPlaytests','playtests'],['build',uiBuild.id,'Builds','listBuilds','builds']]) {
+    await catalogTab(tab)
+    await catalogButton(kind,id,'Arquivar registro')
+    check(`${tab} UI: arquivar retira da vista ativa e preserva registro`,!!(await inv(ev,list,gameArg)).value.find(r=>r.id===id).archived_at&&await ev(`!document.querySelector(${JSON.stringify(catalogRow(kind,id))})`))
+    await setProductionFields([[`Arquivamento de ${filter}`,'archived']]);await sleep(200)
+    check(`${tab} UI: filtro de arquivados mostra ação de restauração`,await ev(`!!document.querySelector(${JSON.stringify(catalogRow(kind,id))})`))
+    await catalogButton(kind,id,'Restaurar registro')
+    await setProductionFields([[`Arquivamento de ${filter}`,'active']]);await sleep(200)
+    check(`${tab} UI: restaurar devolve registro à vista ativa`,!(await inv(ev,list,gameArg)).value.find(r=>r.id===id).archived_at&&await ev(`!!document.querySelector(${JSON.stringify(catalogRow(kind,id))})`))
+  }
+  check('catálogo UI: arquivamento mantém revisões, screenshot e build vinculada', (await inv(ev,'listBuilds',gameArg)).value.find(b=>b.id===uiBuild.id).state==='approved'&&(await inv(ev,'playtestImages',gameArg,uiPlaytest.id)).value.length===1&&(await inv(ev,'listPlaytests',gameArg)).value.find(p=>p.id===uiPlaytest.id).build_id===buildId)
+
+  // Asset isolado: somente a rejeitada antiga sem preservação poderá perder seus bytes.
+  const retentionFile=path.join(proj,'retention-e2e.txt'),retentionVersions=[]
+  fs.writeFileSync(retentionFile,'rejeitada antiga removível E2E')
+  const retentionAssetId=(await inv(ev,'captureAsset',gameArg,{title:'Retenção E2E',path:'retention-e2e.txt',kind:'fixture',license:'Autoral'})).value
+  retentionVersions.push((await inv(ev,'listAssets',gameArg)).value.find(a=>a.id===retentionAssetId).versions[0])
+  for(const content of ['rejeitada preservada E2E','pendente intermediária E2E','pendente recente E2E']) {
+    fs.writeFileSync(retentionFile,content)
+    const id=(await inv(ev,'captureAssetVersion',gameArg,retentionAssetId,'Versão de retenção E2E')).value
+    retentionVersions.push((await inv(ev,'listAssets',gameArg)).value.find(a=>a.id===retentionAssetId).versions.find(v=>v.id===id))
+  }
+  for(const version of retentionVersions.slice(0,2))await inv(ev,'reviewAssetVersion',gameArg,version.id,version.hash,'rejected')
+  await catalogTab('Assets');await sleep(200)
+  await ev(`document.querySelector(${JSON.stringify(catalogRow('asset',retentionAssetId))}).open=true;[...document.querySelector('[data-version-id="${retentionVersions[1].id}"]').querySelectorAll('button')].find(b=>b.textContent==='Preservar versão').click()`);await sleep(450)
+  check('retenção UI: preservação manual marca a versão rejeitada protegida',(await inv(ev,'listAssets',gameArg)).value.find(a=>a.id===retentionAssetId).versions.find(v=>v.id===retentionVersions[1].id).pinned===1)
+  await ev("document.querySelector('.production-retention').open=true")
+  await setProductionFields([['Versões recentes a manter','1']])
+  await ev("document.querySelector('.production-retention form').requestSubmit()");await sleep(450)
+  const retentionPreview=(await inv(ev,'previewRetention',gameArg,1)).value
+  check('retenção UI: prévia lista só rejeitada antiga, protegendo aprovação, pendências e preservação',retentionPreview.versions.length===1&&retentionPreview.versions[0].id===retentionVersions[0].id&&retentionPreview.files===1&&retentionPreview.bytes===retentionVersions[0].size&&await ev(`document.querySelector('.production-retention-preview')?.textContent.includes('versão #${retentionVersions[0].id}')&&[...document.querySelectorAll('.production-retention button')].find(b=>b.textContent==='Remover versões listadas')?.disabled===true`))
+  await catalogShots('retention','.production-retention')
+  await ev("document.querySelector('[aria-label=\"Confirmar limpeza das versões listadas\"]').click();[...document.querySelectorAll('.production-retention button')].find(b=>b.textContent==='Remover versões listadas').click()");await sleep(600)
+  const afterRetention=(await inv(ev,'listAssets',gameArg)).value.find(a=>a.id===retentionAssetId)
+  const prunedBlob=path.join(ud,'production','blobs',retentionVersions[0].hash)
+  check('retenção UI: confirmação remove somente versão listada e seu blob sem referências',afterRetention.versions.length===3&&!afterRetention.versions.some(v=>v.id===retentionVersions[0].id)&&!fs.existsSync(prunedBlob)&&retentionVersions.slice(1).every(v=>fs.existsSync(path.join(ud,'production','blobs',v.hash)))&&await ev("document.querySelector('.production-retention [role=status]')?.textContent.includes('Versões removidas: 1')"))
+  await catalogButton('asset',retentionAssetId,'Arquivar registro')
+  check('catálogo UI: gestão e limpeza não iniciam inferência',argvLog().length===productionCalls)
+
+  kill();await sleep(1200);({ev,send,close}=await start())
+  const restartedRetention=(await inv(ev,'listAssets',gameArg)).value.find(a=>a.id===retentionAssetId)
+  check('catálogo: reinício preserva metadados, arquivo e versão preservada após limpeza',!!restartedRetention.archived_at&&restartedRetention.versions.length===3&&restartedRetention.versions.find(v=>v.id===retentionVersions[1].id).pinned===1&&!fs.existsSync(prunedBlob)&&(await inv(ev,'listAssets',gameArg)).value.find(a=>a.id===uiAsset.id).title==='Asset editado pela UI'&&(await inv(ev,'listBuilds',gameArg)).value.find(b=>b.id===uiBuild.id).version==='0.2.1'&&(await inv(ev,'listPlaytests',gameArg)).value.find(p=>p.id===uiPlaytest.id).severity==='high'&&argvLog().length===productionCalls)
+  await ev("document.querySelector('.group-toggle[aria-expanded=false]')?.click()");await sleep(200)
+  await ev("document.querySelector('.rail-ws.inbox')?.click()");await sleep(500)
+  await ev("[...document.querySelectorAll('.chats [data-path]')].find(b=>(b.dataset.path||'').toLowerCase().endsWith('projeto'))?.click()");await sleep(1100)
   // Capturas com formulário e registro expandidos; dados longos não escapam do container.
   for (const [w,h] of [[1400,900],[768,1024]]) {
     await send('Emulation.setDeviceMetricsOverride',{width:w,height:h,deviceScaleFactor:1,mobile:false});await sleep(300)
@@ -864,6 +1091,8 @@ try {
   check('estado de execucao: streaming visivel, botao Parar, indicador na lista de tarefas e no dock de agentes', running.live && running.stop && running.spin && running.dock, JSON.stringify(running))
   const busyBackup = await inv(ev, 'createBackup')
   check('backup: agente ativo impede abrir o seletor nativo', !busyBackup.ok && /Pare as execuções|operações pendentes/.test(busyBackup.error), busyBackup.error)
+  const busyPrune=await inv(ev,'pruneRetention',gameArg,1,'token-inválido')
+  check('retenção: agente ativo impede limpeza antes de conferir a prévia',!busyPrune.ok&&/Pare as execuções|operações pendentes/.test(busyPrune.error),busyPrune.error)
   await inv(ev, 'stopTask', tX)
   await waitDone(ev, tX)
   await send('Emulation.clearDeviceMetricsOverride')
@@ -915,9 +1144,12 @@ try {
   const safetyDb = new DatabaseSync(path.join(info.lastRestore.safetyPath,'dashboard.db'),{readOnly:true})
   check('backup: restauração substitui dados; cópia de segurança preserva estado posterior', !restoredDb.prepare("SELECT 1 FROM settings WHERE key='backup-e2e-after'").get() && !!safetyDb.prepare("SELECT 1 FROM settings WHERE key='backup-e2e-after'").get() && !fs.existsSync(extraAttachment) && fs.existsSync(path.join(info.lastRestore.safetyPath,'attachments','apos-backup.txt')))
   check('backup: restauração não retoma sessões externas nem preserva credencial no banco restaurado', !restoredDb.prepare('SELECT 1 FROM task_sessions LIMIT 1').get() && !restoredDb.prepare("SELECT 1 FROM settings WHERE key='linkedinAuth'").get())
+  check('backup: retenção restaura tombstone sem exigir o blob removido',!!restoredDb.prepare('SELECT pruned_at FROM asset_versions WHERE id=?').get(retentionVersions[0].id)?.pruned_at&&!fs.existsSync(prunedBlob))
   restoredDb.close();safetyDb.close()
   const restoredBuilds=(await inv(ev,'listBuilds',gameArg)).value
   check('backup: catálogo, revisões humanas e screenshots sobrevivem à restauração', (await inv(ev,'listAssets',gameArg)).value.some(a=>a.versions.some(v=>v.id===firstVersion.id&&v.state==='approved')) && restoredBuilds.some(b=>b.id===buildId&&b.state===preservedBuild.state&&b.hash===preservedBuild.hash) && restoredBuilds.some(b=>b.id===uiBuild.id&&b.state==='approved') && (await inv(ev,'playtestImages',gameArg,playtestId)).value.length===1 && (await inv(ev,'playtestImages',gameArg,uiPlaytest.id)).value.length===1)
+  const restoredRetention=(await inv(ev,'listAssets',gameArg)).value.find(a=>a.id===retentionAssetId)
+  check('backup: metadados editados, arquivo e preservação manual sobrevivem à restauração',!!restoredRetention.archived_at&&restoredRetention.versions.length===3&&restoredRetention.versions.find(v=>v.id===retentionVersions[1].id).pinned===1&&(await inv(ev,'listAssets',gameArg)).value.find(a=>a.id===uiAsset.id).title==='Asset editado pela UI'&&restoredBuilds.find(b=>b.id===uiBuild.id).version==='0.2.1'&&(await inv(ev,'listPlaytests',gameArg)).value.find(p=>p.id===uiPlaytest.id).notes==='Triagem manual posterior')
   check('backup: reinício não dispara inferência', argvLog().length===cliBeforeRestore)
   const invalidRestore = await inv(ev,'restoreBackup','token-sem-selecao')
   check('backup: restore sem prévia validada é recusado antes da confirmação', !invalidRestore.ok && /Selecione e confira/.test(invalidRestore.error),invalidRestore.error)
@@ -950,6 +1182,140 @@ try {
   check('backup: erro de restauração mantém a prévia e libera os controles', await ev("!!document.querySelector('.backup-settings [role=alert]')&&!!document.querySelector('.backup-summary')&&![...document.querySelectorAll('.backup-settings button')].some(b=>b.disabled)"))
   check('backup: corrupção detectada após a prévia não altera dados atuais nem agenda reinício', !fs.existsSync(path.join(ud,'.restore-pending')) && (await inv(ev,'listBuilds',gameArg)).value.length===restoredBuilds.length)
   check('backup: sem erros não tratados no Electron restaurado', !/UnhandledPromiseRejection|Uncaught|TypeError|ReferenceError/.test(app.log()),app.log().slice(-300))
+
+  // Godot opt-in por organizador. MCP usa as CLIs falsas; engine real só na fixture temporária.
+  const godotGame = (await inv(ev, 'listGames')).value.find(g => g.toLowerCase().endsWith('godot-project'))
+  const godotTask = (await inv(ev, 'createTask', godotGame, 'Godot local E2E')).value
+  const godotExe = process.env.GPD_GODOT_EXE || 'godot'
+  const godotGroup = { id: 'godot-e2e', name: 'Godot E2E', color: '#7cc4ff', games: [godotGame], open: true, godot: { enabled: false, executable: godotExe } }
+  await inv(ev, 'setProjectGroups', [godotGroup])
+  await inv(ev, 'setDelegationSettings', {})
+  const godotMcp = async (task, calls) => {
+    await sendD(ev, task, { provider: 'codex' }, 'MCPCALLS:' + JSON.stringify(calls))
+    const chat = await waitDone(ev, task)
+    return { text: chat.messages.filter(m => m.role === 'agent').at(-1).text, call: argvLog().at(-1) }
+  }
+  const disabledGodot = await godotMcp(godotTask, [{ name: 'godot_project', arguments: {} }])
+  check('Godot: organizador desativado não anuncia nem aceita consultas', !/TOOLS:[^\n]*godot_/.test(disabledGodot.text) && /\[ERRO/.test(disabledGodot.text) && !(await inv(ev, 'godotState', godotTask)).value.available)
+  await inv(ev, 'setProjectGroups', [{ ...godotGroup, godot: { ...godotGroup.godot, enabled: true } }])
+  const repeatedGodotLog = 'ERROR: Diagnóstico simulado E2E\n   at: _ready (res://main.gd:5)\n'.repeat(300)
+  fs.writeFileSync(path.join(projGodot, 'logs/repeated-e2e.log'), repeatedGodotLog)
+  const enabledGodot = await godotMcp(godotTask, [{ name: 'godot_project', arguments: {} }, { name: 'godot_scene', arguments: { path: 'main.tscn', node: '.' } }, { name: 'godot_diagnostics', arguments: { path: 'logs/repeated-e2e.log' } }])
+  check('Godot MCP: três consultas aparecem somente na execução do organizador ativo', /TOOLS:[^\n]*godot_project[^\n]*godot_scene[^\n]*godot_diagnostics/.test(enabledGodot.text) && /res:\/\/main\.tscn/.test(enabledGodot.text) && /Main[\s\S]*script/.test(enabledGodot.text) && !/\[ERRO/.test(enabledGodot.text) && enabledGodot.call.env.hasToken)
+  const compactGodotLog = enabledGodot.text.split('\n\n---\n\n').at(-1)
+  check('Godot MCP: diagnóstico simulado reduz payload e preserva contagem, arquivo e linha', /300 erro\(s\)/.test(compactGodotLog) && /repetições 300/.test(compactGodotLog) && /res:\/\/main\.gd:5/.test(compactGodotLog) && compactGodotLog.length < repeatedGodotLog.length / 10, JSON.stringify({ rawChars: repeatedGodotLog.length, responseChars: compactGodotLog.length }))
+  const outsideGodot = await godotMcp(tX, [])
+  check('Godot MCP: tarefa fora do organizador não recebe schema nem instruções Godot', !/TOOLS:[^\n]*godot_/.test(outsideGodot.text) && !/godot_project|godot_scene|godot_diagnostics/.test(outsideGodot.call.input))
+  await inv(ev, 'setProjectGroups', [{ ...godotGroup, games: [], godot: { ...godotGroup.godot, enabled: true } }, { id: 'plain-e2e', name: 'Sem engine E2E', color: '#69d6b5', games: [godotGame], open: true }])
+  const movedGodot = await godotMcp(godotTask, [])
+  check('Godot MCP: mover o projeto retira ferramentas da próxima invocação', !/TOOLS:[^\n]*godot_/.test(movedGodot.text) && !(await inv(ev, 'godotState', godotTask)).value.available)
+  await inv(ev, 'setProjectGroups', [godotGroup])
+  await wtUI("!!document.querySelector('.rail-ws[aria-label^=\"Godot E2E\"]')", 'organizador Godot')
+  await ev("document.querySelector('.rail-ws[aria-label^=\"Godot E2E\"]').click()")
+  await wtUI("!![...document.querySelectorAll('button.task')].find(b=>b.textContent.includes('Godot local E2E'))", 'tarefa Godot')
+  await ev("[...document.querySelectorAll('button.task')].find(b=>b.textContent.includes('Godot local E2E')).click()")
+  await wtUI("/Godot local E2E/.test(document.querySelector('.chat .title')?.textContent||'')", 'chat Godot')
+  check('Godot UI: painel ausente enquanto o organizador está desativado', !await ev("!!document.querySelector('.godot-panel')"))
+  await ev("document.querySelector('[aria-label=\"Opções de Godot E2E\"]').click()")
+  await ev("[...document.querySelectorAll('.ctx-menu button')].find(b=>b.textContent==='Configurar organizador…').click()")
+  await wtUI("!!document.querySelector('.gd-godot input[type=checkbox]')", 'configuração Godot')
+  await ev("document.querySelector('.gd-godot input[type=checkbox]').click()")
+  for (const [w, h] of [[1400, 900], [768, 1024]]) {
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false }); await sleep(200)
+    const m = await ev("(() => {const root=document.querySelector('.group-dlg'),b=root.getBoundingClientRect();return {w:innerWidth,scroll:document.documentElement.scrollWidth,over:[...root.querySelectorAll('input,button,label')].some(e=>{const r=e.getBoundingClientRect();return r.width&&(r.right>b.right+1||r.left<b.left-1)})}})()")
+    check(`Godot configuração em ${w}: controles cabem no organizador`, m.scroll <= m.w && !m.over, JSON.stringify(m))
+    fs.writeFileSync(path.join(shotDir, `godot-organizer-${w}.png`), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+  }
+  await ev("document.querySelector('.group-dlg').requestSubmit()")
+  await wtUI("!!document.querySelector('.godot-panel')", 'painel Godot ativo')
+  const compactGodotState = (await inv(ev, 'godotState', godotTask)).value
+  check('Godot UI: ativação salva configuração sem sondar ou executar a engine', compactGodotState.available && compactGodotState.project === null && (await inv(ev, 'getProjectGroups')).value[0].godot.enabled && (await inv(ev, 'listCommandRuns', godotTask)).value.length === 0)
+  await ev("document.querySelector('.godot-panel').open=true")
+  await wtUI("!!document.querySelector('.godot-facts')", 'metadados sob demanda')
+  check('Godot UI: abrir painel consulta versão, linguagem e cena principal', await ev("/4\\.0.*GDScript/.test(document.querySelector('.godot-facts')?.textContent||'') && /main\\.tscn/.test(document.querySelector('.godot-facts')?.textContent||'')"))
+  const godotButton = async label => {
+    const end = Date.now() + 20000
+    while (Date.now() < end) {
+      if (await ev(`(() => {const b=[...document.querySelectorAll('.godot-panel button')].find(b=>b.textContent===${JSON.stringify(label)}&&!b.disabled);if(!b)return false;b.click();return true})()`)) return
+      await sleep(150)
+    }
+    throw Error('Ação Godot não ficou disponível: ' + label + ' · ' + await ev("document.querySelector('.godot-panel')?.textContent"))
+  }
+  const godotFields = async fields => {
+    await ev(`(() => {for(const [label,value] of ${JSON.stringify(fields)}){const e=document.querySelector('.godot-panel [aria-label="'+label+'"]');if(!e)throw Error('Campo Godot ausente: '+label);const proto=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:e.tagName==='SELECT'?HTMLSelectElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(e,value);e.dispatchEvent(new Event(e.tagName==='SELECT'?'change':'input',{bubbles:true}))}})()`)
+    await sleep(150)
+  }
+  const godotCommandDone = async id => {
+    const end = Date.now() + 120000
+    while (Date.now() < end) { const r = (await inv(ev, 'listCommandRuns', godotTask)).value.find(r => r.id === id); if (r && r.status !== 'running') return r; await sleep(200) }
+    throw Error('Tempo limite do comando Godot ' + id)
+  }
+  const godotCalls = argvLog().length
+  if (process.env.GPD_GODOT_EXE) {
+    await godotButton('Verificar instalação Godot')
+    await wtUI("!!document.querySelector('.godot-panel [role=status] b')", 'versão Godot real')
+    check('Godot real: instalação local responde Godot 4 sem CLI de IA', await ev("/^4\\./.test(document.querySelector('.godot-panel [role=status] b')?.textContent||'')") && argvLog().length === godotCalls)
+    await godotButton('Preparar comando para revisão')
+    await wtUI("!!document.querySelector('.godot-preview')", 'importação preparada')
+    check('Godot real: preparar importação não inicia execução', (await inv(ev, 'listCommandRuns', godotTask)).value.length === 0 && await ev("document.querySelector('.godot-preview code')?.textContent.includes('--import')"))
+    await inv(ev, 'setProjectGroups', [godotGroup])
+    check('Godot: comando preparado perde validade quando o organizador é desativado', !(await inv(ev, 'runProjectCommand', godotTask, 'Godot · Importar recursos')).ok && (await inv(ev, 'listCommandRuns', godotTask)).value.length === 0)
+    await inv(ev, 'setProjectGroups', [{ ...godotGroup, godot: { ...godotGroup.godot, enabled: true } }])
+    await wtUI("!!document.querySelector('.godot-panel')", 'reativação Godot')
+    await ev("document.querySelector('.godot-panel').open=true")
+    await wtUI("!!document.querySelector('.godot-panel form')", 'formulário Godot')
+    await godotButton('Preparar comando para revisão'); await godotButton('Executar comando Godot')
+    let run = (await inv(ev, 'listCommandRuns', godotTask)).value[0]
+    const imported = await godotCommandDone(run.id)
+    check('Godot real: importação headless prepara recursos na pasta da tarefa', imported.status === 'completed' && imported.exit_code === 0 && fs.existsSync(path.join(projGodot, '.godot')) && imported.workspace.toLowerCase() === godotGame.toLowerCase(), imported.status === 'completed' ? imported.output.slice(-150) : JSON.stringify({ error: imported.error, diagnostics: (await inv(ev, 'godotDiagnostics', godotTask, imported.id)).value, outputTail: imported.output.slice(-1500) }))
+    await godotFields([['Ação Godot', 'check']]); await godotFields([['Script GDScript a verificar', 'good.gd']])
+    await godotButton('Preparar comando para revisão'); await godotButton('Executar comando Godot')
+    run = (await inv(ev, 'listCommandRuns', godotTask)).value[0]
+    const checked = await godotCommandDone(run.id)
+    check('Godot real: check-only verifica GDScript escolhido', checked.status === 'completed' && checked.exit_code === 0 && JSON.parse(checked.args).includes('res://good.gd'), checked.error || checked.output.slice(-150))
+    fs.writeFileSync(path.join(projGodot, 'broken.gd'), 'extends Node\n\nfunc broken(:\n\tpass\n')
+    await godotFields([['Script GDScript a verificar', 'broken.gd']]); await godotButton('Preparar comando para revisão'); await godotButton('Executar comando Godot')
+    run = (await inv(ev, 'listCommandRuns', godotTask)).value[0]
+    const broken = await godotCommandDone(run.id)
+    const brokenDiagnostic = (await inv(ev, 'godotDiagnostics', godotTask, broken.id)).value
+    check('Godot real: erro sintático falha e mantém arquivo/linha no diagnóstico', broken.status === 'failed' && brokenDiagnostic.errorCount > 0 && brokenDiagnostic.items.some(i => i.file?.includes('broken.gd') && i.line > 0), JSON.stringify(brokenDiagnostic.items))
+    fs.unlinkSync(path.join(projGodot, 'broken.gd'))
+    await godotFields([['Ação Godot', 'run']]); await godotFields([['Arquivo de log Godot', 'logs/run-e2e.log']])
+    await ev("document.querySelector('[aria-label=\"Godot sem janela\"]').click()")
+    await godotButton('Preparar comando para revisão'); await godotButton('Executar comando Godot')
+    run = (await inv(ev, 'listCommandRuns', godotTask)).value[0]
+    const played = await godotCommandDone(run.id)
+    check('Godot real: cena principal executa três frames e encerra pelo próprio jogo', played.status === 'completed' && played.exit_code === 0 && played.output.includes('GODOT_E2E_READY') && played.output.includes('GODOT_E2E_FRAME3') && fs.readFileSync(path.join(projGodot, 'logs/run-e2e.log'), 'utf8').includes('GODOT_E2E_FRAME3'), played.error || played.output.slice(-180))
+    await godotFields([['Ação Godot', 'export']]); await godotFields([['Preset Godot de exportação', 'Windows E2E'], ['Saída Godot de exportação', 'build/godot-e2e.exe'], ['Arquivo de log Godot', '']])
+    await godotButton('Preparar comando para revisão'); await godotButton('Executar comando Godot')
+    run = (await inv(ev, 'listCommandRuns', godotTask)).value[0]
+    const exported = await godotCommandDone(run.id)
+    check('Godot real: exporta exe Windows com PCK embutido em destino novo', exported.status === 'completed' && exported.exit_code === 0 && fs.statSync(path.join(projGodot, 'build/godot-e2e.exe')).size > 0 && fs.readdirSync(path.join(projGodot, 'build')).join() === 'godot-e2e.exe', exported.status === 'completed' ? exported.output.slice(-180) : JSON.stringify({ error: exported.error, diagnostics: (await inv(ev, 'godotDiagnostics', godotTask, exported.id)).value, outputTail: exported.output.slice(-1500) }))
+    const exportedLog = path.join(work, 'godot-exported-run.log')
+    const exportedOutput = execFileSync(path.join(projGodot, 'build/godot-e2e.exe'), ['--headless', '--log-file', exportedLog], { cwd: path.join(projGodot, 'build'), encoding: 'utf8', timeout: 20000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const exportedRuntime = exportedOutput + fs.readFileSync(exportedLog, 'utf8')
+    check('Godot real: exe exportado inicia sozinho com PCK embutido e executa três frames', exportedRuntime.includes('GODOT_E2E_READY') && exportedRuntime.includes('GODOT_E2E_FRAME3') && fs.readdirSync(path.join(projGodot, 'build')).join() === 'godot-e2e.exe', exportedRuntime.slice(-180))
+    await wtUI(`!!document.querySelector('.godot-run summary') && [...document.querySelectorAll('.godot-run summary')].some(s=>s.textContent.includes('#${exported.id} '))`, 'histórico de exportação')
+    await ev(`[...document.querySelectorAll('.godot-run')].find(r=>r.querySelector('summary').textContent.includes('#${exported.id} ')).open=true`)
+    await godotButton('Registrar build desta exportação')
+    await godotFields([[`Nome da build Godot ${exported.id}`, 'Godot exportado E2E'], [`Versão da build Godot ${exported.id}`, '0.1']])
+    await godotButton('Registrar snapshot da build')
+    await wtUI("[...document.querySelectorAll('.godot-run [role=status]')].some(e=>e.textContent.includes('registrada'))", 'registro humano Godot')
+    const godotBuild = (await inv(ev, 'listBuilds', godotGame)).value.find(b => b.title === 'Godot exportado E2E')
+    check('Godot real: registro humano conserva comando/arquivo e aguarda revisão', godotBuild?.state === 'pending' && godotBuild.source_command_id === exported.id && godotBuild.platform === 'Windows' && godotBuild.hash && (await inv(ev, 'taskChat', godotTask, { provider: 'codex' })).value.messages.every(m => !m.text.includes('GODOT_E2E_FRAME3')))
+    await inv(ev, 'reviewBuild', godotGame, godotBuild.id, godotBuild.hash, 'approved')
+    const godotPlaytest = (await inv(ev, 'addPlaytest', godotGame, { title: 'Godot local E2E', expected: 'Executar três frames', observed: 'Três frames no teste técnico; gameplay ainda requer avaliação humana.', outcome: 'mixed', buildId: godotBuild.id })).value
+    check('Godot real: aceite do hash e playtest ficam vinculados sem disparar IA', (await inv(ev, 'listBuilds', godotGame)).value.find(b => b.id === godotBuild.id).state === 'approved' && (await inv(ev, 'listPlaytests', godotGame)).value.find(p => p.id === godotPlaytest).build_id === godotBuild.id && argvLog().length === godotCalls)
+  } else console.log('SKIP Godot real: informe GPD_GODOT_EXE para importar, verificar, executar e exportar a fixture local.')
+  for (const [w, h] of [[1400, 900], [768, 1024]]) {
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false }); await sleep(200)
+    await ev("document.querySelector('.godot-panel').scrollIntoView({block:'start'})"); await sleep(150)
+    const m = await ev("(() => {const root=document.querySelector('.godot-panel'),b=root.getBoundingClientRect();return {w:innerWidth,scroll:document.documentElement.scrollWidth,over:[...root.querySelectorAll('input,textarea,select,button,code')].filter(e=>{const r=e.getBoundingClientRect();return r.width&&(r.right>b.right+1||r.left<b.left-1)}).map(e=>e.getAttribute('aria-label')||e.tagName)}})()")
+    check(`Godot painel em ${w}: metadados, ações e registro cabem na tarefa`, m.scroll <= m.w && !m.over.length, JSON.stringify(m))
+    fs.writeFileSync(path.join(shotDir, `godot-panel-${w}.png`), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+  }
+  await send('Emulation.clearDeviceMetricsOverride')
+  check('Godot: fluxo local sem erros não tratados no Electron', !/UnhandledPromiseRejection|Uncaught|TypeError|ReferenceError/.test(app.log()), app.log().slice(-300))
 } catch (e) {
   check('execucao do E2E sem excecao', false, e.stack)
 } finally {

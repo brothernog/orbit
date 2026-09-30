@@ -9,10 +9,11 @@ import { asInt, asStr, inside, safeJoin } from './guard.ts'
 import type { CommandRun } from './commands.ts'
 
 export type ReviewState = 'pending' | 'approved' | 'rejected'
-export type AssetVersion = { id: number; asset_id: number; hash: string; size: number; file_name: string; note: string; state: ReviewState; created_at: string; reviewed_at: string | null }
-export type Asset = { id: number; game: string; title: string; path: string; kind: string; license: string; source: string; tags: string; created_at: string; versions: AssetVersion[] }
+export type AssetVersion = { id: number; asset_id: number; hash: string; size: number; file_name: string; note: string; state: ReviewState; created_at: string; reviewed_at: string | null; pinned: number; pruned_at: string | null }
+export type Asset = { id: number; game: string; title: string; path: string; kind: string; license: string; source: string; tags: string; created_at: string; revision: number; archived_at: string | null; versions: AssetVersion[] }
 export type BuildCommand = CommandRun & { task_title: string }
-export type Build = { id: number; game: string; title: string; version: string; platform: string; hash: string; size: number; file_name: string; notes: string; state: ReviewState; source_task_id: number | null; source_command_id: number | null; command: string; created_at: string; reviewed_at: string | null }
+export type Build = { id: number; game: string; title: string; version: string; platform: string; hash: string; size: number; file_name: string; notes: string; state: ReviewState; source_task_id: number | null; source_command_id: number | null; command: string; created_at: string; reviewed_at: string | null; revision: number; archived_at: string | null }
+export type RetentionPreview = { keep: number; token: string; versions: { id: number; asset_id: number; title: string; hash: string; size: number }[]; files: number; bytes: number }
 type Snapshot = { hash: string; size: number; file_name: string }
 type BuildSource = BuildCommand & { task_created_at: string; task_worktree: string | null; ended_at: string | null }
 const same = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
@@ -31,6 +32,7 @@ const decision = (v: unknown) => {
   if (v !== 'approved' && v !== 'rejected') throw Error('Decisão de revisão inválida.')
   return v
 }
+const boolean = (v: unknown) => { if (typeof v !== 'boolean') throw Error('Valor booleano obrigatório.'); return v }
 // ponytail: um arquivo de até 512 MiB por versão/build; pacotes maiores pedem armazenamento dedicado.
 const MAX_FILE = 512 * 1024 * 1024
 const MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }
@@ -39,6 +41,12 @@ export function createProductionService(db: DatabaseSync, dataDir: string) {
   const blobs = path.join(dataDir, 'blobs')
   fs.mkdirSync(blobs, { recursive: true })
   const blobPath = (hash: string) => safeJoin(blobs, validHash(hash))
+  let pending = 0
+  const tracked = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) => async (...args: A) => {
+    pending++
+    try { return await fn(...args) } finally { pending-- }
+  }
+  const idle = () => { if (pending) throw Error('Há uma operação de produção em andamento. Tente novamente ao concluir.') }
   async function verifyFile(file: string, snapshot: Snapshot) {
     const stat = await fs.promises.stat(file)
     if (!stat.isFile() || stat.size !== snapshot.size || stat.size > MAX_FILE) throw Error('Snapshot ausente ou corrompido.')
@@ -83,7 +91,7 @@ export function createProductionService(db: DatabaseSync, dataDir: string) {
     return row
   }
   function assetVersion(game: string, id: unknown) {
-    const row = db.prepare('SELECT v.* FROM asset_versions v JOIN project_assets a ON a.id=v.asset_id WHERE v.id=? AND a.game=?').get(asInt(id, 'Versão'), game) as AssetVersion | undefined
+    const row = db.prepare('SELECT v.* FROM asset_versions v JOIN project_assets a ON a.id=v.asset_id WHERE v.id=? AND a.game=? AND v.pruned_at IS NULL').get(asInt(id, 'Versão'), game) as AssetVersion | undefined
     if (!row) throw Error('Versão de outro projeto ou inexistente.')
     return row
   }
@@ -94,6 +102,8 @@ export function createProductionService(db: DatabaseSync, dataDir: string) {
   }
   function saveVersion(assetId: number, snapshot: Snapshot, note: string) {
     db.prepare('INSERT OR IGNORE INTO asset_versions(asset_id,hash,size,file_name,note) VALUES (?,?,?,?,?)').run(assetId, snapshot.hash, snapshot.size, snapshot.file_name, note)
+    // O mesmo hash volta com o mesmo ID, nota e revisão; a retenção só remove a cópia dos bytes.
+    db.prepare('UPDATE asset_versions SET pruned_at=NULL WHERE asset_id=? AND hash=?').run(assetId, snapshot.hash)
     return (db.prepare('SELECT id FROM asset_versions WHERE asset_id=? AND hash=?').get(assetId, snapshot.hash) as { id: number }).id
   }
   function buildSource(game: string, id: unknown): BuildSource {
@@ -106,7 +116,26 @@ export function createProductionService(db: DatabaseSync, dataDir: string) {
     return run
   }
   const commandSnapshot = (run: BuildSource) => JSON.stringify({ id: run.id, task_id: run.task_id, task_title: run.task_title, task_created_at: run.task_created_at, workspace: run.workspace, name: run.name, program: run.program, args: run.args, status: run.status, exit_code: run.exit_code, duration_ms: run.duration_ms, started_at: run.started_at, ended_at: run.ended_at })
-  const listAssets = (game: string): Asset[] => (db.prepare('SELECT * FROM project_assets WHERE game=? ORDER BY id DESC').all(game) as Omit<Asset, 'versions'>[]).map(a => ({ ...a, versions: db.prepare('SELECT * FROM asset_versions WHERE asset_id=? ORDER BY id DESC').all(a.id) as AssetVersion[] }))
+  const listAssets = (game: string): Asset[] => (db.prepare('SELECT * FROM project_assets WHERE game=? ORDER BY id DESC').all(game) as Omit<Asset, 'versions'>[]).map(a => ({ ...a, versions: db.prepare('SELECT * FROM asset_versions WHERE asset_id=? AND pruned_at IS NULL ORDER BY id DESC').all(a.id) as AssetVersion[] }))
+  function editAsset(game: string, id: unknown, raw: any) {
+    const a = asset(game, id), revision = asInt(raw?.revision, 'Revisão')
+    const title = text(raw?.title, 'Título', 300, true), fields = ['kind', 'license', 'source', 'tags'].map(k => text(raw?.[k], k, k === 'kind' ? 50 : 1000))
+    if (!db.prepare('UPDATE project_assets SET title=?,kind=?,license=?,source=?,tags=?,revision=revision+1 WHERE id=? AND revision=?').run(title, ...fields, a.id, revision).changes) throw Error('O asset mudou. Atualize a lista antes de editar.')
+  }
+  function editBuild(game: string, id: unknown, raw: any) {
+    const b = build(game, id), revision = asInt(raw?.revision, 'Revisão')
+    const title = text(raw?.title, 'Título', 300, true), version = text(raw?.version, 'Versão', 100, true), platform = text(raw?.platform, 'Plataforma', 100, true), notes = text(raw?.notes, 'Notas', 5000)
+    if (!db.prepare('UPDATE project_builds SET title=?,version=?,platform=?,notes=?,revision=revision+1 WHERE id=? AND revision=?').run(title, version, platform, notes, b.id, revision).changes) throw Error('O build mudou. Atualize a lista antes de editar.')
+  }
+  function setArchived(table: 'project_assets' | 'project_builds', game: string, id: unknown, revision: unknown, value: unknown) {
+    const row = table === 'project_assets' ? asset(game, id) : build(game, id), archived = boolean(value)
+    if (!db.prepare(`UPDATE ${table} SET archived_at=${archived ? 'CURRENT_TIMESTAMP' : 'NULL'},revision=revision+1 WHERE id=? AND revision=?`).run(row.id, asInt(revision, 'Revisão')).changes) throw Error('O registro mudou. Atualize a lista antes de arquivar.')
+  }
+  function setAssetVersionPinned(game: string, id: unknown, hash: unknown, value: unknown) {
+    const v = assetVersion(game, id), expected = validHash(hash), pinned = boolean(value)
+    if (v.hash !== expected) throw Error('A versão mudou. Atualize a lista antes de proteger.')
+    db.prepare('UPDATE asset_versions SET pinned=? WHERE id=? AND hash=? AND pruned_at IS NULL').run(Number(pinned), v.id, expected)
+  }
   async function captureAsset(game: string, raw: any) {
     const title = text(raw?.title, 'Título', 300, true), rel = relativeFile(raw?.path)
     const fields = ['kind', 'license', 'source', 'tags'].map(k => text(raw?.[k], k, k === 'kind' ? 50 : 1000))
@@ -127,6 +156,8 @@ export function createProductionService(db: DatabaseSync, dataDir: string) {
     const v = assetVersion(game, id), expected = validHash(hash), state = decision(review)
     if (v.hash !== expected) throw Error('A versão mudou. Atualize a lista antes de revisar.')
     await verify(v)
+    const current = assetVersion(game, v.id)
+    if (current.hash !== expected) throw Error('A versão mudou durante a revisão.')
     db.prepare('UPDATE asset_versions SET state=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=? AND hash=?').run(state, v.id, expected)
   }
   function readAssetImage(game: string, id: unknown) {
@@ -141,9 +172,12 @@ export function createProductionService(db: DatabaseSync, dataDir: string) {
   }
   const listBuildCommands = (game: string) => db.prepare("SELECT c.*,t.title task_title FROM command_runs c JOIN tasks t ON t.id=c.task_id WHERE t.game=? AND c.status='completed' AND c.exit_code=0 ORDER BY c.id DESC LIMIT 50").all(game) as BuildCommand[]
   const listBuilds = (game: string) => db.prepare('SELECT * FROM project_builds WHERE game=? ORDER BY id DESC').all(game) as Build[]
-  async function registerBuild(game: string, raw: any) {
+  async function registerBuild(game: string, raw: any, validateSource?: () => void) {
     const title = text(raw?.title, 'Título', 300, true), version = text(raw?.version, 'Versão', 100, true), platform = text(raw?.platform, 'Plataforma', 100, true), notes = text(raw?.notes, 'Notas', 5000), rel = relativeFile(raw?.path)
-    const run = buildSource(game, raw?.commandId), command = commandSnapshot(run), snapshot = await capture(run.workspace, rel)
+    const run = buildSource(game, raw?.commandId), command = commandSnapshot(run)
+    validateSource?.()
+    const snapshot = await capture(run.workspace, rel)
+    validateSource?.()
     if (commandSnapshot(buildSource(game, run.id)) !== command) throw Error('O comando mudou durante a captura. Atualize a lista.')
     const existing = db.prepare('SELECT id FROM project_builds WHERE game=? AND source_command_id=? AND hash=? AND title=? AND version=? AND platform=?').get(game, run.id, snapshot.hash, title, version, platform) as { id: number } | undefined
     if (existing) return existing.id
@@ -153,6 +187,7 @@ export function createProductionService(db: DatabaseSync, dataDir: string) {
     const b = build(game, id), expected = validHash(hash), state = decision(review)
     if (b.hash !== expected) throw Error('O build mudou. Atualize a lista antes de revisar.')
     await verify(b)
+    if (build(game, b.id).hash !== expected) throw Error('O build mudou durante a revisão.')
     db.prepare('UPDATE project_builds SET state=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=? AND hash=?').run(state, b.id, expected)
   }
   async function exportFile(game: string, kind: unknown, id: unknown, target: unknown) {
@@ -173,5 +208,54 @@ export function createProductionService(db: DatabaseSync, dataDir: string) {
     } finally { await fs.promises.rm(temp, { force: true }) }
     return destination
   }
-  return { listAssets, captureAsset, captureAssetVersion, reviewAssetVersion, readAssetImage, listBuildCommands, listBuilds, registerBuild, reviewBuild, exportFile }
+  function retention(game: string, rawKeep: unknown) {
+    idle()
+    const keep = asInt(rawKeep, 'Quantidade de versões')
+    if (keep > 100) throw Error('Mantenha entre 1 e 100 versões por asset.')
+    const assets = listAssets(game), versions: RetentionPreview['versions'] = []
+    for (const a of assets) for (const v of a.versions.slice(keep)) if (v.state === 'rejected' && !v.pinned) versions.push({ id: v.id, asset_id: a.id, title: a.title, hash: v.hash, size: v.size })
+    const dropping = new Set(versions.map(v => v.id))
+    const active = db.prepare('SELECT id,hash FROM asset_versions WHERE pruned_at IS NULL ORDER BY id').all() as { id: number; hash: string }[]
+    const builds = db.prepare('SELECT id,hash FROM project_builds ORDER BY id').all() as { id: number; hash: string }[]
+    const protectedHashes = new Set([...active.filter(v => !dropping.has(v.id)), ...builds].map(v => v.hash))
+    const pruned = db.prepare('SELECT v.id,v.hash FROM asset_versions v JOIN project_assets a ON a.id=v.asset_id WHERE a.game=? AND v.pruned_at IS NOT NULL ORDER BY v.id').all(game) as { id: number; hash: string }[]
+    const files: { hash: string; size: number; ino: number; dev: number; mtimeMs: number }[] = []
+    for (const hash of new Set([...versions, ...pruned].map(v => v.hash))) {
+      if (protectedHashes.has(hash)) continue
+      const file = path.join(blobs, validHash(hash))
+      try {
+        const stat = fs.lstatSync(file)
+        if (!stat.isFile() || stat.isSymbolicLink()) throw Error('Snapshot inválido para retenção.')
+        blobPath(hash) // Caminho real dentro da pasta de blobs, inclusive se um ancestral mudou.
+        files.push({ hash, size: stat.size, ino: stat.ino, dev: stat.dev, mtimeMs: stat.mtimeMs })
+      } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e }
+    }
+    const bytes = files.reduce((total, f) => total + f.size, 0)
+    const token = crypto.createHash('sha256').update(JSON.stringify({ game, keep, assets, active, builds, pruned, files })).digest('hex')
+    return { preview: { keep, token, versions, files: files.length, bytes } satisfies RetentionPreview, files }
+  }
+  function previewRetention(game: string, keep: unknown): RetentionPreview { return retention(game, keep).preview }
+  function pruneRetention(game: string, keep: unknown, token: unknown) {
+    const plan = retention(game, keep)
+    if (validHash(token) !== plan.preview.token) throw Error('O catálogo mudou. Gere uma nova prévia antes de limpar.')
+    db.exec('BEGIN')
+    try {
+      const mark = db.prepare('UPDATE asset_versions SET pruned_at=CURRENT_TIMESTAMP WHERE id=? AND pruned_at IS NULL')
+      for (const v of plan.preview.versions) mark.run(v.id)
+      db.exec('COMMIT')
+    } catch (e) { db.exec('ROLLBACK'); throw e }
+    let files = 0, bytes = 0; const warnings: string[] = []
+    // ponytail: limpeza síncrona manual; fila em lotes se catálogos grandes bloquearem a interface.
+    for (const f of plan.files) try {
+      const file = path.join(blobs, validHash(f.hash)), stat = fs.lstatSync(file)
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.ino !== f.ino || stat.dev !== f.dev || stat.size !== f.size || stat.mtimeMs !== f.mtimeMs) throw Error('O arquivo mudou durante a limpeza.')
+      blobPath(f.hash)
+      // Unlink do nome validado, nunca do destino resolvido de um eventual link.
+      fs.unlinkSync(file); files++; bytes += f.size
+    }
+    catch (e) { warnings.push(`Snapshot ${f.hash}: bytes preservados; tente novamente. ${e instanceof Error ? e.message : String(e)}`) }
+    return { versions: plan.preview.versions.length, files, bytes, warnings }
+  }
+  return { listAssets, editAsset, editBuild, setAssetArchived: (game: string, id: unknown, revision: unknown, value: unknown) => setArchived('project_assets', game, id, revision, value), setBuildArchived: (game: string, id: unknown, revision: unknown, value: unknown) => setArchived('project_builds', game, id, revision, value), setAssetVersionPinned, previewRetention, pruneRetention,
+    captureAsset: tracked(captureAsset), captureAssetVersion: tracked(captureAssetVersion), reviewAssetVersion: tracked(reviewAssetVersion), readAssetImage, listBuildCommands, listBuilds, registerBuild: tracked(registerBuild), reviewBuild: tracked(reviewBuild), exportFile: tracked(exportFile) }
 }

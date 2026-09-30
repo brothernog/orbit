@@ -268,6 +268,29 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, reviewed_at TEXT
     );
     CREATE INDEX builds_game ON project_builds(game,id);
+  `),
+  // v20: edição concorrente, arquivo reversível e retenção lógica sem reutilizar IDs de versões.
+  db => db.exec(`
+    ALTER TABLE project_assets ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE project_assets ADD COLUMN archived_at TEXT;
+    ALTER TABLE project_builds ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE project_builds ADD COLUMN archived_at TEXT;
+    ALTER TABLE project_playtests ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE project_playtests ADD COLUMN archived_at TEXT;
+    ALTER TABLE asset_versions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1));
+    ALTER TABLE asset_versions ADD COLUMN pruned_at TEXT;
+  `),
+  // v21: checkpoints de turno por tarefa. Congela o Git da pasta (projeto ou worktree) antes de cada mensagem
+  // ao agente; voltar atras e reset --hard + clean -fd explicito. head NULL = repo vazio e limpo (nada a restaurar).
+  // Excluir a tarefa limpa os registros (deleteTask apaga tudo com task_id); os commits `orbita-checkpoint:`
+  // continuam no historico da branch.
+  db => db.exec(`
+    CREATE TABLE task_checkpoints (
+      id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL, run_id INTEGER, workspace TEXT NOT NULL,
+      head TEXT, base TEXT, committed INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX checkpoints_task ON task_checkpoints(task_id,id);
   `)
 ]
 

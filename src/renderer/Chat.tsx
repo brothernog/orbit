@@ -9,6 +9,7 @@ import { ContextRequests, TaskInspector, UnsentMessages, usePackages } from './T
 import { Bar, STATE } from './Settings'
 import { shrink, Thumbs, type TodoDraft } from './Todo'
 import { Workflow } from './Workflow'
+import { Checkpoints } from './Checkpoints'
 import { ProjectCommands } from './ProjectCommands'
 import { imageRefs, stripMarks } from './msgImages'
 
@@ -34,13 +35,17 @@ function useClaudeStatus(accountId: number | undefined, enabled: boolean) {
 type Window_ = { utilization: number; resets_at: string } | null
 type Usage = { fiveHour?: Window_; sevenDay?: Window_; cached?: boolean; error?: string }
 const usageCache = new Map<number, { at: number; u: Usage }>()
+const USAGE_EVERY = 30_000 // o endpoint recusa excesso (429 cai no ultimo valor visto); 30 s mantem o medidor vivo
 function useUsage(accountId: number | undefined, enabled: boolean, bump: unknown) {
   const [u, setU] = useState<Usage | null>(null)
   useEffect(() => {
     if (!enabled || !accountId) return setU(null)
+    const load = () => api.accountUsage(accountId).then(v => { usageCache.set(accountId, { at: Date.now(), u: v }); setU(v) }, e => setU(p => p ?? { error: errText(e) }))
     const c = usageCache.get(accountId)
-    if (c && Date.now() - c.at < 60_000) return setU(c.u)
-    api.accountUsage(accountId).then(v => { usageCache.set(accountId, { at: Date.now(), u: v }); setU(v) }, e => setU({ error: errText(e) }))
+    if (c) setU(c.u)
+    if (!c || Date.now() - c.at >= USAGE_EVERY) load()
+    const t = setInterval(() => { if (document.visibilityState === 'visible') load() }, USAGE_EVERY)
+    return () => clearInterval(t)
   }, [accountId, enabled, bump])
   return u
 }
@@ -196,6 +201,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
   const pkgs = usePackages(task.id)
   const [inspect, setInspect] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
+  const [cps, setCps] = useState(false) // checkpoints do turno (congelam o Git antes de cada mensagem)
   const [ask, setAsk] = useState<{ title: string; body: string; action: string; run: () => void } | null>(null) // confirmacao no estilo do app, nao o confirm() do Windows
 
   useEffect(() => {
@@ -268,7 +274,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
         <Title task={t} onRename={title => act(api.renameTask(task.id, title))} />
         <div className="chat-actions">
           <button className={`icon ${inspect ? 'on' : ''}`} aria-label="Memória, uso e contexto da tarefa" title="Memória, uso e contexto da tarefa" aria-expanded={inspect} onClick={() => setInspect(!inspect)}><Icon n="layers" /></button>
-          <button className="icon" aria-label="Mais ações da tarefa" title="Nova sessão, terminal, worktree, arquivar" aria-haspopup="menu" aria-expanded={!!menu}
+          <button className="icon" aria-label="Mais ações da tarefa" title="Nova sessão, terminal, worktree, checkpoints, arquivar" aria-haspopup="menu" aria-expanded={!!menu}
             onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.right - 200, y: r.bottom + 6, items: [
               { label: 'Nova sessão', hint: 'A próxima mensagem começa com contexto vazio (economiza tokens em tarefas longas)', disabled: running,
                 run: () => setAsk({ title: 'Começar uma nova sessão?', action: 'Nova sessão', body: 'O agente deixa de ver a conversa anterior; o histórico recente só segue se você aprovar.', run: () => act(api.newSession(task.id, sel)) }) },
@@ -276,6 +282,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
               { label: t.worktree ? `Isolada em ${t.branch}` : 'Isolar em worktree', disabled: !!t.worktree || running, hint: 'Necessário só para implementar em isolamento',
                 run: () => setAsk({ title: 'Isolar numa worktree Git?', action: 'Criar worktree', body: 'As sessões nativas dos provedores recomeçam e o histórico é enviado como contexto.', run: () => act(api.isolateTask(task.id)) }) },
               { label: 'Arquivar tarefa', hint: 'Não apaga mensagens, arquivos nem worktrees', disabled: running, run: () => act(api.archiveTask(task.id, true)) },
+              { label: 'Checkpoints do turno…', hint: 'A pasta congela antes de cada mensagem; volte a um ponto anterior', run: () => setCps(true) },
             ] }) }}><Icon n="more" /></button>
         </div>
       </header>
@@ -343,6 +350,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
         {view && <div className="lightbox" role="dialog" aria-label="Imagem" tabIndex={-1} ref={el => el?.focus()} onClick={() => setView(null)} onKeyDown={e => { if (e.key === 'Escape') setView(null) }}><img src={view} alt="" /></div>}
         {inspect && <TaskInspector taskId={task.id} pkgs={pkgs.list} reload={pkgs.load} onClose={() => setInspect(false)} />}
         {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
+        {cps && <Checkpoints taskId={task.id} onClose={() => { setCps(false); load(); onChange() }} />}
         {ask && <Confirm title={ask.title} body={ask.body} action={ask.action} tone="primary" onConfirm={ask.run} onClose={() => setAsk(null)} />}
         <small className="kbd-hint">Ctrl+Enter envia. Modelo e esforço valem a partir da próxima mensagem.</small>
       </div>

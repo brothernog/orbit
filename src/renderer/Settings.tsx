@@ -225,7 +225,56 @@ function Limits() {
   )
 }
 
-const TABS = [['contas', 'Contas'], ['agentes', 'Agentes'], ['permissoes', 'Permissões'], ['delegacao', 'Delegação'], ['dados', 'Dados']] as const
+// Titulo-resumo do chat: o agente o escreve na propria 1a resposta (sem chamada extra); desligado, fica o comeco da mensagem.
+function SummaryTitles() {
+  const [on, setOn] = useState<boolean | null>(null)
+  const [err, setErr] = useState('')
+  useEffect(() => { api.summaryTitles().then(setOn, e => setErr(errText(e))) }, [])
+  if (on === null) return <small>{err || 'Carregando…'}</small>
+  return (
+    <div className="deleg">
+      <label className="check"><input type="checkbox" checked={on} onChange={e => api.setSummaryTitles(e.target.checked).then(setOn, x => setErr(errText(x)))} /> O agente resume o pedido no nome do chat</label>
+      <small>Vale para chats novos. Custa algumas palavras a mais só na primeira resposta; desligado, o nome é o começo da sua mensagem.</small>
+      {err && <small className="err" role="alert">{err}</small>}
+    </div>
+  )
+}
+
+const TABS = [['contas', 'Contas'], ['agentes', 'Agentes'], ['permissoes', 'Permissões'], ['delegacao', 'Delegação'], ['avisos', 'Avisos'], ['dados', 'Dados']] as const
+
+// Avisos de atencao (src/main/notify.ts). Com o app em foco: cartao dentro dele; fora de foco: janela de aviso no canto da tela.
+type Notify = { done: boolean; failed: boolean; approval: boolean; system: boolean; sound: boolean }
+const NOTIFY: [keyof Notify, string][] = [
+  ['done', 'Quando um agente terminar (e quando uma etapa ficar pronta para revisão)'],
+  ['failed', 'Quando uma execução falhar ou pausar no teto de ferramentas'],
+  ['approval', 'Quando um agente pedir permissão ou aprovação de contexto'],
+]
+function NotifySettings() {
+  const [n, setN] = useState<Notify | null>(null)
+  const [err, setErr] = useState('')
+  useEffect(() => { api.getNotifySettings().then(setN, e => setErr(errText(e))) }, [])
+  if (!n) return <small>{err || 'Carregando…'}</small>
+  const save = (patch: Partial<Notify>) => { const next = { ...n, ...patch }; setN(next); api.setNotifySettings(next).then(setN, e => setErr(errText(e))) }
+  return (
+    <div className="deleg">
+      <fieldset>
+        <legend>Avisar</legend>
+        {NOTIFY.map(([k, label]) => <label key={k} className="check"><input type="checkbox" checked={n[k]} onChange={e => save({ [k]: e.target.checked })} /> {label}</label>)}
+      </fieldset>
+      <fieldset>
+        <legend>Com o app em segundo plano</legend>
+        <label className="check"><input type="checkbox" checked={n.system} onChange={e => save({ system: e.target.checked })} /> Mostrar o aviso no canto da tela e piscar na barra de tarefas</label>
+        <label className="check"><input type="checkbox" checked={n.sound} disabled={!n.system} onChange={e => save({ sound: e.target.checked })} /> Tocar som</label>
+      </fieldset>
+      <small>Clicar no aviso só abre a tarefa: nada é aprovado nem executado por ele.</small>
+      <div className="step-actions">
+        <button type="button" onClick={() => api.testNotice(false).catch((e: any) => setErr(errText(e)))}>Mostrar um exemplo</button>
+        <button type="button" onClick={() => api.testNotice(true).catch((e: any) => setErr(errText(e)))}>Exemplo com vários avisos do mesmo projeto</button>
+      </div>
+      {err && <small className="err" role="alert">{err}</small>}
+    </div>
+  )
+}
 
 // Pastas tiradas da lista de projetos: restaurar sem precisar achar a pasta de novo no seletor.
 function HiddenFolders({ onChange }: { onChange: () => void }) {
@@ -278,8 +327,10 @@ export function Settings({ accounts, reload, providers, refreshProviders, onGame
       {tab === 'agentes' && <>
         <section><h2>Nova</h2><JarvisConfig accounts={accounts} /></section>
         <section><h2>Agentes nomeados</h2><AgentNames /></section>
+        <section><h2>Nome dos chats</h2><SummaryTitles /></section>
       </>}
       {tab === 'permissoes' && <PermissionRules />}
+      {tab === 'avisos' && <section><h2>Avisos</h2><NotifySettings /></section>}
       {tab === 'dados' && <BackupSettings />}
       {tab === 'delegacao' && <>
         <section><h2>Delegação entre provedores</h2><Delegation /></section>

@@ -54,8 +54,18 @@ export const setTaskState = (db: DatabaseSync, id: number, state: string) => {
   db.prepare('UPDATE tasks SET state=? WHERE id=?').run(state, id)
 }
 // Primeira mensagem da tarefa com titulo padrao vira o titulo.
-export const autoTitle = (db: DatabaseSync, id: number, firstMessage: string) =>
-  db.prepare('UPDATE tasks SET title=? WHERE id=? AND title=?').run(clip(firstMessage.replace(/\s+/g, ' ').trim(), 60), id, DEFAULT_TITLE)
+// Devolve o titulo provisorio gravado (ou null se a tarefa ja tinha titulo) para o resumo do agente substitui-lo depois.
+export const autoTitle = (db: DatabaseSync, id: number, firstMessage: string) => {
+  const t = clip(firstMessage.replace(/\s+/g, ' ').trim(), 60) || DEFAULT_TITLE
+  return db.prepare('UPDATE tasks SET title=? WHERE id=? AND title=?').run(t, id, DEFAULT_TITLE).changes ? t : null
+}
+// Titulo-resumo que o agente escreve na primeira resposta (<titulo>...</titulo>): some do texto, inclusive a tag ainda incompleta no streaming.
+const TITLE_TAG = /\s*<titulo>([\s\S]*?)<\/titulo>\s*/i
+export const stripTitle = (s: string) => s.replace(TITLE_TAG, '\n').replace(/\s*<(?:t(?:i(?:t(?:u(?:l(?:o(?:>[\s\S]*)?)?)?)?)?)?)?$/i, '').trim()
+export const titleIn = (s: string) => s.match(TITLE_TAG)?.[1].replace(/\s+/g, ' ').replace(/^["'“]|["'”.]$/g, '').trim() || null
+// So troca se o usuario nao renomeou nesse meio-tempo (o titulo ainda e o provisorio).
+export const summaryTitle = (db: DatabaseSync, id: number, title: string, provisional: string) =>
+  db.prepare('UPDATE tasks SET title=? WHERE id=? AND title=?').run(clip(title, 60), id, provisional)
 
 export const taskMessages = (db: DatabaseSync, id: number) => all(db, 'SELECT * FROM messages WHERE task_id=? ORDER BY id', id)
 

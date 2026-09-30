@@ -22,7 +22,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { asAllowedPath, asInt, asStr, safeJoin, samePath } from './guard.ts'
+import { asAllowedPath, asInt, asStr, inside, pathKey, safeJoin, samePath } from './guard.ts'
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-guard-')))
 const root = path.join(tmp, 'jogo')
@@ -38,8 +38,8 @@ test('tipos inesperados no IPC sao recusados', () => {
   for (const v of [1, null, {}, ['a'], 'x'.repeat(11)]) assert.throws(() => asStr(v, 's', 10), /invalido/)
 })
 
-test('so caminhos da lista permitida (sem diferenciar maiusculas)', () => {
-  assert.equal(asAllowedPath([root], root.toUpperCase(), 'projeto'), root)
+test('so caminhos da lista permitida', () => {
+  assert.equal(asAllowedPath([root], path.join(root, '.'), 'projeto'), root)
   assert.throws(() => asAllowedPath([root], outside, 'projeto'), /nao permitido/)
   assert.throws(() => asAllowedPath([root], path.join(root, '..', 'fora'), 'projeto'), /nao permitido/)
   assert.throws(() => asAllowedPath([root], { a: 1 }, 'projeto'), /invalido/)
@@ -66,6 +66,14 @@ test('grupos de projetos: nome obrigatorio, cor valida, projeto em um grupo so',
   assert.equal(g[0].id, 'ab')
   assert.throws(() => cleanGroups([{ name: ' ' }]), /sem nome/)
   assert.throws(() => cleanGroups('x'), /invalidos/)
+})
+
+test('Godot é opt-in por organizador e configuração inválida não habilita ferramentas', () => {
+  const base = { id: 'jogos', name: 'Jogos', games: ['C:/projects/game'] }
+  assert.equal(cleanGroups([base])[0].godot, undefined)
+  assert.deepEqual(cleanGroups([{ ...base, godot: { enabled: true, executable: ' godot ' } }])[0].godot, { enabled: true, executable: 'godot' })
+  assert.deepEqual(cleanGroups([{ ...base, godot: { enabled: false, executable: '' } }])[0].godot, { enabled: false, executable: '' })
+  for (const godot of [true, [], { enabled: 'true', executable: '' }, { enabled: true, executable: 4 }, { enabled: true, executable: 'godot\n--other' }]) assert.throws(() => cleanGroups([{ ...base, godot }]), /Godot inválida/)
 })
 
 test('arquivos do commit: relativos e dentro da pasta', () => {
@@ -97,4 +105,21 @@ test('samePath: link/junction e a pasta real sao a mesma pasta; pastas diferente
   assert.ok(samePath(link, root))
   assert.ok(samePath(path.join(root, '.'), root))
   assert.ok(!samePath(root, outside))
+})
+
+// Caixa de caminho segue o sistema de arquivos padrao: ignora no Windows/macOS, respeita no Linux.
+test('caminhos sem caixa no Windows/macOS', { skip: process.platform === 'linux' }, () => {
+  assert.equal(pathKey(root.toUpperCase()), pathKey(root))
+  assert.ok(inside(root, path.join(root.toUpperCase(), 'x')))
+  assert.equal(asAllowedPath([root], root.toUpperCase(), 'projeto'), root)
+})
+test('Linux: pasta com outra caixa e outra pasta (inside, asAllowedPath, samePath, pickGames)', { skip: process.platform !== 'linux' }, () => {
+  assert.equal(pathKey('/home/u/Jogo'), '/home/u/Jogo')
+  assert.ok(inside('/home/u/Jogo', '/home/u/Jogo/a.txt'))
+  assert.ok(!inside('/home/u/Jogo', '/home/u/jogo/a.txt')) // irma com outra caixa nao esta dentro
+  assert.throws(() => asAllowedPath([root], root.toUpperCase(), 'projeto'), /nao permitido/)
+  const upper = path.join(tmp, 'JOGO'); fs.mkdirSync(upper)
+  assert.ok(!samePath(root, upper))
+  assert.deepEqual(pickGames({ docs: '/home/u/Documents', appPath: '/x', isDir: () => true, projects: ['/home/u/documents/Jogo', '/home/u/Documents/Jogo'], extra: [] }), ['/home/u/Documents/Jogo'])
+  assert.throws(() => safeJoin(root, path.join(upper, 'x')), /fora do jogo/)
 })

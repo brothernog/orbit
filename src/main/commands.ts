@@ -4,10 +4,12 @@ import type { ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { cliSpawn, killTree, resolveCli } from './providers.ts'
 import type { WorkspaceGuard } from './delegation.ts'
+import { pathKey, sameKey as same } from './guard.ts'
 
 export type ProjectCommand = { name: string; purpose: 'test' | 'build' | 'run'; program: string; args: string[] }
 export type CommandRun = { id: number; task_id: number; workspace: string; name: string; program: string; args: string; status: string; output: string; truncated: number; exit_code: number | null; duration_ms: number | null; error: string | null; started_at: string }
-const key = (game: string) => 'commands:' + path.resolve(game).toLowerCase()
+// Chave gravada: no Windows/macOS segue minuscula como nos bancos existentes.
+const key = (game: string) => 'commands:' + pathKey(game)
 export function normalizeCommand(raw: any): ProjectCommand {
   if (!raw || typeof raw.name !== 'string' || !raw.name.trim() || raw.name.length > 100 || !['test','build','run'].includes(raw.purpose) || typeof raw.program !== 'string' || !raw.program.trim() || raw.program.length > 2000 || /[\0\r\n]/.test(raw.program) || !Array.isArray(raw.args) || raw.args.length > 100 || raw.args.some((a: unknown) => typeof a !== 'string' || a.length > 10000 || a.includes('\0'))) throw Error('Comando inválido: nome, programa e argumentos (array JSON) são obrigatórios.')
   const program = raw.program.trim()
@@ -29,15 +31,18 @@ export const listCommandRuns = (db: DatabaseSync, taskId: number) => db.prepare(
 export function reconcileCommands(db: DatabaseSync) {
   db.prepare("UPDATE command_runs SET status='failed',error='Execução interrompida pelo fechamento do app.',ended_at=CURRENT_TIMESTAMP WHERE status='running'").run()
 }
-export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, agentsBusy: (cwd: string) => boolean, emit: (ev: object) => void) {
+export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, agentsBusy: (cwd: string) => boolean, emit: (ev: object) => void, checks: {
+  beforeSpawn?: (taskId: number, game: string, cwd: string, command: ProjectCommand) => void
+  resultError?: (command: ProjectCommand, output: string, truncated: boolean) => string | undefined
+} = {}) {
   const active = new Map<number, { cwd: string; taskId: number; cancel: (sync?: boolean) => void }>()
-  const same = (a: string,b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
   const busy = (cwd: string) => [...active.values()].some(r => same(r.cwd,cwd))
   async function start(taskId: number, game: string, cwd: string, name: string) {
     const task = db.prepare('SELECT game FROM tasks WHERE id=?').get(taskId) as any
     if (!task || !same(task.game,game)) throw Error('Comando de outro projeto ou tarefa inexistente.')
     const cmd = projectCommands(db,game).find(c => c.name === name)
     if (!cmd) throw Error('Salve o comando antes de executar.')
+    checks.beforeSpawn?.(taskId, game, cwd, cmd)
     if (busy(cwd) || agentsBusy(cwd)) throw Error('Pare a execução atual nesta pasta antes de executar um comando local.')
     const lockId = -taskId
     const blocked = guard.acquireEdit(cwd,taskId,lockId,false)
@@ -50,8 +55,11 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
     const flush=()=>{if(flushTimer)clearTimeout(flushTimer);flushTimer=undefined;db.prepare('UPDATE command_runs SET output=?,truncated=? WHERE id=?').run(output,truncated?1:0,id);notify()}
     const finish=(code: number|null,error?: string)=>{
       if(finished)return;finished=true;if(timer)clearTimeout(timer);flush()
+      if (!stopped && !error) try { error = checks.resultError?.(cmd, output, truncated) } catch { error = 'Não foi possível verificar a saída do comando.' }
       db.prepare('UPDATE command_runs SET status=?,exit_code=?,duration_ms=?,error=?,ended_at=CURRENT_TIMESTAMP WHERE id=?').run(stopped?'cancelled':error||code!==0?'failed':'completed',code,Date.now()-started,error??null,id)
       active.delete(id);guard.release(cwd,lockId);notify()
+      // Para o aviso de atencao (notify.ts): so o fim de verdade, com exit code e o final da saida.
+      emit({ taskId, commandDone: { id, name: cmd.name, purpose: cmd.purpose, status: stopped ? 'cancelled' : error || code !== 0 ? 'failed' : 'completed', exitCode: code, durationMs: Date.now() - started, error: error ?? null, output: output.slice(-20_000) } })
     }
     const cancel=(sync=false)=>{stopped=true;if(child){killTree(child,sync);if(sync)finish(null)}else finish(null)}
     active.set(id,{cwd,taskId,cancel});notify()
@@ -62,6 +70,7 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
         if(finished)return
         if(!exe)throw Error('Executável não encontrado no PATH.')
         normalizeCommand({...cmd,program:exe})
+        checks.beforeSpawn?.(taskId, game, cwd, cmd) // resolução assíncrona: revalidar destino e arquivos imediatamente antes de executar
         // Dentro do Electron, node.exe pode resolver para o próprio runtime: permitir scripts locais sem abrir outra janela do app.
         child=cliSpawn(exe,cmd.args,{cwd,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}})
         child.stdin?.on('error',()=>{});child.stdin?.end()

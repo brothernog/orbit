@@ -35,6 +35,8 @@ const P: Record<string, string> = {
   target: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
   check: 'M5 12l5 5 9-10',
   arrow: 'M5 12h14M13 6l6 6-6 6',
+  eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+  planet: 'M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM7.6 14.4C4.4 16 2.6 17.4 3 18.3c.6 1.4 5.6.1 11.1-2.9S23.6 9 23 7.6c-.4-.9-2.6-.8-5.7.3',
 }
 
 export function Icon({ n, size = 18 }: { n: keyof typeof P | string; size?: number }) {

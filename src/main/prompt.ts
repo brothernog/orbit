@@ -22,6 +22,8 @@ export function runtimeBrief(o: { memoryTools: boolean; workspaceTools: boolean;
 }
 // O chat do app mostra como miniatura as imagens do projeto que a resposta citar; sem isto o agente tenta 'ler' a imagem e diz que nao conseguiu mostrar.
 export const CHAT_IMAGES_HINT = '[Chat do dashboard] Imagens do projeto (png, jpg, gif, webp, svg) cujo caminho voce citar entre crases aparecem como miniatura para o usuario: cite o caminho uma vez, sem abrir a imagem.'
+// So no primeiro turno de uma tarefa sem titulo: o resumo vem na mesma resposta, sem chamada extra (tasks.titleIn/stripTitle).
+export const CHAT_TITLE_HINT = '[Chat do dashboard] Na ultima linha da resposta, escreva um titulo curto (3 a 6 palavras, no idioma do usuario) que resuma o pedido, assim: <titulo>Seu titulo</titulo>. O dashboard remove essa linha antes de mostrar.'
 export const briefTokens = (o: Parameters<typeof runtimeBrief>[0]) => estimateTokens(runtimeBrief(o).length)
 
 const STATIC_CHILD = [

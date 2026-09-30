@@ -10,6 +10,14 @@ const HOT_MS = 6000
 const split = (p: string) => { const i = p.lastIndexOf('/'); return [p.slice(i + 1), i >= 0 ? p.slice(0, i + 1) : ''] }
 const size = (f: File) => (f.added ?? 0) + (f.removed ?? 0)
 
+// Diff para a tela. Modo "so o alterado": sem linhas de contexto e com "linha N" no lugar do cabecalho do trecho; arquivo inteiro: contexto fica.
+const diffLines = (d: string, all: boolean) => d.split('\n').flatMap((l, i) => {
+  if (l[0] === '\\') return []
+  if (l.startsWith('@@')) { const n = /\+(\d+)/.exec(l)?.[1]; return all ? [] : [<span key={i} className="h">{n ? `linha ${n}` : l}{'\n'}</span>] }
+  if (!all && l[0] === ' ') return []
+  return [<span key={i} className={l[0] === '+' ? 'p' : l[0] === '-' ? 'm' : ''}>{l}{'\n'}</span>]
+})
+
 // Sismografo: cada traco e uma rodada de gravacoes; a altura e quantas linhas mudaram (escala log), vermelho quando mais saiu que entrou.
 function Seismo({ ticks, n = 48 }: { ticks: Tick[]; n?: number }) {
   const t = ticks.slice(-n)
@@ -29,12 +37,16 @@ export function FilesPanel({ task, provider, onClose }: { task: Task; provider?:
   const [ticks, setTicks] = useState<Tick[]>([])
   const [hot, setHot] = useState<Record<string, number>>({})
   const [open, setOpen] = useState<Record<string, string | null>>({}) // caminho -> diff (null = carregando)
+  const [full, setFull] = useState<Record<string, boolean>>({}) // caminho -> olho ligado: arquivo inteiro em vez de so o alterado
+  const [shut, setShut] = useState<Record<string, boolean>>({}) // pastas recolhidas
   const [, setNow] = useState(0)
   const prev = useRef<Map<string, number> | null>(null)
   const wrote = useRef(false)
   const openRef = useRef(open)
   openRef.current = open
-  const fetchDiff = (p: string) => api.fileDiff(task.id, p).then((t: string) => setOpen(o => (p in o ? { ...o, [p]: t } : o)), (e: any) => setOpen(o => (p in o ? { ...o, [p]: errText(e) } : o)))
+  const fullRef = useRef(full)
+  fullRef.current = full
+  const fetchDiff = (p: string, f = fullRef.current[p] === true) => api.fileDiff(task.id, p, f).then((t: string) => setOpen(o => (p in o ? { ...o, [p]: t } : o)), (e: any) => setOpen(o => (p in o ? { ...o, [p]: errText(e) } : o)))
 
   const load = () => api.taskFiles(task.id).then((s: State) => {
     // traco do sismografo: o quanto as contagens mudaram desde a ultima leitura
@@ -49,13 +61,13 @@ export function FilesPanel({ task, provider, onClose }: { task: Task; provider?:
     prev.current = cur
     wrote.current = false
     setSt(s); setErr('')
-    Object.keys(openRef.current).forEach(fetchDiff) // diffs abertos recarregam junto (o texto antigo fica ate o novo chegar)
+    Object.keys(openRef.current).forEach(p => fetchDiff(p)) // diffs abertos recarregam junto (o texto antigo fica ate o novo chegar)
   }, (e: any) => setErr(errText(e)))
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     const soon = () => { clearTimeout(timer); timer = setTimeout(load, 600) }
-    prev.current = null; setTicks([]); setSt(null); setOpen({}); setHot({})
+    prev.current = null; setTicks([]); setSt(null); setOpen({}); setFull({}); setShut({}); setHot({})
     load()
     const off = onChat(ev => {
       if (ev.fileWrite?.taskId === task.id) { wrote.current = true; setHot(h => ({ ...h, [ev.fileWrite.path]: Date.now() })); soon() }
@@ -75,6 +87,10 @@ export function FilesPanel({ task, provider, onClose }: { task: Task; provider?:
     if (p in open) { const { [p]: _, ...rest } = open; setOpen(rest) }
     else { setOpen({ ...open, [p]: null }); fetchDiff(p) }
   }
+  const toggleFull = (p: string) => { const f = !full[p]; setFull({ ...full, [p]: f }); setOpen(o => ({ ...o, [p]: null })); fetchDiff(p, f) }
+  // Arquivos agrupados por pasta; a ordem das pastas segue o arquivo mais recente de cada uma.
+  const groups = new Map<string, File[]>()
+  for (const f of files) { const dir = split(f.path)[1]; groups.set(dir, [...(groups.get(dir) ?? []), f]) }
 
   return (
     <aside className="panel files-panel" aria-label="Arquivos alterados" style={{ '--c': provider ? `var(--p-${provider})` : 'var(--accent)' } as CSSProperties}>
@@ -89,18 +105,34 @@ export function FilesPanel({ task, provider, onClose }: { task: Task; provider?:
       {!st && !err ? <span className="loader" aria-label="Lendo arquivos" />
         : st && files.length === 0 ? <p className="fp-empty">Nada mudou ainda. Quando o agente gravar um arquivo, ele aparece aqui na hora.</p>
         : <ol className="fp-list">
-            {files.map(f => {
-              const [file, dir] = split(f.path), isHot = Date.now() - last(f) < HOT_MS, d = open[f.path]
+            {[...groups].map(([dir, list]) => {
+              const a = list.reduce((n, f) => n + (f.added ?? 0), 0), d = list.reduce((n, f) => n + (f.removed ?? 0), 0)
               return (
-                <li key={f.path} className={`fp-file ${isHot ? 'hot' : ''} st-${f.status === '?' ? 'u' : f.status}`}>
-                  <button aria-expanded={f.path in open} title={f.path} onClick={() => toggle(f.path)}>
-                    <span className="fp-name">{file}{f.status === '?' || f.status === 'A' ? <em className="fp-new">novo</em> : f.status === 'D' ? <em className="fp-del">removido</em> : null}{isHot && <em className="fp-hot">gravando</em>}</span>
-                    <span className="fp-dir">{dir || './'}</span>
-                    <span className="fp-delta">{f.added == null && f.removed == null ? <span title="Binário ou sem contagem">bin</span>
-                      : <>{f.added ? <span className="a">+{f.added}</span> : null} {f.removed ? <span className="d">−{f.removed}</span> : null}</>}</span>
+                <li key={dir} className="fp-group">
+                  <button className="fp-dirhead" aria-expanded={!shut[dir]} onClick={() => setShut({ ...shut, [dir]: !shut[dir] })}>
+                    <Icon n="chevron" size={13} /><span className="fp-dirname">{dir || './'}</span><span className="fp-count">{list.length}</span>
+                    <span className="fp-delta">{a ? <span className="a">+{a}</span> : null} {d ? <span className="d">−{d}</span> : null}</span>
                   </button>
-                  {f.path in open && (d == null ? <span className="loader sm" aria-label="Carregando diff" />
-                    : <pre className="fp-diff">{d.split('\n').map((l, i) => <span key={i} className={l[0] === '+' ? 'p' : l[0] === '-' ? 'm' : l.startsWith('@@') ? 'h' : ''}>{l}{'\n'}</span>)}</pre>)}
+                  {!shut[dir] && <ol className="fp-sub">{list.map(f => {
+                    const file = split(f.path)[0], isHot = Date.now() - last(f) < HOT_MS, t = open[f.path], all = full[f.path] === true
+                    return (
+                      <li key={f.path} className={`fp-file ${isHot ? 'hot' : ''} st-${f.status === '?' ? 'u' : f.status}`}>
+                        <button aria-expanded={f.path in open} title={f.path} onClick={() => toggle(f.path)}>
+                          <span className="fp-name">{file}{f.status === '?' || f.status === 'A' ? <em className="fp-new">novo</em> : f.status === 'D' ? <em className="fp-del">removido</em> : null}{isHot && <em className="fp-hot">gravando</em>}</span>
+                          <span className="fp-delta">{f.added == null && f.removed == null ? <span title="Binário ou sem contagem">bin</span>
+                            : <>{f.added ? <span className="a">+{f.added}</span> : null} {f.removed ? <span className="d">−{f.removed}</span> : null}</>}</span>
+                        </button>
+                        {f.path in open && <>
+                          <div className="fp-dhead">
+                            <span>{all ? 'Arquivo inteiro' : 'Só o alterado'}</span>
+                            <button className={`icon sm ${all ? 'on' : ''}`} aria-pressed={all} aria-label="Ver o arquivo inteiro" title={all ? 'Ver só o alterado' : 'Ver o arquivo inteiro'} onClick={() => toggleFull(f.path)}><Icon n="eye" size={15} /></button>
+                          </div>
+                          {t == null ? <span className="loader sm" aria-label="Carregando diff" />
+                            : <pre className="fp-diff">{diffLines(t, all)}</pre>}
+                        </>}
+                      </li>
+                    )
+                  })}</ol>}
                 </li>
               )
             })}

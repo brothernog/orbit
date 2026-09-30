@@ -10,10 +10,12 @@ export type Playtest = {
   id: number; game: string; title: string; scenario: string; expected: string; observed: string
   outcome: 'pass' | 'fail' | 'mixed'; notes: string; severity: 'low' | 'medium' | 'high'
   state: 'open' | 'resolved'; pin_id: number | null; build_id: number | null; created_at: string; imageCount: number
+  revision: number; archived_at: string | null
 }
 type StoredPlaytest = Omit<Playtest, 'imageCount'> & { images: string }
 const text = (v: unknown, field: string, max: number, required = false) => {
   const s = asStr(v ?? '', field, max).trim()
+  if (s.includes('\0')) throw Error(`${field} inválido.`)
   if (required && !s) throw Error(`${field} obrigatório.`)
   return s
 }
@@ -38,6 +40,21 @@ export function createPlaytestService(db: DatabaseSync, dataDir: string) {
     list(game: string): Playtest[] {
       return (db.prepare('SELECT * FROM project_playtests WHERE game=? ORDER BY id DESC').all(project(game)) as StoredPlaytest[]).map(present)
     },
+    edit(game: string, id: unknown, raw: unknown): void {
+      const row = get(game, id)
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('Metadados inválidos.')
+      const r = raw as Record<string, unknown>, revision = asInt(r.revision, 'Revisão')
+      const title = text(r.title, 'Título', 200, true), notes = text(r.notes, 'Notas', 8000)
+      const severity = choice(r.severity, ['low', 'medium', 'high'] as const, 'Severidade')
+      const result = db.prepare('UPDATE project_playtests SET title=?,notes=?,severity=?,revision=revision+1 WHERE game=? AND id=? AND revision=?').run(title, notes, severity, row.game, row.id, revision)
+      if (!result.changes) throw Error('O playtest mudou. Atualize a lista antes de editar.')
+    },
+    setArchived(game: string, id: unknown, revision: unknown, archived: unknown): void {
+      const row = get(game, id), expected = asInt(revision, 'Revisão')
+      if (typeof archived !== 'boolean') throw Error('Arquivamento inválido.')
+      const result = db.prepare('UPDATE project_playtests SET archived_at=CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END,revision=revision+1 WHERE game=? AND id=? AND revision=?').run(Number(archived), row.game, row.id, expected)
+      if (!result.changes) throw Error('O playtest mudou. Atualize a lista antes de arquivar.')
+    },
     add(game: string, raw: unknown): number {
       game = project(game)
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('Playtest inválido.')
@@ -48,7 +65,7 @@ export function createPlaytestService(db: DatabaseSync, dataDir: string) {
       const outcome = choice(r.outcome, ['pass', 'fail', 'mixed'] as const, 'Resultado')
       const severity = choice(r.severity ?? 'medium', ['low', 'medium', 'high'] as const, 'Severidade')
       const buildId = r.buildId == null ? null : asInt(r.buildId, 'Build')
-      if (buildId !== null && !db.prepare('SELECT id FROM project_builds WHERE game=? AND id=?').get(game, buildId)) throw Error('Build não encontrada neste projeto.')
+      if (buildId !== null && !db.prepare('SELECT id FROM project_builds WHERE game=? AND id=? AND archived_at IS NULL').get(game, buildId)) throw Error('Build ativa não encontrada neste projeto.')
       const images = r.images ?? []
       if (!Array.isArray(images) || images.length > 6 || images.some(i => typeof i !== 'string' || i.length > 12 * 1024 * 1024)) throw Error('Imagens inválidas (até 6, máximo 8 MB cada).')
       // Cada tentativa possui sua pasta: falha na validação do helper nunca apaga uma captura anterior.

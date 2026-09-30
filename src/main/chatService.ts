@@ -4,24 +4,27 @@ import os from 'node:os'
 import path from 'node:path'
 import { AGENTS, type Metric } from './adapters.ts'
 
-import { fail } from './guard.ts'
+import { fail, sameKey as sameDir } from './guard.ts'
 import { delegateTool, mcpWire, normalizeSettings, WorkspaceGuard, type ParentCtx } from './delegation.ts'
 import { approveSubset, bindGrantSession, bindSession, finishDelivery, getPackage, invalidatePending, openGrant, planHistoryContext, recordDelivery, renderPackage, resolvePackage, type Decision, type Recipient } from './consent.ts'
 import { awaitingSend, AWAITING_MSG, createSend, endSend, getSend, moveSend, scheduleExpiry } from './sends.ts'
 import { normalizeLimits } from './limits.ts'
+import { isTestCommand, type Act } from './notify.ts'
+import { summarizeTestOutput } from './evidence.ts'
 import { imagesIn } from './attachments.ts'
 import { selectContext } from './contextSelect.ts'
 
 import { newToken } from './mcp.ts'
 import { nativePolicy, normalizePermissionSettings, PermissionBroker } from './permissions.ts'
-import { CHAT_IMAGES_HINT, runtimeBrief } from './prompt.ts'
+import { CHAT_IMAGES_HINT, CHAT_TITLE_HINT, runtimeBrief } from './prompt.ts'
 import { runChat } from './runner.ts'
 import { toolsFor } from './taskContext.ts'
+import { GODOT_TOOLS } from './godotTools.ts'
 import { recordUsage } from './usage.ts'
 import { finishRun, savePartial, startRun } from './runs.ts'
 import { readSkill } from './skills.ts'
 
-import { autoTitle, contextFor, getTask, profileOf, saveSel, saveSession, sessionOf, type TaskSel } from './tasks.ts'
+import { autoTitle, contextFor, DEFAULT_TITLE, getTask, profileOf, saveSel, saveSession, sessionOf, stripTitle, summaryTitle, titleIn, type TaskSel } from './tasks.ts'
 import type { LogEntry } from './providers.ts'
 
 type Sel = TaskSel
@@ -38,11 +41,13 @@ type ChatDeps = {
   recordMetric: (taskId: number, sel: Sel, profile: string, session: string | undefined, metric: Metric | undefined) => void
   registerParent: (token: string, parent: ParentCtx, perm: boolean) => void; unregisterToken: (token: string) => void
   attachRoot: string; linkedinDir: string
+  onRunStart?: (taskId: number, runId: number, cwd: string) => void // linha de base dos arquivos para o resumo do aviso
+  godotOrganizer?: (game: string, cwd: string) => string | undefined
+  summaryTitles?: () => boolean // Configuracoes: titulo-resumo pelo agente (padrao ligado)
 }
 export function createChatService(d: ChatDeps) {
   const { db, active, guard, broker, asTask, taskCwd, checkSel, contextLimits, delegationSettings, permissionSettings,
     getMcp, mcpDir, nativeFor, envFor, emit, note, logFor, accountRow, setSetting, recordMetric, registerParent, unregisterToken, attachRoot, linkedinDir } = d
-    const sameDir = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
     const pct = (w: any) => w && { utilization: w.utilization * 100, resets_at: new Date(w.resetsAt * 1000).toISOString() }
   // Envios retidos aguardando decisao sobre contexto: cada um tem um prazo (so EXPIRA, nunca inicia a execucao).
   const sendTimers = new Map<number, NodeJS.Timeout>()
@@ -102,18 +107,20 @@ export function createChatService(d: ChatDeps) {
     let token = ''
     const pset = permissionSettings()
     const perm = sel.provider === 'claude' && pset.prompt // Claude: as permissoes do modo headless vao ao pop-up do dashboard
-    if (ds.enabled || perm) {
+    const godotOrganizerId = d.godotOrganizer?.(t.game, cwd)
+    if (ds.enabled || perm || godotOrganizerId) {
       try {
         token = newToken()
         // O pai pode esperar a aprovacao humana antes de o filho comecar (e o usuario responder um pedido de permissao): o timeout do cliente MCP cobre tudo.
         const timeoutSec = (ds.timeoutMin + Math.max(contextLimits().approvalTimeoutMin, pset.timeoutMin)) * 60 + 60
-        wire = mcpWire(sel.provider, { url: (await getMcp()).url, token, timeoutSec, dir: mcpDir(), tools: toolsFor('parent', ds.enabled ? delegateTool() : undefined).map(x => x.name), permission: perm })
+        wire = mcpWire(sel.provider, { url: (await getMcp()).url, token, timeoutSec, dir: mcpDir(), tools: [...toolsFor('parent', ds.enabled ? delegateTool() : undefined), ...(godotOrganizerId ? GODOT_TOOLS : [])].map(x => x.name), permission: perm })
       } catch (e: any) { // a delegacao e um extra: se o servidor local nao subir, a conversa segue sem a ferramenta
         logFor('app')({ category: 'config', detail: `ferramenta de delegacao indisponivel: ${e?.message}` })
       }
     }
     // MCP é assíncrono: um comando/execução pode reservar a pasta durante sua preparação.
     try { requireIdle() } catch(e) { wire?.cleanup(); throw e }
+    if (godotOrganizerId && d.godotOrganizer?.(t.game, cwd) !== godotOrganizerId) { wire?.cleanup(); throw Error('A configuração Godot do organizador mudou. Envie novamente para usar a configuração atual.') }
     // Politica nativa do "sempre permitir" (Codex: sandbox/rede; OpenCode: --auto e regras). Claude pergunta pelo pop-up (acima).
     const np = nativeFor(sel.provider)
     const extra = [...(wire?.extra ?? []), ...(np.opts.extra ?? [])]
@@ -128,32 +135,38 @@ export function createChatService(d: ChatDeps) {
     // Identidade efetiva da execucao (autoriza toda leitura de memoria/artefatos pelas ferramentas MCP): mesma sessao + mesmo destinatario = mesma identidade;
     // sessao nova recebe uma interna e o backend a vincula ao ID nativo quando o executor o informar (onSession).
     const grant = openGrant(db, { taskId: t.id, recipient, sessionId: sid ?? null })
-    const dctx: ParentCtx = { taskId: t.id, runId: 0, provider: sel.provider, accountId: sel.accountId, cwd, lineage, auth: grant, depth: 0, fails: new Map(), children: new Set() }
+    const dctx: ParentCtx = { taskId: t.id, runId: 0, provider: sel.provider, accountId: sel.accountId, cwd, lineage, auth: grant, depth: 0, fails: new Map(), children: new Set(), godotOrganizerId }
     const pkgText = plan.deliver.length ? renderPackage(plan.deliver.flatMap(x => x.items), { uncertain: plan.deliver.some(x => x.uncertain) }) : ''
     const first = !sid && !(db.prepare("SELECT 1 FROM messages WHERE task_id=? AND role='user'").get(t.id))
+    // Titulo-resumo na propria 1a resposta (tag removida do texto): sem chamada extra de CLI. Medido contra ferramenta MCP em docs/roadmap.md.
+    const titleTag = first && t.title === DEFAULT_TITLE && (d.summaryTitles?.() ?? true)
     const pin = first && t.pin_id ? (db.prepare('SELECT * FROM pins WHERE id=?').get(t.pin_id) as any) : null
     const brief = wire && !sid ? runtimeBrief({ memoryTools: true, workspaceTools: false, skills: 'parent' }) : '' // regras curtas so na sessao nova: a sessao as retem
     // Pagina LinkedIn: a skill vai inteira na sessao nova (e o unico assunto dali); a pasta atual e a mesa do agente.
     const li = !sid && sameDir(cwd, linkedinDir) ? `[Pagina LinkedIn do dashboard: a pasta atual e a sua mesa]\n${readSkill('linkedin').text}\n\n` : ''
-    const input = [pin && `Resolva este problema do jogo. ${pin.title}. ${pin.body ?? ''}\n\n`, !sid && `${CHAT_IMAGES_HINT}\n\n`, brief && `${brief}\n\n`, li, pkgText && `${pkgText}\n\n`, text].filter(Boolean).join('')
+    const input = [pin && `Resolva este problema do jogo. ${pin.title}. ${pin.body ?? ''}\n\n`, !sid && `${CHAT_IMAGES_HINT}\n\n`, brief && `${brief}\n\n`, li, pkgText && `${pkgText}\n\n`, titleTag && `${CHAT_TITLE_HINT}\n\n`, text].filter(Boolean).join('')
     const notice = [
       plan.deliver.length ? `Contexto aprovado (${plan.deliver.reduce((n, x) => n + x.items.length, 0)} item(ns)) enviado para ${sel.provider} (${sid ? 'sessao existente' : 'sessao nativa nova'}).` : '',
       plan.error ? `Historico anterior nao foi enviado: nao foi possivel montar o pedido de aprovacao. ${plan.error}` : ''
     ].filter(Boolean).join('\n') || undefined
     const runId = startRun(db, { taskId: t.id, provider: sel.provider, accountId: sel.accountId, model: sel.model, effort: sel.effort }, text, notice)
-    autoTitle(db, t.id, text)
+    const provisional = autoTitle(db, t.id, text)
     const deliveries = plan.deliver.map(x => ({ x, id: recordDelivery(db, x.pkg, sid ?? '', x.items) }))
     const entry = { runId, cancel: (_sync?: boolean) => {}, text: '', workspace: cwd, provider: sel.provider, model: sel.model, startedAt: Date.now(), doing: undefined as { tool: string; detail?: string } | undefined }
     dctx.runId = runId
     if (wire) registerParent(token, dctx, perm)
     let lastSave = 0
+    const acts: Act[] = [] // ferramenta + alvo (+ resultado dos testes informado pela CLI), para o resumo do aviso
+    try { d.onRunStart?.(t.id, runId, cwd) } catch {}
     const run = runChat({
       cmd: a.cmd, args, cwd, env: { ...envFor(sel), ...wire?.env, ...permEnv }, parse: a.parse,
       input, // a mensagem vai pelo stdin, nunca na linha de comando
-      onTool: (tool, detail) => { entry.doing = { tool: tool.slice(0, 80), detail } },
+      onTool: (tool, detail, ref) => { entry.doing = { tool: tool.slice(0, 80), detail }; if (acts.length < 500) acts.push({ line: `${tool} ${detail ?? ''}`.trim().slice(0, 300), ref }) },
+      onToolResult: (ref, ok, output) => { const a = acts.find(x => x.ref === ref); if (a && isTestCommand(a.line)) { a.ok = ok; a.summary = summarizeTestOutput(output)?.summary } },
       maxTools: contextLimits().maxToolsPerMessage, // so a mensagem do usuario; filhos delegados ja tem timeout proprio
       onSession: id => { saveSession(db, t.id, sel.provider, profile, id); bindGrantSession(db, grant, id) },
       onText: full => {
+        if (titleTag) full = stripTitle(full)
         entry.text = full
         emit({ taskId: t.id, text: full })
         if (Date.now() - lastSave > 1000) { lastSave = Date.now(); savePartial(db, runId, full) }
@@ -171,6 +184,11 @@ export function createChatService(d: ChatDeps) {
       unregisterToken(token)
       wire?.cleanup()
       for (const c of dctx.children) c.cancel()
+      if (titleTag) {
+        const title = titleIn(r.text) ?? r.messages?.map(titleIn).find(Boolean)
+        r = { ...r, text: stripTitle(r.text), answer: r.answer && stripTitle(r.answer), messages: r.messages?.map(stripTitle) }
+        if (title && provisional) { summaryTitle(db, t.id, title, provisional); emit({ taskId: t.id, refresh: true }) }
+      }
       finishRun(db, runId, r)
       try { broker.expire({ runId }) } catch {} // pedidos de permissao pendentes desta execucao perdem o sentido
       try { recordMetric(t.id, sel, profile, r.session ?? sid, r.metric) } catch {} // medida e opcional: nunca derruba a execucao
@@ -192,7 +210,8 @@ export function createChatService(d: ChatDeps) {
       } else if (r.status === 'completed') {
         db.prepare('DELETE FROM settings WHERE key=?').run(`lastError:${sel.provider}`) // uma execucao bem-sucedida resolve a falha antiga do painel Provedores
       }
-      emit({ taskId: t.id, done: true })
+      // status/tempo/resposta alimentam o aviso de atencao (notify.ts); a interface continua recarregando pelo `done`
+      emit({ taskId: t.id, done: true, runId, status: r.status, paused: r.paused, error: r.error, durationMs: r.durationMs, provider: sel.provider, model: sel.model, answer: r.answer || r.text, acts })
     })
     return { status: 'started', runId }
   }

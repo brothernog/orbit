@@ -18,3 +18,13 @@
 .command-result { margin: 8px 0; }
 .command-result pre { max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .project-commands summary { cursor: pointer; }
+/* Copia para worktree nova: marcadores clicaveis por caminho. */
+.wt-copy { margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 8px; }
+.wt-copy summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.wt-copy summary span { margin-left: 6px; color: var(--faint); }
+.wt-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.wt-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; font: 12.5px ui-monospace, Consolas, monospace; color: var(--muted); cursor: pointer; }
+.wt-chip input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); }
+.wt-chip.on { color: var(--text); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.wt-add { display: flex; gap: 6px; }
+.wt-add input { flex: 1; min-width: 0; }

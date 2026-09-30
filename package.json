@@ -12,6 +12,7 @@
     "e2e": "node scripts/e2e/run.mjs",
     "dev:sandbox": "node scripts/dev-sandbox.mjs",
     "migration:check": "node scripts/check-migration.mjs",
+    "publish:snapshot": "node scripts/publish-snapshot.mjs",
     "dist": "electron-vite build && electron-builder"
   },
   "dependencies": {
