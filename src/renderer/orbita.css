@@ -34,7 +34,7 @@ input:focus, textarea:focus, select:focus { border-color: #7cc4ff66; }
 .rail-btn:hover:not(:disabled), .rail-btn[aria-current=true] { background: var(--surface); }
 .rail-logo img { transition: transform .6s var(--spring), filter .3s; filter: drop-shadow(0 0 6px #7cc4ff40); }
 .rail-logo:hover img { transform: rotate(-18deg) scale(1.06); filter: drop-shadow(0 0 10px #7cc4ff80); }
-.rail-logo[aria-current=true] { background: none !important; }
+.rail-logo[aria-current=true], .rail-logo[aria-current=true]:hover:not(:disabled) { background: none; }
 .rail-logo[aria-current=true] img { filter: drop-shadow(0 0 12px #7cc4ffa0); }
 .picon { border-radius: 12px; transition: border-radius .3s var(--ease), box-shadow .3s var(--ease), transform .3s var(--spring); }
 .rail-tip { background: var(--raised); border-color: var(--line); border-radius: var(--r-sm); box-shadow: 0 10px 24px -8px #000; }
@@ -252,8 +252,8 @@ button.task.active { background: linear-gradient(90deg, #7cc4ff17, #7cc4ff05 70%
 .chats.inbox { background: var(--side-bg); }
 .chats.inbox .ws-tile.sm { background: #ffffff08; color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); text-shadow: none; }
 .rf-hint { font-size: 11px; color: var(--faint); margin-top: 2px; }
-.rail-new { color: var(--faint); border: 1px dashed var(--line) !important; width: 40px; height: 40px; }
-.rail-new:hover:not(:disabled) { color: var(--accent); border-color: #7cc4ff66 !important; background: #7cc4ff0d !important; }
+.rail-new { color: var(--faint); border: 1px dashed var(--line); width: 40px; height: 40px; }
+.rail-new:hover:not(:disabled) { color: var(--accent); border-color: #7cc4ff66; background: #7cc4ff0d; }
 .rail-planet { color: var(--faint); }
 .rail-planet.on { color: var(--accent); }
 .rail-planet.on svg { filter: drop-shadow(0 0 6px #7cc4ff66); }
