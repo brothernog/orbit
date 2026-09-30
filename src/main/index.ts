@@ -626,7 +626,9 @@ async function productionChange(game: unknown, change: (g: string) => unknown) {
 // Pasta de repositorio aceita: projeto listado ou worktree registrada de tarefa/problema.
 const asRepoDir = async (p: unknown) => {
   const dirs = [...listGames(), ...(db.prepare('SELECT worktree FROM tasks WHERE worktree IS NOT NULL UNION SELECT worktree FROM pins WHERE worktree IS NOT NULL').all() as any[]).map(r => r.worktree)]
-  if (typeof p === 'string' && dirs.some(d => samePath(d, p))) return asAllowedPath(dirs, p, 'pasta')
+  // Caminho real: a aba da worktree vem do git (nome longo) e o cadastro pode ter o nome curto 8.3 ou um symlink.
+  const hit = typeof p === 'string' ? dirs.find(d => samePath(d, p)) : undefined
+  if (hit) return hit
   // Tarefas excluídas podem deixar uma worktree: o registro Git continua sendo conferido.
   for (const game of listGames()) if (typeof p === 'string' && inside(path.join(game, '.worktrees'), p)) {
     const source = (await worktrees.view(game)).sources.find(s => samePath(s.path, p))

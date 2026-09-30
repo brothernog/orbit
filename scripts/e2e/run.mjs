@@ -593,7 +593,7 @@ try {
   const wtButton=async label=>{
     const until=Date.now()+20000
     while(Date.now()<until){if(await ev(`(() => {const b=[...document.querySelectorAll('.wt button')].find(b=>b.textContent===${JSON.stringify(label)}&&!b.disabled);if(!b)return false;b.click();return true})()`)){await sleep(350);return}await sleep(200)}
-    throw Error('Ação de worktree não ficou disponível: '+label+' '+await ev("JSON.stringify({tab:document.querySelector('.br-dirs [aria-selected=true]')?.title,wt:document.querySelector('.wt')?.textContent?.slice(0,400)??null})"))
+    throw Error('Ação de worktree não ficou disponível: '+label+' '+await ev("JSON.stringify({tabs:[...document.querySelectorAll('.br-dirs [role=tab]')].map(b=>b.title+' '+b.getAttribute('aria-selected')),wt:document.querySelector('.wt')?.textContent?.slice(0,400)??null,side:document.querySelector('.ph-side')?.textContent?.slice(0,300)??null,body:document.body.innerText.slice(0,300)})")+' '+app.log().split('\n').filter(l=>/error|uncaught/i.test(l)).slice(-5).join(' | '))
   }
   const wtConfirm=async label=>{await ev(`(() => {const b=[...document.querySelectorAll('.confirm button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b)throw Error('Confirmação de worktree ausente');b.click()})()`);await sleep(200)}
   const wtSelect=async()=>{
