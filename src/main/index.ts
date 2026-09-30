@@ -34,6 +34,7 @@ import { codexContextFromRollout, codexLimits, findRollout } from './codexSessio
 import { projectIconData } from './projectIcon.ts'
 import { changedFiles, dirtOf, fileDiff, recentCommits, stopWatching, watchDir } from './fileWatch.ts'
 import { createPulse } from './pulse.ts'
+import { createNoticeInfo } from './noticeInfo.ts'
 import { createAccounts } from './accounts.ts'
 import { branchHandlers } from './branchIpc.ts'
 import { checkpointDb, openDb } from './db.ts'
@@ -41,12 +42,12 @@ import { asAllowedPath, asInt, asStr, cleanGroups, fail, inside, pickGames, safe
 import { cancelLogin, claudeStatus, hostlessEnv, logEvent, loginShellPath, loginState, mergePath, openTerminal, probeProvider, providerAuth, startLogin, type LogEntry } from './providers.ts'
 import { parseAliases, validateAliases } from './agents.ts'
 import { delegateTool, DEFAULT_SETTINGS, mcpWire, normalizeSettings, reconcileDelegations, runDelegation, TOOL_NAME, WorkspaceGuard, type Deps, type McpWire, type ParentCtx } from './delegation.ts'
-import { ApprovalWaiters, getPackage, type Decision } from './consent.ts'
+import { ApprovalWaiters, type Decision } from './consent.ts'
 import { awaitingSend, reconcileSends, reconcileStarting } from './sends.ts'
 import { normalizeLimits } from './limits.ts'
 import { inUse, moons, planetLayout, planetUsage } from './planet.ts'
 import { copyIntoWorktree, copyList, copyNote, copySuggestions, saveCopyList } from './worktreeSetup.ts'
-import { normalizeNotify, noticeFor, providerLabel, runChanges, type Notice, type NoticeInfo, type NotifyPrefs } from './notify.ts'
+import { normalizeNotify, noticeFor, type Notice, type NotifyPrefs } from './notify.ts'
 import { attachImages } from './attachments.ts'
 import { contextHandlers } from './contextIpc.ts'
 import { taskBriefs } from './briefs.ts'
@@ -288,33 +289,7 @@ const emit = (ev: object) => { send(ev); try { attend(ev) } catch {} } // aviso 
 // Avisos de atencao (notify.ts). Com a Orbita em foco: cartao dentro do app. Fora de foco: janela propria de aviso no canto da tela
 // (mesmo visual do app, sem roubar o foco) e a barra de tarefas pisca. Ao voltar para o app, o que ficou pendente vira cartao la dentro.
 const notifyPrefs = () => normalizeNotify(JSON.parse(getSetting('notifications') ?? 'null'))
-type GitStat = { path: string; status: string; added: number | null; removed: number | null }
-const snapFiles = (cwd: string): Promise<GitStat[] | null> => changedFiles(cwd).then(r => (r.repo ? r.files : null), () => null)
-const baselines = new Map<number, { cwd: string; files: Promise<GitStat[] | null> }>() // runId -> estado do Git no inicio
-function runStart(_taskId: number, runId: number, cwd: string) {
-  baselines.set(runId, { cwd, files: snapFiles(cwd) })
-  if (baselines.size > 40) baselines.delete(baselines.keys().next().value!)
-}
-async function noticeInfo(ev: any): Promise<NoticeInfo> {
-  const t = typeof ev?.taskId === 'number' ? getTask(db, ev.taskId) : null
-  if (!t) return { task: null }
-  const info: NoticeInfo = { task: { title: t.title, game: t.game, project: projectNames()[t.game] ?? path.basename(t.game) } }
-  if (ev.done && ev.runId) {
-    info.step = (db.prepare('SELECT title FROM task_steps WHERE run_id=?').get(ev.runId) as any)?.title ?? null
-    const b = baselines.get(ev.runId)
-    baselines.delete(ev.runId)
-    if (b) { const [before, after] = await Promise.all([b.files, snapFiles(b.cwd)]); info.changes = before && after ? runChanges(before, after) : null }
-  }
-  if (ev.permissionRequest) {
-    const perm = db.prepare('SELECT provider, summary FROM permission_requests WHERE id=?').get(ev.permissionRequest) as any
-    info.permission = perm && { provider: perm.provider, summary: perm.summary ?? '' }
-  }
-  if (ev.contextRequest) {
-    const pkg = getPackage(db, ev.contextRequest)
-    info.context = pkg && { items: pkg.items.length, recipient: `${providerLabel(pkg.recipient.provider)}${pkg.recipient.model ? ` ${pkg.recipient.model}` : ''}` }
-  }
-  return info
-}
+const { runStart, noticeInfo } = createNoticeInfo(db, projectNames)
 
 // Janela do planeta (sempre por cima, fora da barra de tarefas; comeca no canto inferior direito e o usuario arrasta para onde
 // quiser): o planeta de uso fica visivel e se expande para virar o aviso quando ha algo com a Orbita fora de foco (ver Planet.tsx).
