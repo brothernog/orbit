@@ -34,9 +34,10 @@ import { codexContextFromRollout, codexLimits, findRollout } from './codexSessio
 import { projectIconData } from './projectIcon.ts'
 import { changedFiles, dirtOf, fileDiff, recentCommits, stopWatching, watchDir } from './fileWatch.ts'
 import { createPulse } from './pulse.ts'
-import { branchView, commitAll, createBranch, issueCreate, issueList, prCreate, prView, pull, push, remoteAhead } from './gitOps.ts'
+import { branchHandlers } from './branchIpc.ts'
+import { push } from './gitOps.ts'
 import { checkpointDb, openDb } from './db.ts'
-import { asAllowedPath, asInt, asStr, cleanGroups, commitParts, commitPaths, fail, inside, pickGames, safeJoin, samePath } from './guard.ts'
+import { asAllowedPath, asInt, asStr, cleanGroups, fail, inside, pickGames, safeJoin, samePath } from './guard.ts'
 import { cancelLogin, claudeEnv, claudeStatus, hostlessEnv, logEvent, loginShellPath, loginState, mergePath, openTerminal, probeProvider, providerAuth, startLogin, type LogEntry } from './providers.ts'
 import { parseAliases, validateAliases } from './agents.ts'
 import { delegateTool, DEFAULT_SETTINGS, mcpWire, normalizeSettings, reconcileDelegations, runDelegation, TOOL_NAME, WorkspaceGuard, type Deps, type McpWire, type ParentCtx } from './delegation.ts'
@@ -639,19 +640,6 @@ async function productionChange(game: unknown, change: (g: string) => unknown) {
   emit({ productionChanged: true, game: g }); return result
 }
 
-// Pasta de repositorio aceita: projeto listado ou worktree registrada de tarefa/problema.
-const asRepoDir = async (p: unknown) => {
-  const dirs = [...listGames(), ...(db.prepare('SELECT worktree FROM tasks WHERE worktree IS NOT NULL UNION SELECT worktree FROM pins WHERE worktree IS NOT NULL').all() as any[]).map(r => r.worktree)]
-  // Caminho real: a aba da worktree vem do git (nome longo) e o cadastro pode ter o nome curto 8.3 ou um symlink.
-  const hit = typeof p === 'string' ? dirs.find(d => samePath(d, p)) : undefined
-  if (hit) return hit
-  // Tarefas excluídas podem deixar uma worktree: o registro Git continua sendo conferido.
-  for (const game of listGames()) if (typeof p === 'string' && inside(path.join(game, '.worktrees'), p)) {
-    const source = (await worktrees.view(game)).sources.find(s => samePath(s.path, p))
-    if (source) return source.path
-  }
-  return fail('Pasta de repositório não cadastrada.')
-}
 const worktreeFolder = async (game: string, dir: unknown) => {
   const v = await worktrees.view(asGame(game)), p = asStr(dir, 'pasta', 4000)
   return [v.target, ...v.sources].find(s => samePath(s.path, p))?.path ?? fail('Worktree não registrada neste projeto.')
@@ -1059,19 +1047,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
     await worktrees.assertAvailable(asGame(game))
     openTerminal(asGame(game), `${s.provider} - ${path.basename(asGame(game))}`, AGENTS[s.provider].cmd, envFor(s))
   },
-  // ---- Branch da pasta (ou worktree): Git local + gh. Publicar (push/PR/issue) so por clique confirmado na interface.
-  branchView: async (dir: string) => branchView(await asRepoDir(dir)),
-  branchDiff: async (dir: string, rel: string) => fileDiff(await asRepoDir(dir), asStr(rel, 'arquivo', 1000)),
-  branchCommit: async (dir: string, msg: string, paths?: unknown, parts?: unknown) => { const d = await asRepoDir(dir); await worktrees.assertAvailable(d); return commitAll(d, asStr(msg, 'mensagem', 5000).trim() || fail('Mensagem de commit vazia.'), commitPaths(paths), commitParts(parts)) },
-  branchRemoteAhead: async (dir: string) => remoteAhead(await asRepoDir(dir)),
-  branchCreate: async (dir: string, name: string) => { const d = await asRepoDir(dir); await worktrees.assertAvailable(d); return createBranch(d, asStr(name, 'nome da branch', 200).trim() || fail('Nome vazio.')) },
-  branchPush: async (dir: string) => push(await asRepoDir(dir)),
-  branchPull: async (dir: string) => { const d = await asRepoDir(dir); await worktrees.assertAvailable(d); return pull(d) },
-  prView: async (dir: string) => prView(await asRepoDir(dir)),
-  prCreate: async (dir: string, title: string, body: string) => prCreate(await asRepoDir(dir), asStr(title, 'titulo', 250).trim() || fail('Título vazio.'), asStr(body ?? '', 'descricao', 20000)),
-  issueList: async (dir: string) => issueList(await asRepoDir(dir)),
-  issueCreate: async (dir: string, title: string, body: string) => issueCreate(await asRepoDir(dir), asStr(title, 'titulo', 250).trim() || fail('Título vazio.'), asStr(body ?? '', 'descricao', 20000)),
-  openGithub: (u: string) => { if (/^https:\/\/github\.com\//.test(asStr(u, 'endereco', 500))) shell.openExternal(u) },
+  ...branchHandlers({ db, listGames, worktrees, openExternal: url => shell.openExternal(url) }),
   // Checkpoints do turno: a pasta da tarefa congela sozinha antes de cada mensagem; aqui o usuario cria, lista e volta.
   listCheckpoints: (taskId: number) => listCheckpoints(db, asTask(taskId).id),
   createCheckpoint: async (taskId: number) => {
