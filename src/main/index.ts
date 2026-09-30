@@ -21,7 +21,6 @@ import { engineCommandError, engineRecipe, flowEngine, isEngineCommand, prepareE
 import { setBlenderScriptRoots } from './blender.ts'
 import { prepareGodot, validatePreparedGodot, godotCommandError, godotBuildFile } from './godotFlow.ts'
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron'
-import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -57,7 +56,7 @@ import { runChat } from './runner.ts'
 import { callTaskTool, childToolset, toolsFor, type ToolCtx } from './taskContext.ts'
 import { delegationReport, taskUsage } from './usage.ts'
 import { finishRun, reconcileRuns } from './runs.ts'
-import { projectInfo } from './projectInfo.ts'
+import { projectInfo, run as gitRun } from './projectInfo.ts'
 import { dropReceipts } from './workspaceTools.ts'
 import { dropSkillSession, READ_SKILL_TOOL_NAME, setSkillRoots, skillTool } from './skills.ts'
 import { markPublished, readDesk } from './linkedin.ts'
@@ -133,32 +132,33 @@ function listDocs(root: string, dir = root, depth = 0, out: string[] = []): stri
   return out
 }
 
-const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+// Assincrono, com timeout e sem janela no Windows: nada de Git sincrono na thread principal.
+const git = async (cwd: string, ...args: string[]) => (await gitRun(cwd, args)).trim()
 
 // Worktree so quando o usuario pede isolamento (nunca e requisito para conversar ou ler arquivos).
 // `prefix`+`id` mantem os nomes antigos dos pins (pin-<id>-...) e usam task-<id>-... para tarefas novas.
-function createWorktree(game: string, prefix: 'pin' | 'task', id: number, title: string) {
-  try { git(game, 'rev-parse', '--is-inside-work-tree') } catch {
+async function createWorktree(game: string, prefix: 'pin' | 'task', id: number, title: string) {
+  try { await git(game, 'rev-parse', '--is-inside-work-tree') } catch {
     throw new Error('A pasta do projeto nao e um repositorio git: nao da para isolar em worktree. Conversar e ler arquivos continua funcionando.')
   }
   const slug = title.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
   const wt = path.join(game, '.worktrees', `${prefix}-${id}-${slug}`)
   const branch = `${prefix}/${id}-${slug}`
   // Mantem .worktrees/ fora do git do jogo sem mexer no .gitignore dele.
-  const exclude = path.join(path.resolve(game, git(game, 'rev-parse', '--git-common-dir')), 'info', 'exclude')
+  const exclude = path.join(path.resolve(game, await git(game, 'rev-parse', '--git-common-dir')), 'info', 'exclude')
   fs.mkdirSync(path.dirname(exclude), { recursive: true })
   const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : ''
   if (!cur.split(/\r?\n/).includes('.worktrees/')) fs.appendFileSync(exclude, `${cur.endsWith('\n') || !cur ? '' : '\n'}.worktrees/\n`)
   safeJoin(game, path.relative(game, wt))
   if (fs.existsSync(wt)) {
-    if (!samePath(git(wt, 'rev-parse', '--show-toplevel'), wt)
-      || !samePath(path.resolve(wt, git(wt, 'rev-parse', '--git-common-dir')), path.resolve(game, git(game, 'rev-parse', '--git-common-dir')))
-      || git(wt, 'symbolic-ref', '--short', 'HEAD') !== branch
-      || !git(game, 'worktree', 'list', '--porcelain', '-z').split('\0').some(line => line.startsWith('worktree ') && samePath(line.slice(9), wt))) fail('A pasta de isolamento já existe e não corresponde à worktree da tarefa.')
+    if (!samePath(await git(wt, 'rev-parse', '--show-toplevel'), wt)
+      || !samePath(path.resolve(wt, await git(wt, 'rev-parse', '--git-common-dir')), path.resolve(game, await git(game, 'rev-parse', '--git-common-dir')))
+      || await git(wt, 'symbolic-ref', '--short', 'HEAD') !== branch
+      || !(await git(game, 'worktree', 'list', '--porcelain', '-z')).split('\0').some(line => line.startsWith('worktree ') && samePath(line.slice(9), wt))) fail('A pasta de isolamento já existe e não corresponde à worktree da tarefa.')
     return { wt, branch, setup: null }
   }
-  git(game, 'worktree', 'add', wt, '-b', branch)
-  return { wt, branch, setup: copyNote(copyIntoWorktree(game, wt, copyList(db, game))) } // .env, cache .godot/...: so o que o usuario listou
+  await gitRun(game, ['worktree', 'add', wt, '-b', branch], { timeout: 300_000 }) // checkout de projeto grande
+  return { wt, branch, setup: copyNote(await copyIntoWorktree(game, wt, copyList(db, game))) } // .env, cache .godot/...: so o que o usuario listou
 }
 
 const accountRow = (id?: number | null) => (id ? (db.prepare('SELECT * FROM accounts WHERE id=?').get(id) as any) : null)
@@ -232,24 +232,24 @@ async function checkSel(s: Sel) {
 }
 
 // Pasta onde o agente roda: worktree da tarefa (se ela foi isolada) ou a pasta do projeto.
-function taskCwd(t: { game: string; worktree: string | null }) {
+async function taskCwd(t: { game: string; worktree: string | null }) {
   const game = taskGame(t)
-  if (!t.worktree) { worktrees.assertAvailable(game); return game }
+  if (!t.worktree) { await worktrees.assertAvailable(game); return game }
   if (!fs.existsSync(t.worktree)) fail('Worktree da tarefa ausente. Revise seu vínculo antes de executar novamente.')
   const real = fs.realpathSync(t.worktree)
   if (!inside(path.join(fs.realpathSync(game), '.worktrees'), real)) fail('Worktree da tarefa fora de .worktrees do projeto.')
-  worktrees.assertAvailable(t.worktree)
+  await worktrees.assertAvailable(t.worktree)
   return t.worktree
 }
 
 // Isolamento explicito. Sessoes nativas dependem da pasta de execucao, entao as da tarefa recomecam
 // (o historico vai como contexto na proxima mensagem).
-function isolateTask(taskId: number) {
+async function isolateTask(taskId: number) {
   const t = asTask(taskId)
   const game = taskGame(t)
-  worktrees.assertAvailable(game)
-  if (t.worktree) { taskCwd(t); return t }
-  const { wt, branch, setup } = createWorktree(game, t.pin_id ? 'pin' : 'task', t.pin_id ?? t.id, t.title)
+  await worktrees.assertAvailable(game)
+  if (t.worktree) { await taskCwd(t); return t }
+  const { wt, branch, setup } = await createWorktree(game, t.pin_id ? 'pin' : 'task', t.pin_id ?? t.id, t.title)
   db.exec('BEGIN')
   let packages: number[]
   try {
@@ -265,11 +265,11 @@ function isolateTask(taskId: number) {
   return getTask(db, t.id)
 }
 
-function launchTask(taskId: number, sel: Sel, resume: boolean, isolate: boolean) {
+async function launchTask(taskId: number, sel: Sel, resume: boolean, isolate: boolean) {
   let t = asTask(taskId)
-  if (isolate) t = isolateTask(t.id)
+  if (isolate) t = await isolateTask(t.id)
   const a = AGENTS[sel.provider]
-  const cwd = taskCwd(t)
+  const cwd = await taskCwd(t)
   const sid = resume ? sessionOf(db, t.id, sel.provider, profileOf(sel.provider, sel.accountId)) : undefined
   const pin = t.pin_id ? (db.prepare('SELECT * FROM pins WHERE id=?').get(t.pin_id) as any) : null
   const prompt = pin ? `Resolva este problema do jogo. ${pin.title}. ${pin.body ?? ''}` : ''
@@ -517,8 +517,9 @@ const getMcp = () => (mcpServer ??= startMcpServer<McpCtx>({
   }
 }))
 
-const commands = createCommandService(db, guard, cwd => { worktrees.assertAvailable(cwd); return [...active.values()].some(r => sameDir(r.workspace,cwd)) || (db.prepare("SELECT 1 FROM delegations WHERE status='running' AND workspace=?").get(cwd) != null) }, emit, {
-  beforeSpawn: (taskId, game, cwd, command) => { if (!samePath(taskCwd(asTask(taskId)), cwd)) fail('A pasta da tarefa mudou. Prepare o comando novamente.'); validatePreparedGodot(db, game, cwd, command); validatePreparedEngine(db, game, cwd, command) },
+// A checagem Git (assertAvailable) do destino roda em beforeSpawn, via taskCwd, antes da trava e de novo antes do spawn.
+const commands = createCommandService(db, guard, cwd => [...active.values()].some(r => sameDir(r.workspace,cwd)) || (db.prepare("SELECT 1 FROM delegations WHERE status='running' AND workspace=?").get(cwd) != null), emit, {
+  beforeSpawn: async (taskId, game, cwd, command) => { if (!samePath(await taskCwd(asTask(taskId)), cwd)) fail('A pasta da tarefa mudou. Prepare o comando novamente.'); validatePreparedGodot(db, game, cwd, command); validatePreparedEngine(db, game, cwd, command) },
   resultError: (command, output, truncated, cwd) => godotCommandError(command, output, truncated) ?? engineCommandError(command, output, truncated, cwd)
 })
 
@@ -625,9 +626,9 @@ const production = createProductionService(db, path.join(app.getPath('userData')
 const playtests = createPlaytestService(db, path.join(app.getPath('userData'), 'production'))
 function registerProjectBuild(game: string, raw: any) {
   const run = typeof raw?.commandId === 'number' ? db.prepare('SELECT task_id,name FROM command_runs WHERE id=?').get(raw.commandId) as { task_id: number | null; name: string } | undefined : undefined
-  const validateSource = run?.name.startsWith('Godot · ') ? () => {
+  const validateSource = run?.name.startsWith('Godot · ') ? async () => {
     if (!run.task_id) fail('A tarefa de origem deste build não está disponível.')
-    const task = asTask(run.task_id), cwd = taskCwd(task)
+    const task = asTask(run.task_id), cwd = await taskCwd(task)
     if (!samePath(task.game, game)) fail('Build de outro projeto.')
     const file = godotBuildFile(db, task.id, raw.commandId, cwd)
     if (!samePath(safeJoin(cwd, file), safeJoin(cwd, asStr(raw?.path, 'arquivo', 2000)))) fail('Registre o executável completo produzido pela exportação Godot.')
@@ -687,10 +688,10 @@ const manifestHash = (folder: string) => {
 
 // Sonda o executável configurado e confirma que tarefa, pasta e organizador não mudaram durante a espera.
 async function engineProbeChecked(taskId: number, engine: unknown) {
-  const e = flowEngine(engine), recipe = engineRecipe(e), t = asTask(taskId), cwd = taskCwd(t)
+  const e = flowEngine(engine), recipe = engineRecipe(e), t = asTask(taskId), cwd = await taskCwd(t)
   const organizer = engineOrganizer(db, t.game, e) ?? fail(`Ative ${ENGINE_LABELS[e]} no organizador deste projeto.`)
   const probe = await recipe.probe(organizer.config.executable, cwd), now = engineOrganizer(db, t.game, e)
-  if (!samePath(taskCwd(asTask(taskId)), cwd) || now?.id !== organizer.id || now.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Confira novamente.')
+  if (!samePath(await taskCwd(asTask(taskId)), cwd) || now?.id !== organizer.id || now.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Confira novamente.')
   return { t, cwd, probe }
 }
 const handlers: Record<string, (...a: any[]) => any> = {
@@ -764,25 +765,25 @@ const handlers: Record<string, (...a: any[]) => any> = {
     await production.exportFile(g, kind as 'asset' | 'build', n, r.filePath); return true
   },
   projectCommands: (game: string) => projectCommands(db, asGame(game)),
-  godotState: (taskId: number, details = false) => {
+  godotState: async (taskId: number, details = false) => {
     const t = asTask(taskId), organizer = godotOrganizer(db, t.game)
     if (!organizer) return { organizer: null, available: false, project: null }
-    const cwd = taskCwd(t)
+    const cwd = await taskCwd(t)
     try {
       if (!fs.statSync(safeJoin(cwd, 'project.godot')).isFile()) return { organizer, available: false, project: null }
       return { organizer, available: true, project: details === true ? godotProject(cwd) : null }
     } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { organizer, available: false, project: null }; return { organizer, available: true, project: null, error: e instanceof Error ? e.message : String(e) } }
   },
   godotProbe: async (taskId: number) => {
-    const t = asTask(taskId), cwd = taskCwd(t), organizer = godotOrganizer(db, t.game) ?? fail('Ative Godot no organizador deste projeto.')
+    const t = asTask(taskId), cwd = await taskCwd(t), organizer = godotOrganizer(db, t.game) ?? fail('Ative Godot no organizador deste projeto.')
     const result = await godotProbe(organizer.config.executable, cwd)
-    if (!samePath(taskCwd(asTask(taskId)), cwd) || godotOrganizer(db, t.game)?.id !== organizer.id || godotOrganizer(db, t.game)?.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Confira novamente.')
+    if (!samePath(await taskCwd(asTask(taskId)), cwd) || godotOrganizer(db, t.game)?.id !== organizer.id || godotOrganizer(db, t.game)?.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Confira novamente.')
     return result
   },
   prepareGodotCommand: async (taskId: number, action: unknown, args: unknown) => {
-    const t = asTask(taskId), cwd = taskCwd(t), organizer = godotOrganizer(db, t.game) ?? fail('Ative Godot no organizador deste projeto.')
+    const t = asTask(taskId), cwd = await taskCwd(t), organizer = godotOrganizer(db, t.game) ?? fail('Ative Godot no organizador deste projeto.')
     const probe = await godotProbe(organizer.config.executable, cwd)
-    if (!samePath(taskCwd(asTask(taskId)), cwd) || godotOrganizer(db, t.game)?.id !== organizer.id || godotOrganizer(db, t.game)?.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Prepare novamente.')
+    if (!samePath(await taskCwd(asTask(taskId)), cwd) || godotOrganizer(db, t.game)?.id !== organizer.id || godotOrganizer(db, t.game)?.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Prepare novamente.')
     const command = prepareGodot(db, t.game, cwd, action, args, probe)
     emit({ taskId, game: t.game, commandConfigChanged: true }); return command
   },
@@ -797,7 +798,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
   engineState: async (taskId: number, engine: unknown, details = false) => {
     const e = flowEngine(engine), t = asTask(taskId), organizer = engineOrganizer(db, t.game, e)
     if (!organizer) return { organizer: null, available: false, details: null }
-    const cwd = taskCwd(t)
+    const cwd = await taskCwd(t)
     try {
       if (!engineProjectAt(e, cwd)) return { organizer, available: false, details: null }
       return { organizer, available: true, details: details === true ? await engineRecipe(e).details(cwd) : null }
@@ -817,15 +818,15 @@ const handlers: Record<string, (...a: any[]) => any> = {
     const command = { name: run.name, purpose: 'test' as const, program: run.program, args: JSON.parse(run.args) }
     return { run, ...engineRecipe(e).diagnostics(run.output, { command, cwd: run.workspace }) }
   },
-  registerGodotBuild: (taskId: number, commandId: unknown, raw: any) => {
-    const t = asTask(taskId), cwd = taskCwd(t), id = asInt(commandId, 'comando')
+  registerGodotBuild: async (taskId: number, commandId: unknown, raw: any) => {
+    const t = asTask(taskId), cwd = await taskCwd(t), id = asInt(commandId, 'comando')
     return productionChange(t.game, async g => {
       const path = godotBuildFile(db, t.id, id, cwd)
       const buildId = await registerProjectBuild(g, { title: raw?.title, version: raw?.version, notes: raw?.notes, platform: 'Windows', commandId: id, path })
       return { id: buildId }
     })
   },
-  worktreeCopy: (game: string) => { const g = asGame(game); return { list: copyList(db, g), suggestions: copySuggestions(g) } },
+  worktreeCopy: async (game: string) => { const g = asGame(game); return { list: copyList(db, g), suggestions: await copySuggestions(g) } },
   saveWorktreeCopy: (game: string, raw: unknown) => saveCopyList(db, asGame(game), raw),
   worktreeView: (game: string) => worktrees.view(asGame(game)),
   previewWorktreeMerge: (game: string, source: unknown) => worktrees.previewMerge(asGame(game), asStr(source, 'worktree', 4000)),
@@ -849,7 +850,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
   saveProjectCommands: (game: string, raw: unknown) => { const g = asGame(game), c = saveCommands(db, g, raw); emit({ game: g, commandConfigChanged: true }); return c },
   listCommandRuns: (taskId: number) => listCommandRuns(db, asTask(taskId).id),
   commandOutput: (taskId: number, id: number, offset: number = 0) => commands.output(asTask(taskId).id, asInt(id, 'execução'), offset),
-  runProjectCommand: (taskId: number, name: string) => { const t = asTask(taskId); return commands.start(t.id,t.game,taskCwd(t),asStr(name,'comando',100)) },
+  runProjectCommand: async (taskId: number, name: string) => { const t = asTask(taskId); return commands.start(t.id,t.game,await taskCwd(t),asStr(name,'comando',100)) },
   cancelProjectCommand: (taskId: number, id: number) => { const t = asTask(taskId), n = asInt(id,'execução'); if (!listCommandRuns(db,t.id).some(r => r.id===n)) fail('Comando de outra tarefa.'); commands.cancel(n) },
   listSteps: (taskId: number) => listSteps(db, asTask(taskId).id),
   addStep: (taskId: number, title: unknown, instruction: unknown) => { const id = addStep(db, asTask(taskId).id, title, instruction); emit({ refresh: true }); return id },
@@ -1016,7 +1017,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
     // Checkpoint do turno: congela o Git da pasta antes do agente mexer; best-effort (pasta sem Git ou com
     // operacao pendente so fica sem checkpoint) e nunca impede o envio.
     let turnCheckpoint: { id: number } | null = null
-    try { turnCheckpoint = await takeCheckpoint(db, taskCwd(t), t.id, {}) } catch {}
+    try { turnCheckpoint = await takeCheckpoint(db, await taskCwd(t), t.id, {}) } catch {}
     try {
       const result = await sendTask(t.id, s, input)
       if (step) bindStep(db, step, result)
@@ -1147,19 +1148,19 @@ const handlers: Record<string, (...a: any[]) => any> = {
     return n
   },
   taskUsage: (taskId: number) => taskUsage(db, asTask(taskId).id),
-  taskMemory: (taskId: number) => {
+  taskMemory: async (taskId: number) => {
     const t = asTask(taskId)
     let cwd: string | null = null
-    try { cwd = taskCwd(t) } catch {}
+    try { cwd = await taskCwd(t) } catch {}
     return searchMemory(db, { taskId: t.id, limit: 500, state: undefined }).items.map(m => ({ ...m, validity: cwd ? validate(db, m, cwd).validity : 'unknown' }))
   },
   listTaskArtifacts: (taskId: number) => listArtifacts(db, asTask(taskId).id),
   readTaskArtifact: (taskId: number, id: number, offset?: number) =>
     readArtifact(db, { taskId: asTask(taskId).id, reader: '', id: asInt(id, 'artefato'), offset: Number.isSafeInteger(offset) ? offset : 0, limit: contextLimits().queryChars, asUser: true }),
-  taskImage: (taskId: number, p: string) => {
+  taskImage: async (taskId: number, p: string) => {
     const t = asTask(taskId)
     let cwd: string | null = null
-    try { cwd = taskCwd(t) } catch {}
+    try { cwd = await taskCwd(t) } catch {}
     return readImage(asStr(p, 'caminho', 2000), [...(cwd ? [cwd] : []), path.join(attachRoot, String(t.id))])
   },
   getAutomations: () => automations.rules(),
@@ -1181,19 +1182,19 @@ const handlers: Record<string, (...a: any[]) => any> = {
     await checkSel(s)
     saveSel(db, t.id, s)
   },
-  launchGame: (game: string, sel: any) => {
+  launchGame: async (game: string, sel: any) => {
     const s = asSel(sel)
-    worktrees.assertAvailable(asGame(game))
+    await worktrees.assertAvailable(asGame(game))
     openTerminal(asGame(game), `${s.provider} - ${path.basename(asGame(game))}`, AGENTS[s.provider].cmd, envFor(s))
   },
   // ---- Branch da pasta (ou worktree): Git local + gh. Publicar (push/PR/issue) so por clique confirmado na interface.
   branchView: async (dir: string) => branchView(await asRepoDir(dir)),
   branchDiff: async (dir: string, rel: string) => fileDiff(await asRepoDir(dir), asStr(rel, 'arquivo', 1000)),
-  branchCommit: async (dir: string, msg: string, paths?: unknown, parts?: unknown) => { const d = await asRepoDir(dir); worktrees.assertAvailable(d); return commitAll(d, asStr(msg, 'mensagem', 5000).trim() || fail('Mensagem de commit vazia.'), commitPaths(paths), commitParts(parts)) },
+  branchCommit: async (dir: string, msg: string, paths?: unknown, parts?: unknown) => { const d = await asRepoDir(dir); await worktrees.assertAvailable(d); return commitAll(d, asStr(msg, 'mensagem', 5000).trim() || fail('Mensagem de commit vazia.'), commitPaths(paths), commitParts(parts)) },
   branchRemoteAhead: async (dir: string) => remoteAhead(await asRepoDir(dir)),
-  branchCreate: async (dir: string, name: string) => { const d = await asRepoDir(dir); worktrees.assertAvailable(d); return createBranch(d, asStr(name, 'nome da branch', 200).trim() || fail('Nome vazio.')) },
+  branchCreate: async (dir: string, name: string) => { const d = await asRepoDir(dir); await worktrees.assertAvailable(d); return createBranch(d, asStr(name, 'nome da branch', 200).trim() || fail('Nome vazio.')) },
   branchPush: async (dir: string) => push(await asRepoDir(dir)),
-  branchPull: async (dir: string) => { const d = await asRepoDir(dir); worktrees.assertAvailable(d); return pull(d) },
+  branchPull: async (dir: string) => { const d = await asRepoDir(dir); await worktrees.assertAvailable(d); return pull(d) },
   prView: async (dir: string) => prView(await asRepoDir(dir)),
   prCreate: async (dir: string, title: string, body: string) => prCreate(await asRepoDir(dir), asStr(title, 'titulo', 250).trim() || fail('Título vazio.'), asStr(body ?? '', 'descricao', 20000)),
   issueList: async (dir: string) => issueList(await asRepoDir(dir)),
@@ -1202,16 +1203,15 @@ const handlers: Record<string, (...a: any[]) => any> = {
   // Checkpoints do turno: a pasta da tarefa congela sozinha antes de cada mensagem; aqui o usuario cria, lista e volta.
   listCheckpoints: (taskId: number) => listCheckpoints(db, asTask(taskId).id),
   createCheckpoint: async (taskId: number) => {
-    const t = asTask(taskId), dir = taskCwd(t)
-    worktrees.assertAvailable(dir)
+    const t = asTask(taskId), dir = await taskCwd(t) // taskCwd ja confere assertAvailable(dir)
     const cp = await takeCheckpoint(db, dir, t.id, {})
     note(t.id, `Checkpoint criado (${cp.head?.slice(0, 7) ?? 'pasta limpa sem commits'}): a pasta pode voltar a este ponto.`)
     emit({ taskId: t.id, refresh: true })
     return cp
   },
-  previewCheckpointRewind: async (taskId: number, id: number) => previewRewind(db, taskCwd(asTask(taskId)), asTask(taskId).id, asInt(id, 'checkpoint')),
+  previewCheckpointRewind: async (taskId: number, id: number) => previewRewind(db, await taskCwd(asTask(taskId)), asTask(taskId).id, asInt(id, 'checkpoint')),
   rewindCheckpoint: async (taskId: number, id: number, token: string) => {
-    const t = asTask(taskId), dir = taskCwd(t)
+    const t = asTask(taskId), dir = await taskCwd(t)
     if (active.has(t.id)) fail('Pare a execução desta tarefa antes de voltar.')
     if (commands.busy(dir)) fail('Aguarde ou cancele o comando local nesta pasta antes de voltar.')
     const r = await rewindCheckpoint(db, dir, t.id, asInt(id, 'checkpoint'), asStr(token, 'prévia', 200))

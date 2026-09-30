@@ -47,7 +47,7 @@ export function reconcileCommands(db: DatabaseSync) {
   db.prepare("UPDATE command_runs SET status='failed',error='Execução interrompida pelo fechamento do app.',ended_at=CURRENT_TIMESTAMP WHERE status='running'").run()
 }
 export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, agentsBusy: (cwd: string) => boolean, emit: (ev: object) => void, checks: {
-  beforeSpawn?: (taskId: number, game: string, cwd: string, command: ProjectCommand) => void
+  beforeSpawn?: (taskId: number, game: string, cwd: string, command: ProjectCommand) => void | Promise<void>
   resultError?: (command: ProjectCommand, output: string, truncated: boolean, cwd: string) => string | undefined
 } = {}) {
   const active = new Map<number, { cwd: string; taskId: number; cancel: (sync?: boolean) => void; live: () => { output: string; truncated: number } }>()
@@ -57,7 +57,7 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
     if (!task || !same(task.game,game)) throw Error('Comando de outro projeto ou tarefa inexistente.')
     const cmd = projectCommands(db,game).find(c => c.name === name)
     if (!cmd) throw Error('Salve o comando antes de executar.')
-    checks.beforeSpawn?.(taskId, game, cwd, cmd)
+    await checks.beforeSpawn?.(taskId, game, cwd, cmd)
     if (busy(cwd) || agentsBusy(cwd)) throw Error('Pare a execução atual nesta pasta antes de executar um comando local.')
     const lockId = -taskId
     const blocked = guard.acquireEdit(cwd,taskId,lockId,false)
@@ -94,7 +94,8 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
         if(finished)return
         if(!exe)throw Error('Executável não encontrado no PATH.')
         normalizeCommand({...cmd,program:exe})
-        checks.beforeSpawn?.(taskId, game, cwd, cmd) // resolução assíncrona: revalidar destino e arquivos imediatamente antes de executar
+        await checks.beforeSpawn?.(taskId, game, cwd, cmd) // resolução assíncrona: revalidar destino e arquivos imediatamente antes de executar
+        if(finished)return // cancelado durante a revalidação
         // Dentro do Electron, node.exe pode resolver para o próprio runtime: permitir scripts locais sem abrir outra janela do app.
         child=cliSpawn(exe,cmd.args,{cwd,env:{...process.env,PWD:cwd,ELECTRON_RUN_AS_NODE:'1'}}) // PWD: o Blender resolve caminhos relativos por $PWD, não pelo cwd
         child.stdin?.on('error',()=>{});child.stdin?.end()

@@ -33,7 +33,7 @@ type Sel = TaskSel
 export type ActiveRun = { runId: number; cancel: (sync?: boolean) => void; text: string; workspace: string; provider?: string; model?: string; startedAt?: number; doing?: { tool: string; detail?: string } }
 type ChatDeps = {
   db: DatabaseSync; active: Map<number, ActiveRun>; guard: WorkspaceGuard; broker: PermissionBroker; workspaceBusy: (cwd: string) => boolean
-  asTask: (id: number) => ReturnType<typeof getTask>; taskCwd: (t: ReturnType<typeof getTask>) => string
+  asTask: (id: number) => ReturnType<typeof getTask>; taskCwd: (t: ReturnType<typeof getTask>) => Promise<string>
   checkSel: (sel: Sel) => Promise<void>; contextLimits: () => ReturnType<typeof normalizeLimits>
   delegationSettings: () => ReturnType<typeof normalizeSettings>; permissionSettings: () => ReturnType<typeof normalizePermissionSettings>
   getMcp: () => Promise<{ url: string }>; mcpDir: () => string; nativeFor: (provider: string) => ReturnType<typeof nativePolicy>
@@ -62,11 +62,11 @@ export function createChatService(d: ChatDeps) {
     const t = asTask(taskId)
     if (active.has(t.id)) throw new Error('O agente ainda esta respondendo nesta tarefa.')
     if (!fromSend && awaitingSend(db, t.id)) throw new Error(AWAITING_MSG)
-    taskCwd(t) // falha cedo se o projeto nao for permitido
+    await taskCwd(t) // falha cedo se o projeto nao for permitido
     await checkSel(sel)
-    if (active.has(t.id)) throw new Error('O agente ainda esta respondendo nesta tarefa.') // outra mensagem entrou durante a consulta ao catalogo
+    const cwd = await taskCwd(t)
+    if (active.has(t.id)) throw new Error('O agente ainda esta respondendo nesta tarefa.') // outra mensagem entrou durante a consulta ao catalogo/Git
     if (!fromSend && awaitingSend(db, t.id)) throw new Error(AWAITING_MSG)
-    const cwd = taskCwd(t)
     const requireIdle = () => {
       if (active.has(t.id)) throw Error('O agente ainda esta respondendo nesta tarefa.')
       if (d.workspaceBusy(cwd)) throw Error('Aguarde ou cancele o comando local nesta pasta antes de enviar ao agente.')
