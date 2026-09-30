@@ -22,7 +22,7 @@ import { toolsFor } from './taskContext.ts'
 import { grantedEngines, grantedTools } from './engineMcp.ts'
 import { ENGINE_LABELS, sameGrants, type EngineGrants } from './engines.ts'
 import { recordUsage } from './usage.ts'
-import { finishRun, savePartial, startRun } from './runs.ts'
+import { finishRun, partialSaver, startRun } from './runs.ts'
 import { readSkill } from './skills.ts'
 
 import { autoTitle, contextFor, DEFAULT_TITLE, getTask, profileOf, saveSel, saveSession, sessionOf, stripTitle, summaryTitle, titleIn, type TaskSel } from './tasks.ts'
@@ -159,7 +159,7 @@ export function createChatService(d: ChatDeps) {
     const entry = { runId, cancel: (_sync?: boolean) => {}, text: '', workspace: cwd, provider: sel.provider, model: sel.model, startedAt: Date.now(), doing: undefined as { tool: string; detail?: string } | undefined }
     dctx.runId = runId
     if (wire) registerParent(token, dctx, perm)
-    let lastSave = 0
+    const savePartial = partialSaver(db, runId)
     const acts: Act[] = [] // ferramenta + alvo (+ resultado dos testes informado pela CLI), para o resumo do aviso
     try { d.onRunStart?.(t.id, runId, cwd) } catch {}
     const run = runChat({
@@ -173,7 +173,7 @@ export function createChatService(d: ChatDeps) {
         if (titleTag) full = stripTitle(full)
         entry.text = full
         emit({ taskId: t.id, text: full })
-        if (Date.now() - lastSave > 1000) { lastSave = Date.now(); savePartial(db, runId, full) }
+        savePartial(full)
       },
       // Medidor ao vivo: so o contexto ocupado (e a janela, se ja veio); a medida completa e gravada no fim (recordMetric).
       onMetric: m => { if (m.occupied != null) emit({ taskId: t.id, metric: { occupied: m.occupied, capacity: m.capacity ?? null, estimated: !!m.estimated, source: m.source } }) },

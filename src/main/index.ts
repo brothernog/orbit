@@ -1,4 +1,4 @@
-import { commandOutput, commandRun, createCommandService, listCommandRuns, projectCommands, reconcileCommands, saveCommands } from './commands.ts'
+import { commandRun, createCommandService, listCommandRuns, projectCommands, reconcileCommands, saveCommands } from './commands.ts'
 import { createCheckpoint as takeCheckpoint, listCheckpoints, previewRewind, rewindCheckpoint } from './checkpoints.ts'
 import { addStep, activeStep, beginStep, bindStep, failStep, listSteps, reconcileSteps, reviewStep } from './workflows.ts'
 import { todoBoard, saveTodo, todoTask } from './planning.ts'
@@ -846,7 +846,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
   openWorktreeTerminal: async (game: string, dir: unknown) => openTerminal(await worktreeFolder(game, dir), 'Resolver integração', process.platform === 'linux' ? ':' : '', host.env),
   saveProjectCommands: (game: string, raw: unknown) => { const g = asGame(game), c = saveCommands(db, g, raw); emit({ game: g, commandConfigChanged: true }); return c },
   listCommandRuns: (taskId: number) => listCommandRuns(db, asTask(taskId).id),
-  commandOutput: (taskId: number, id: number, offset: number = 0) => commandOutput(db, asTask(taskId).id, asInt(id, 'execução'), offset),
+  commandOutput: (taskId: number, id: number, offset: number = 0) => commands.output(asTask(taskId).id, asInt(id, 'execução'), offset),
   runProjectCommand: (taskId: number, name: string) => { const t = asTask(taskId); return commands.start(t.id,t.game,taskCwd(t),asStr(name,'comando',100)) },
   cancelProjectCommand: (taskId: number, id: number) => { const t = asTask(taskId), n = asInt(id,'execução'); if (!listCommandRuns(db,t.id).some(r => r.id===n)) fail('Comando de outra tarefa.'); commands.cancel(n) },
   listSteps: (taskId: number) => listSteps(db, asTask(taskId).id),
