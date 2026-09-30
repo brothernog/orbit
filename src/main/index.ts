@@ -10,8 +10,7 @@ import { createDoc, editDoc } from './docs.ts'
 import { createAccountUsageService } from './accountUsage.ts'
 import { createJarvisService } from './jarvisService.ts'
 import { createLinkedInService } from './linkedinService.ts'
-import { createProductionService } from './production.ts'
-import { createPlaytestService } from './playtests.ts'
+import { createProductionIpc } from './productionIpc.ts'
 import { applyPendingRestore, createBackup, inspectBackup, stageRestore } from './backups.ts'
 import { backupGate } from './backupGate.ts'
 import { createWorktreeService } from './worktrees.ts'
@@ -21,7 +20,7 @@ import { callEngineTool, engineOf, grantedEngines, grantedTools, liveGrants } fr
 import { engineGrants, type EngineGrants } from './engines.ts'
 import { engineCommandError, validatePreparedEngine } from './engineFlow.ts'
 import { setBlenderScriptRoots } from './blender.ts'
-import { validatePreparedGodot, godotCommandError, godotBuildFile } from './godotFlow.ts'
+import { validatePreparedGodot, godotCommandError } from './godotFlow.ts'
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -565,23 +564,6 @@ async function decideSend(id: number, hash: string, decision: Decision, keep?: s
   } finally { reconcileSteps(db); emit({ taskId, refresh: true }) }
 }
 
-const production = createProductionService(db, path.join(app.getPath('userData'), 'production'))
-const playtests = createPlaytestService(db, path.join(app.getPath('userData'), 'production'))
-function registerProjectBuild(game: string, raw: any) {
-  const run = typeof raw?.commandId === 'number' ? db.prepare('SELECT task_id,name FROM command_runs WHERE id=?').get(raw.commandId) as { task_id: number | null; name: string } | undefined : undefined
-  const validateSource = run?.name.startsWith('Godot · ') ? async () => {
-    if (!run.task_id) fail('A tarefa de origem deste build não está disponível.')
-    const task = asTask(run.task_id), cwd = await taskCwd(task)
-    if (!samePath(task.game, game)) fail('Build de outro projeto.')
-    const file = godotBuildFile(db, task.id, raw.commandId, cwd)
-    if (!samePath(safeJoin(cwd, file), safeJoin(cwd, asStr(raw?.path, 'arquivo', 2000)))) fail('Registre o executável completo produzido pela exportação Godot.')
-  } : undefined
-  return production.registerBuild(game, raw, validateSource)
-}
-async function productionChange(game: unknown, change: (g: string) => unknown) {
-  const g = asGame(game), result = await change(g)
-  emit({ productionChanged: true, game: g }); return result
-}
 
 const worktreeFolder = async (game: string, dir: unknown) => {
   const v = await worktrees.view(asGame(game)), p = asStr(dir, 'pasta', 4000)
@@ -616,6 +598,12 @@ const manifestHash = (folder: string) => {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 }
 
+const productionIpc = createProductionIpc({
+  db, dir: path.join(app.getPath('userData'), 'production'), asGame, asTask, taskCwd, emit, backups,
+  openFile: p => dialog.showOpenDialog({ properties: ['openFile'], defaultPath: p }).then(r => (r.canceled ? null : r.filePaths[0] ?? null)),
+  saveFile: f => dialog.showSaveDialog({ title: 'Exportar cópia aprovada', defaultPath: path.join(app.getPath('downloads'), f) }).then(r => (r.canceled ? null : r.filePath || null)),
+})
+const { productionChange, registerProjectBuild } = productionIpc
 const handlers: Record<string, (...a: any[]) => any> = {
   backupInfo: () => ({ dataDir: app.getPath('userData'), lastRestore }),
   createBackup: () => backups.exclusive(async () => {
@@ -648,44 +636,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
       return true
     })
   },
-  listAssets: (game: string) => production.listAssets(asGame(game)),
-  editAsset: (game: string, id: unknown, raw: unknown) => productionChange(game, g => production.editAsset(g, asInt(id, 'asset'), raw)),
-  setAssetArchived: (game: string, id: unknown, revision: unknown, archived: unknown) => productionChange(game, g => production.setAssetArchived(g, asInt(id, 'asset'), revision, archived)),
-  setAssetVersionPinned: (game: string, id: unknown, hash: unknown, pinned: unknown) => productionChange(game, g => production.setAssetVersionPinned(g, asInt(id, 'versão'), hash, pinned)),
-  previewRetention: (game: string, keep: unknown) => production.previewRetention(asGame(game), keep),
-  pruneRetention: (game: string, keep: unknown, token: unknown) => backups.exclusive(() => productionChange(game, g => production.pruneRetention(g, keep, token))),
-  captureAsset: (game: string, raw: unknown) => productionChange(game, g => production.captureAsset(g, raw)),
-  captureAssetVersion: (game: string, id: unknown, note: unknown) => productionChange(game, g => production.captureAssetVersion(g, asInt(id, 'asset'), note)),
-  reviewAssetVersion: (game: string, id: unknown, hash: unknown, decision: unknown) => productionChange(game, g => production.reviewAssetVersion(g, asInt(id, 'versão'), hash, decision)),
-  assetImage: (game: string, id: unknown) => production.readAssetImage(asGame(game), asInt(id, 'versão')),
-  listPlaytests: (game: string) => playtests.list(asGame(game)),
-  editPlaytest: (game: string, id: unknown, raw: unknown) => productionChange(game, g => playtests.edit(g, asInt(id, 'playtest'), raw)),
-  setPlaytestArchived: (game: string, id: unknown, revision: unknown, archived: unknown) => productionChange(game, g => playtests.setArchived(g, asInt(id, 'playtest'), revision, archived)),
-  addPlaytest: (game: string, raw: unknown) => productionChange(game, g => playtests.add(g, raw)),
-  setPlaytestState: (game: string, id: unknown, state: unknown) => productionChange(game, g => playtests.setState(g, asInt(id, 'playtest'), state)),
-  playtestImages: (game: string, id: unknown) => playtests.images(asGame(game), asInt(id, 'playtest')),
-  createPlaytestIssue: (game: string, id: unknown, title: unknown, instruction: unknown) => productionChange(game, g => playtests.createIssue(g, asInt(id, 'playtest'), title, instruction)),
-  listBuildCommands: (game: string) => production.listBuildCommands(asGame(game)),
-  listBuilds: (game: string) => production.listBuilds(asGame(game)),
-  editBuild: (game: string, id: unknown, raw: unknown) => productionChange(game, g => production.editBuild(g, asInt(id, 'build'), raw)),
-  setBuildArchived: (game: string, id: unknown, revision: unknown, archived: unknown) => productionChange(game, g => production.setBuildArchived(g, asInt(id, 'build'), revision, archived)),
-  registerBuild: (game: string, raw: unknown) => productionChange(game, g => registerProjectBuild(g, raw)),
-  reviewBuild: (game: string, id: unknown, hash: unknown, decision: unknown) => productionChange(game, g => production.reviewBuild(g, asInt(id, 'build'), hash, decision)),
-  selectProductionFile: async (game: string) => {
-    const g = asGame(game), r = await dialog.showOpenDialog({ properties: ['openFile'], defaultPath: g })
-    if (r.canceled || !r.filePaths[0]) return null
-    const rel = path.relative(g, r.filePaths[0]); safeJoin(g, rel); return rel
-  },
-  exportProductionFile: async (game: string, kind: unknown, id: unknown) => {
-    const g = asGame(game), n = asInt(id, 'registro')
-    const row = kind === 'asset' ? production.listAssets(g).flatMap(a => a.versions).find(v => v.id === n)
-      : kind === 'build' ? production.listBuilds(g).find(b => b.id === n) : fail('Tipo inválido.')
-    const entry = row ?? fail('Registro inexistente neste projeto.')
-    if (entry.state !== 'approved') fail('Aprove a versão antes de exportar.')
-    const r = await dialog.showSaveDialog({ title: 'Exportar cópia aprovada', defaultPath: path.join(app.getPath('downloads'), path.basename(entry.file_name)) })
-    if (r.canceled || !r.filePath) return false
-    await production.exportFile(g, kind as 'asset' | 'build', n, r.filePath); return true
-  },
+  ...productionIpc.handlers,
   projectCommands: (game: string) => projectCommands(db, asGame(game)),
   ...engineHandlers({ db, asTask, taskCwd, emit, productionChange, registerProjectBuild }),
   worktreeCopy: async (game: string) => { const g = asGame(game); return { list: copyList(db, g), suggestions: await copySuggestions(g) } },
