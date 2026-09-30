@@ -69,9 +69,9 @@ test('Unity: argumentos exatos por ação, caminhos relativos e saídas novas', 
       assert.throws(() => f.build('compile', { log }), /log|relativo|Assets|\.log|pasta/i, String(log))
     f.put('Reports/old.log', 'keep'); assert.throws(() => f.build('compile', { log: 'Reports/old.log' }), /já existe/)
     fs.symlinkSync(path.join(f.cwd, 'nowhere'), path.join(f.cwd, 'Reports/dangling.log')); assert.throws(() => f.build('compile', { log: 'Reports/dangling.log' }), /já existe/)
-    fs.symlinkSync(path.join(f.cwd, 'Library'), path.join(f.cwd, 'Reports/lib')); fs.mkdirSync(path.join(f.cwd, 'Library'))
+    fs.mkdirSync(path.join(f.cwd, 'Library')); fs.symlinkSync(path.join(f.cwd, 'Library'), path.join(f.cwd, 'Reports/lib'), 'junction') // Windows: link de pasta criado depois do alvo
     assert.throws(() => f.build('compile', { log: 'Reports/lib/c.log' }), /relativo/)
-    fs.symlinkSync(os.tmpdir(), path.join(f.cwd, 'outside')); assert.throws(() => f.build('compile', { log: 'outside/c.log' }), /fora/)
+    fs.symlinkSync(os.tmpdir(), path.join(f.cwd, 'outside'), 'junction'); assert.throws(() => f.build('compile', { log: 'outside/c.log' }), /fora/)
     assert.throws(() => f.build('test', { platform: 'StandaloneWindows64', results: 'r.xml', log: 'c.log' }), /EditMode ou PlayMode/)
     assert.throws(() => f.build('test', { filter: '-quit', results: 'r.xml', log: 'c.log' }), /Filtro/)
     assert.throws(() => f.build('test', { results: 'r.json', log: 'c.log' }), /\.xml/)
