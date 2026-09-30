@@ -80,8 +80,8 @@
 .sent-body small { font-size: 12px; }
 
 /* Configuracoes: limites */
-.limits { display: flex; flex-direction: column; gap: 8px; }
-.limits label { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 13.5px; }
+.ctx-limits { display: flex; flex-direction: column; gap: 8px; }
+.ctx-limits label { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 13.5px; }
 .lim-in { display: inline-flex; align-items: center; gap: 8px; flex: none; }
 .lim-in input { width: 96px; text-align: right; font-variant-numeric: tabular-nums; }
 .lim-in small { width: 72px; font-size: 12px; }

@@ -194,7 +194,7 @@ function Limits() {
   const put = (patch: Record<string, number>) => api.setContextLimits({ ...l, ...patch }).then(read.set, e => setErr(errText(e)))
   const lv = levelOf(l)
   return (
-    <div className="limits">
+    <div className="ctx-limits">
       <div className={lv < 0 ? 'lvl custom' : 'lvl'}>
         <input type="range" min={0} max={2} step={1} value={lv < 0 ? 1 : lv} aria-label="Nível de contexto" aria-valuetext={lv < 0 ? 'Personalizado' : LEVELS[lv].name}
           onChange={e => put(LEVELS[+e.target.value].v)} />

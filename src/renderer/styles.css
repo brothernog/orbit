@@ -194,7 +194,7 @@ kbd { font: 11.5px 'Segoe UI', sans-serif; padding: 1px 6px; border: 1px solid v
 .pal-empty { padding: 14px 10px; color: var(--faint); }
 
 /* Limites: consulta sob demanda, nunca em destaque. */
-.limits { position: relative; }
+.limits { position: relative; display: flex; flex-direction: column; } /* coluna: mesmo desenho de quando herdava a regra dos limites de contexto */
 .lim-pop { position: absolute; right: 0; top: calc(100% + 8px); width: 300px; z-index: 30; padding: 6px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); box-shadow: 0 16px 40px #0009; -webkit-app-region: no-drag; }
 .lim-acc { padding: 10px 0; }
 .lim-acc + .lim-acc { border-top: 1px solid var(--line-soft); }
