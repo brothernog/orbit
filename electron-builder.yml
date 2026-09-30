@@ -1,4 +1,7 @@
-# Instaladores: npm run dist (gera em dist/ para o sistema atual). Sem assinatura de codigo por enquanto.
+# Instaladores: npm run dist (gera em dist/ para o sistema atual).
+# macOS: assina (Developer ID) e notariza so quando ha credenciais no ambiente (CSC_LINK/CSC_NAME,
+# APPLE_API_KEY*); sem elas gera o app sem assinatura, como antes. Windows e Linux: sem assinatura.
+# Detalhes em build/macos-signing.md.
 appId: com.brothernog.orbita
 productName: Orbita
 directories:
@@ -19,6 +22,9 @@ electronFuses:
   enableCookieEncryption: true
   enableEmbeddedAsarIntegrityValidation: true
   onlyLoadAppFromAsar: true
+  # Trocar os fuses invalida a assinatura do linker; sem reassinar (ad-hoc) o app nao abre no Apple Silicon
+  # quando nao ha identidade. Com Developer ID a assinatura real vem depois e substitui esta.
+  resetAdHocDarwinSignature: true
 win:
   target: nsis
   # .ico pronto: o conversor PNG->ICO do electron-builder falha (WebAssembly.Memory) neste ambiente
@@ -27,8 +33,22 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 mac:
-  target: dmg
+  # Um dmg por arquitetura em vez de universal: cada download fica com metade do tamanho.
+  target:
+    - target: dmg
+      arch: [arm64, x64]
   category: public.app-category.developer-tools
+  # Exigido pela notarizacao. So vale com identidade; sem ela o app fica so com a assinatura ad-hoc.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Roda depois da assinatura se APPLE_API_KEY/APPLE_API_KEY_ID/APPLE_API_ISSUER (ou APPLE_ID...) existirem;
+  # sem elas o electron-builder so avisa e segue.
+  notarize: true
+dmg:
+  # Sem isto o dmg x64 sai sem sufixo de arquitetura.
+  artifactName: ${productName}-${version}-${arch}.${ext}
 linux:
   target: [AppImage, deb]
   category: Development
