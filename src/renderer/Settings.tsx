@@ -5,30 +5,14 @@ import { PermissionRules } from './PermissionRules'
 import { BackupSettings } from './BackupSettings'
 import { Automations } from './Automations'
 import { Handover } from './Handover'
-import { effortLabel, modelName } from './Chat'
+import { CONN_STATE as STATE, effortLabel, modelName } from './labels'
+import { Bar } from './UsageBar'
 import { Dropdown } from './Dropdown'
 import { Icon, PROVIDER } from './icons'
-import { compact, resetText, totalText, usageNote, type QuotaSnapshot, type UsageWindow } from './usageText'
+import { compact, totalText, usageNote, type QuotaSnapshot } from './usageText'
 import { invalidateRead } from './readCache'
 import { useCachedRead } from './useCachedRead'
 
-type Window_ = UsageWindow
-
-// Uma linha por limite, como no Claude Desktop: nome, renovacao e % na mesma linha; barra embaixo. Tambem usada no medidor do chat.
-export function Bar({ label, w }: { label: string; w: Window_ }) {
-  if (!w) return null
-  const pct = Math.round(w.utilization)
-  return (
-    <div className="usage">
-      <div className="usage-row"><b>{label}</b><small>{resetText(w.resets_at)}</small><span>{pct}%</span></div>
-      <div className="bar" role="progressbar" aria-label={label} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-        <div className={pct > 80 ? 'hot' : ''} style={{ width: `${Math.min(pct, 100)}%` }} />
-      </div>
-    </div>
-  )
-}
-
-export const STATE = { connected: 'conectado', disconnected: 'desconectado', unknown: 'não verificado', connecting: 'conectando…', error: 'erro' }
 const LOGIN_CMD: Record<string, string> = { codex: 'codex login', opencode: 'opencode auth login', gemini: 'gemini (escolha o método de login na primeira execução)' }
 const CATEGORY_HINT: Record<string, string> = {
   auth: 'falha de autenticação: refaça o login desse provedor',

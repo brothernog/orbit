@@ -6,7 +6,8 @@ import { Markdown } from './Markdown'
 import { Confirm, ContextMenu, type MenuItem } from './Nav'
 import { PermissionPrompt } from './PermissionPrompt'
 import { ContextRequests, TaskInspector, UnsentMessages, usePackages } from './TaskContext'
-import { Bar, STATE } from './Settings'
+import { CONN_STATE, effortLabel, modelName } from './labels'
+import { Bar } from './UsageBar'
 import { shrink, Thumbs, type TodoDraft } from './Todo'
 import { Workflow } from './Workflow'
 import { Checkpoints } from './Checkpoints'
@@ -134,11 +135,7 @@ function LimitRing({ u, provider }: { u: Usage | null; provider: string }) {
   )
 }
 
-export const EFFORT: Record<string, string> = { none: 'Nenhum', minimal: 'Mínimo', low: 'Baixo', medium: 'Médio', high: 'Alto', xhigh: 'Extra alto', max: 'Máximo' }
-export const effortLabel = (f: string) => EFFORT[f] ?? cap(f)
-// Rotulo do modelo: o nome do catalogo quando existe; senao o id, sem o prefixo do provedor (ele vira o grupo).
-// Id completo do Claude vira nome legivel ("claude-sonnet-5-5" = "Sonnet 5.5"); o resto so ganha maiuscula.
-export const modelName = (id: string) => { const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?$/.exec(id); return m ? `${cap(m[1])} ${m[2]}${m[3] ? `.${m[3]}` : ''}` : cap(id) }
+// Rotulo do modelo no seletor: o nome do catalogo quando existe; senao o id, sem o prefixo do provedor (ele vira o grupo).
 const modelLabel = (m: { id: string; label?: string }) => cap(m.label ?? (m.id.includes('/') ? m.id.slice(m.id.indexOf('/') + 1) : m.id))
 
 function ModelPicker({ cat, sel, disabled, onChange }: { cat: Catalog | null; sel: Sel; disabled: boolean; onChange: (s: Sel) => void }) {
@@ -255,7 +252,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
   const attach = (files: Blob[]) => Promise.all(files.map(f => shrink(f, 1568))).then(out => setImages(i => [...i, ...out].slice(0, 6)), () => setErr('Não foi possível ler a imagem.'))
   const act = (f: Promise<any>) => f.then(() => { load(); onChange() }, e => setErr(errText(e)))
   const t = hist?.task ?? task
-  const connLabel = missing ? 'não instalado' : STATE[conn as keyof typeof STATE] ?? conn
+  const connLabel = missing ? 'não instalado' : CONN_STATE[conn as keyof typeof CONN_STATE] ?? conn
 
   return (
     <section className="chat" aria-label="Conversa da tarefa">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { api, depth, errText, name, onChat, type Active } from './api'
-import { effortLabel, modelName } from './Chat'
+import { effortLabel, modelName } from './labels'
 
 import { Markdown } from './Markdown'
 import { Dropdown } from './Dropdown'

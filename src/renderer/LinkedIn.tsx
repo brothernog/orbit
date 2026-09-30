@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, errText, onChat, type Account, type Msg, type Sel } from './api'
-import { effortLabel, modelName } from './Chat'
+import { effortLabel, modelName } from './labels'
 import { Icon, PROVIDER } from './icons'
 import { Markdown } from './Markdown'
 import { PermissionPrompt } from './PermissionPrompt'
