@@ -49,13 +49,13 @@ type ChatDeps = {
   summaryTitles?: () => boolean // Configuracoes: titulo-resumo pelo agente (padrao ligado)
   onFinished?: (o: { taskId: number; sel: Sel; text: string; status: string; category?: string; partial: string; acts: Act[] }) => void // passagem entre contas (handover.ts)
 }
+export type SendResult = { status: 'started'; runId: number } | { status: 'awaiting_context_approval'; sendId: number; packageId: number }
 export function createChatService(d: ChatDeps) {
   const { db, active, guard, broker, asTask, taskCwd, checkSel, contextLimits, delegationSettings, permissionSettings,
     getMcp, mcpDir, nativeFor, envFor, emit, note, logFor, accountRow, setSetting, recordMetric, registerParent, unregisterToken, attachRoot, linkedinDir } = d
     const pct = (w: any) => w && { utilization: w.utilization * 100, resets_at: new Date(w.resetsAt * 1000).toISOString() }
   // Envios retidos aguardando decisao sobre contexto: cada um tem um prazo (so EXPIRA, nunca inicia a execucao).
   const sendTimers = new Map<number, NodeJS.Timeout>()
-  type SendResult = { status: 'started'; runId: number } | { status: 'awaiting_context_approval'; sendId: number; packageId: number }
 
   // fromSend: a decisao do usuario sobre um envio retido ja foi tomada; a execucao usa o destino e o texto guardados no envio.
   async function sendTask(taskId: number, sel: Sel, text: string, fromSend?: number): Promise<SendResult> {

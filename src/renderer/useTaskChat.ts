@@ -1,21 +1,21 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
-import { api, errText, onChat, type Sel } from './api'
+import { api, errText, onChat, type Sel, type TaskChat } from './api'
 
 type Live = { occupied: number; capacity: number | null; estimated: boolean; source?: string }
 
 // Conversa de uma tarefa (chat e pagina LinkedIn): historico, streaming, eventos e rolagem.
 // As opcoes ficam num ref: o listener de eventos e inscrito por tarefa e sempre ve a escolha e os callbacks atuais.
-export function useTaskChat<H extends { running: boolean; live?: string }>(taskId: number, o: {
+export function useTaskChat(taskId: number, o: {
   sel: () => Sel // funcao: a pagina LinkedIn deriva a escolha do proprio historico
   msgs: RefObject<HTMLDivElement | null>
   stick?: RefObject<boolean> // sem ele, sempre acompanha o fim
   onError: (e: string) => void
-  onLoaded?: (h: H) => void
+  onLoaded?: (h: TaskChat) => void
   onStart?: () => void // execucao iniciada por fora desta tela
   onDone?: (loaded: Promise<void>) => void
   onMetric?: (m: Live) => void
 }) {
-  const [hist, setHist] = useState<H | null>(null)
+  const [hist, setHist] = useState<TaskChat | null>(null)
   const [live, setLive] = useState('')
   const opts = useRef(o)
   opts.current = o
@@ -24,7 +24,7 @@ export function useTaskChat<H extends { running: boolean; live?: string }>(taskI
   const load = (): Promise<void> => {
     if (!taskId) return Promise.resolve()
     const n = ++req.current
-    return api.taskChat(taskId, opts.current.sel()).then((h: H) => {
+    return api.taskChat(taskId, opts.current.sel()).then(h => {
       if (n !== req.current) return
       setHist(h)
       setLive(h.live || (h.running ? '…' : '')) // volta a mostrar o streaming de uma execucao ativa

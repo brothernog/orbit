@@ -96,7 +96,7 @@ export function LinkedIn({ accounts, onErr }: { accounts: Account[]; onErr: (e: 
   const input = useRef<HTMLTextAreaElement>(null)
   const taskId = page?.taskId ?? 0
   const pkgs = usePackages(taskId)
-  const { hist, live, load, send: sendChat } = useTaskChat<{ running: boolean; awaitingContext?: boolean; messages: Msg[]; sel?: Sel | null; live?: string }>(taskId, {
+  const { hist, live, load, send: sendChat } = useTaskChat(taskId, {
     sel: () => sel, msgs, onError: onErr, onDone: () => { loadDesk() },
   })
   // Sem escolha gravada: o primeiro agente nomeado (Configuracoes > Agentes); sem nenhum, o Claude com o modelo padrao da CLI.

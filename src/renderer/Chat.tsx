@@ -197,7 +197,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
     api.setTaskSel(task.id, next).catch(e => { setSelState(prev); setErr(errText(e)) })
   }
 
-  const { hist, live, load, send: sendChat } = useTaskChat<{ running: boolean; awaitingContext?: boolean; messages: Msg[]; task: Task; metric: Metric | null; live?: string; sel?: string | null }>(task.id, {
+  const { hist, live, load, send: sendChat } = useTaskChat(task.id, {
     sel: () => sel, msgs, stick, onError: setErr,
     // Sem escolha gravada: sugere o provedor/conta da ultima resposta desta tarefa.
     onLoaded: h => {
