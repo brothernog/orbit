@@ -666,8 +666,8 @@ const handlers: Record<string, (...a: any[]) => any> = {
   runProjectCommand: async (taskId: number, name: string) => { const t = asTask(taskId); return commands.start(t.id,t.game,await taskCwd(t),asStr(name,'comando',100)) },
   cancelProjectCommand: (taskId: number, id: number) => { const t = asTask(taskId), n = asInt(id,'execução'); if (!listCommandRuns(db,t.id).some(r => r.id===n)) fail('Comando de outra tarefa.'); commands.cancel(n) },
   listSteps: (taskId: number) => listSteps(db, asTask(taskId).id),
-  addStep: (taskId: number, title: unknown, instruction: unknown) => { const id = addStep(db, asTask(taskId).id, title, instruction); emit({ refresh: true }); return id },
-  reviewStep: (id: number, accept: unknown) => { if (typeof accept !== 'boolean') fail('Decisão inválida.'); reviewStep(db, asInt(id, 'etapa'), accept as boolean); emit({ refresh: true }) },
+  addStep: (taskId: number, title: unknown, instruction: unknown) => { const t = asTask(taskId), id = addStep(db, t.id, title, instruction); emit({ taskId: t.id, refresh: true }); return id },
+  reviewStep: (id: number, accept: unknown) => { if (typeof accept !== 'boolean') fail('Decisão inválida.'); const n = asInt(id, 'etapa'); reviewStep(db, n, accept as boolean); emit({ taskId: (db.prepare('SELECT task_id FROM task_steps WHERE id=?').get(n) as { task_id: number } | undefined)?.task_id, refresh: true }) }, // o painel de etapas recarrega so com eventos da propria tarefa
   todoBoard: (legacy?: unknown) => todoBoard(db, legacy),
   saveTodo: (revision: unknown, topics: unknown) => { const board = saveTodo(db, revision, topics); emit({ todoChanged: true }); return board },
   todoTask: (topicId: string, itemId: string, game: string) => {

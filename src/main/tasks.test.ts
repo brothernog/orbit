@@ -143,6 +143,7 @@ test('criar, renomear, buscar, ordenar por atividade e arquivar sem apagar nada'
   summaryTitle(db, e, 'Outro', prov2)
   assert.equal(getTask(db, e).title, 'Meu nome')
   assert.equal(autoTitle(db, e, 'x'), null)
+  for (const until = Date.now() + 3; Date.now() < until;); // updated_at tem resolucao de ms: sem isto a atividade empata com a criacao de `e` (desempate por id)
   turn(a, 'claude', 1, 'ajustar dificuldade', 'ok') // atividade mais recente
   assert.equal(listTasks(db, game)[0].id, a)
   renameTask(db, b, 'Menu principal')
