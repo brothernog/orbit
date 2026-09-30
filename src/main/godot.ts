@@ -2,6 +2,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
+import { engineOrganizer } from './engines.ts'
 import { samePath, safeJoin } from './guard.ts'
 import { normalizeCommand, type ProjectCommand } from './commands.ts'
 import { cliSpawn, killTree, resolveCli } from './providers.ts'
@@ -13,20 +14,7 @@ export type GodotAction = 'import' | 'check' | 'run' | 'editor' | 'export'
 export type GodotArgs = { script?: string; scene?: string; preset?: string; output?: string; debug?: boolean; log?: string; headless?: boolean }
 export type GodotDiagnostic = { severity: 'error' | 'warning'; message: string; file?: string; line?: number; origin?: string; count: number; outputLines: number[] }
 
-export function godotOrganizer(db: DatabaseSync, game: string): { id: string; name: string; config: GodotConfig } | null {
-  try {
-    const row = db.prepare("SELECT value FROM settings WHERE key='projectGroups'").get() as { value: string } | undefined
-    const groups: unknown = JSON.parse(row?.value ?? '[]')
-    if (!Array.isArray(groups)) return null
-    const matches = groups.filter(g => Array.isArray(g?.games) && g.games.some((p: unknown) => typeof p === 'string' && samePath(p, game)))
-    if (matches.length !== 1) return null
-    const g = matches[0], configured = g.godot?.executable
-    if (g.godot?.enabled !== true || typeof configured !== 'string' || typeof g.id !== 'string' || !g.id || typeof g.name !== 'string' || groups.filter(x => x?.id === g.id).length !== 1) return null
-    const executable = configured.trim() || 'godot'
-    normalizeCommand({ name: 'Godot', purpose: 'test', program: executable, args: [] })
-    return { id: g.id, name: g.name, config: { enabled: true, executable: executable.trim() } }
-  } catch { return null }
-}
+export const godotOrganizer = (db: DatabaseSync, game: string): { id: string; name: string; config: GodotConfig } | null => engineOrganizer(db, game, 'godot')
 
 const MAX_CONFIG = 4 * 1024 * 1024
 type Settings = Map<string, Map<string, string>>

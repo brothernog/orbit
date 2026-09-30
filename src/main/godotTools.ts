@@ -1,78 +1,20 @@
 // Consultas locais Godot: fontes atuais, sem execução, histórico de agentes ou configuração global.
-import fs from 'node:fs'
 import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { sha } from './artifacts.ts'
-import { godotDiagnostics, godotOrganizer, godotProject } from './godot.ts'
-import { inScope, safeJoin, samePath } from './guard.ts'
+import { engineContext, fail, localPath, num, page, pageArgs, schema, source, str, type Local } from './engineTools.ts'
+import { godotDiagnostics, godotProject } from './godot.ts'
 import type { ContextLimits } from './limits.ts'
 import type { ToolDef, ToolResult } from './mcp.ts'
 import type { ToolCtx } from './taskContext.ts'
 
-const pageArgs = { offset: { type: 'integer', minimum: 0 }, hash: { type: 'string', description: 'Hash da resposta anterior ao continuar.' } }
-const schema = (properties: object, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false })
 export const GODOT_TOOLS: ToolDef[] = [
   { name: 'godot_project', description: 'Godot local: versão declarada, cena principal, autoloads e presets; só fontes autorizadas. Não executa a engine.', inputSchema: schema(pageArgs) },
   { name: 'godot_scene', description: 'Índice textual .tscn/.tres; node seleciona subárvore (. = raiz), resource seleciona ID/main. property lê valor bruto paginado. Não resolve herança/instâncias/binários.', inputSchema: schema({ path: { type: 'string' }, node: { type: 'string' }, resource: { type: 'string' }, property: { type: 'string' }, ...pageArgs }, ['path']) },
   { name: 'godot_diagnostics', description: 'Agrupa erros de log NATIVO do Godot indicado por path dentro do workspace. detail seleciona índice do erro; raw lê log paginado. Não consulta histórico/logs do dashboard nem user://.', inputSchema: schema({ path: { type: 'string' }, detail: { type: 'integer', minimum: 0 }, raw: { type: 'boolean' }, ...pageArgs }, ['path']) }
 ]
-
-const fail = (message: string): never => { throw new Error(message) }
-const str = (v: unknown, name: string, max = 1000) => typeof v === 'string' && v.length > 0 && v.length <= max ? v : fail(`${name} inválido.`)
-const num = (v: unknown, name: string) => v == null ? 0 : Number.isSafeInteger(v) && (v as number) >= 0 ? v as number : fail(`${name} inválido.`)
-const scopes = (values: string[]) => [...new Set(values.map(v => {
-  const s = str(v, 'escopo').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '') || '.'
-  if (/^(?:\/|[a-z]:)/i.test(s) || s.split('/').includes('..')) fail('Escopo inválido.')
-  return s
-}))].sort()
-
-type Local = { cwd: string; allow: (rel: string) => boolean }
-function context(db: DatabaseSync, c: ToolCtx, organizerId: string): Local {
-  if (c.auth.taskId !== c.taskId || c.auth.recipient.logicalId !== c.lineage) fail('Identidade de execução incompatível.')
-  const cwd = fs.realpathSync(c.cwd)
-  if (!samePath(cwd, fs.realpathSync(c.auth.recipient.workspace))) fail('Workspace não autorizado.')
-  const scope = scopes(c.scope)
-  if (JSON.stringify(scope) !== JSON.stringify(scopes(c.auth.recipient.scope))) fail('Escopo não autorizado.')
-  const task = db.prepare('SELECT game,worktree FROM tasks WHERE id=?').get(c.taskId) as { game: string; worktree: string | null } | undefined
-  if (!task || !samePath(cwd, task.worktree || task.game)) fail('Workspace incompatível com a tarefa atual.')
-  const organizer = task && godotOrganizer(db, task.game)
-  if (!organizer || organizer.id !== organizerId || !organizer.config.enabled) fail('Godot indisponível no organizador desta execução.')
-  return { cwd, allow: rel => inScope(rel, scope) }
-}
-
-function localPath(c: Local, value: unknown): { abs: string; rel: string } {
-  const p = str(value, 'path')
-  if (/^(?:[\\/]|[a-z]:|\w+:\/\/)/i.test(p) || p.split(/[\\/]/).includes('..')) fail('Caminho fora do workspace.')
-  const abs = safeJoin(c.cwd, p), rel = path.relative(c.cwd, abs).split(path.sep).join('/')
-  if (rel.split('/').some(p => ['.git', '.godot', '.import', '.worktrees', 'export_credentials.cfg'].includes(p))) fail('Arquivo interno/credencial fora das consultas Godot.')
-  if (!c.allow(rel)) fail('Arquivo fora do escopo autorizado.')
-  return { abs, rel }
-}
-
-function source(c: Local, value: unknown) {
-  const f = localPath(c, value)
-  if (!fs.statSync(f.abs).isFile()) fail('Não é um arquivo.')
-  // ponytail: leitura síncrona até 4 MiB; streaming se projetos reais exigirem arquivos maiores.
-  if (fs.statSync(f.abs).size > 4 * 1024 * 1024) fail('Arquivo acima de 4 MiB; use leitura por intervalo ou uma fonte menor.')
-  const bytes = fs.readFileSync(f.abs)
-  if (bytes.includes(0)) fail('Arquivo binário; esta consulta lê somente texto.')
-  const text = bytes.toString('utf8')
-  return { ...f, text, hash: sha(bytes), lines: text.split(/\r?\n/).length }
-}
-
-function page(label: string, hash: string, body: string, args: any, lim: ContextLimits, note: string) {
-  const offset = num(args.offset, 'offset')
-  if (offset > 0 && args.hash !== hash) fail('Fonte/consulta mudou ou hash ausente; reinicie sem offset.')
-  if (args.hash !== undefined && args.hash !== hash) fail('Fonte/consulta mudou; reinicie sem hash/offset.')
-  if (offset > body.length) fail('offset fora da resposta.')
-  const budget = Math.max(500, Math.min(50_000, lim.queryChars))
-  const title = label.length > 120 ? label.slice(0, 119) + '…' : label
-  const head = (end: number) => `${title} · hash ${hash} · caracteres ${offset}-${end} de ${body.length}${end < body.length ? ` · próximo offset ${end} (mesmos argumentos + hash)` : ' · fim'}\n${note}\n`
-  let end = Math.min(body.length, offset + Math.max(1, budget - head(offset).length - 20))
-  while (end > offset && head(end).length + end - offset > budget) end--
-  if (end === offset && offset < body.length) fail('Cabeçalho excede queryChars; aumente o limite da consulta.')
-  return head(end) + body.slice(offset, end)
-}
+const INTERNAL = ['.git', '.godot', '.import', '.worktrees', 'export_credentials.cfg']
+const context = (db: DatabaseSync, c: ToolCtx, organizerId: string) => engineContext(db, c, 'godot', organizerId, INTERNAL)
 
 function reference(c: Local, value: string): string {
   if (/^(?:user|uid|file):\/\//.test(value)) return '[referência externa não resolvida]'
