@@ -296,6 +296,11 @@ test('como cada provedor enxerga a ferramenta: sem tocar configuracao global; ge
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers.dashboard.timeout, o.timeoutSec * 1000) // sem isto o Claude aborta a delegacao apos 300 s sem resposta
   cl.cleanup()
   assert.equal(fs.existsSync(file), false) // arquivo com o token removido ao fim da execucao
+  // strict (filho Claude de leitura): so o servidor do dashboard, sem os MCP globais/do projeto; edicao e pai (sem strict) nao recebem o flag
+  const ro = mcpWire('claude', { ...o, strict: true })!; assert.ok(ro.extra.includes('--strict-mcp-config')); assert.equal(ro.extra[1], file); ro.cleanup()
+  const ed = mcpWire('claude', { ...o, strict: false })!; assert.ok(!ed.extra.includes('--strict-mcp-config')); ed.cleanup()
+  assert.ok(!cl.extra.includes('--strict-mcp-config'))
+  assert.ok(!mcpWire('codex', { ...o, strict: true })!.extra.join(' ').includes('strict')) // so o Claude tem essa via
   const oc = mcpWire('opencode', o)!
   assert.equal(JSON.parse(oc.env.OPENCODE_CONFIG_CONTENT).mcp.dashboard.url, o.url)
   assert.equal(mcpWire('gemini', o), null)
@@ -680,6 +685,7 @@ test('filho Claude: ferramentas nativas sem duplicar o MCP; recibos/skills so so
   assert.match(args, /--tools Grep,Glob/); assert.doesNotMatch(args, /Read/) // leitura pelo read_file_range (escopo + readToken)
   assert.match(f.runs[0].input, /Busque com Grep\/Glob \(Grep em modo content com -C[^)]*\) e leia com read_file_range/)
   assert.doesNotMatch(f.runs[0].input, /test_evidence/) // nao anunciada: o resumo nao cita
+  assert.doesNotMatch(f.runs[0].input, /godot_scene/) // sem ferramentas Godot anunciadas: nenhuma linha Godot
   assert.equal(f.runs[0].env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS, '1')
   const first = lastDeleg().id
   await call(f, ctx(), { objective: 'corrija a leitura', provider: 'claude', mode: 'read', continuationOf: first }) // retomou a MESMA sessao

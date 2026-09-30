@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { migrate } from './db.ts'
 import { createTask } from './tasks.ts'
 import { WorkspaceGuard } from './delegation.ts'
-import { createCommandService, listCommandRuns, projectCommands, saveCommands, type ProjectCommand } from './commands.ts'
+import { commandRun, createCommandService, projectCommands, saveCommands, type ProjectCommand } from './commands.ts'
 import { blenderProbe } from './blender.ts'
 import { blenderCommand, blenderOutputs } from './blenderFlow.ts'
 import { engineCommandError, engineRecipe, prepareEngine, validatePreparedEngine } from './engineFlow.ts'
@@ -128,7 +128,7 @@ test('Blender real: render e exportação glTF preparados e executados pelo serv
     beforeSpawn: (_t, game, cwd, command) => validatePreparedEngine(f.db, game, cwd, command),
     resultError: (command, output, truncated, cwd) => engineCommandError(command, output, truncated, cwd)
   })
-  const wait = async (id: number) => { for (let i = 0; i < 1500; i++) { const row = listCommandRuns(f.db, f.task).find(r => r.id === id)!; if (row.status !== 'running') return row; await new Promise(r => setTimeout(r, 40)) } throw Error('timeout') }
+  const wait = async (id: number) => { for (let i = 0; i < 1500; i++) { const row = commandRun(f.db, f.task, id)!; if (row.status !== 'running') return row; await new Promise(r => setTimeout(r, 40)) } throw Error('timeout') }
   try {
     // Cycles na CPU, 1 amostra e sem denoiser: roda sem GPU/EGL.
     execFileSync('blender', ['-b', '--factory-startup', '--python-expr', "import bpy; s=bpy.context.scene; s.render.resolution_x=32; s.render.resolution_y=24; s.render.engine='CYCLES'; s.cycles.samples=1; s.cycles.use_denoising=False; s.cycles.device='CPU'; bpy.ops.wm.save_as_mainfile(filepath='models/real.blend')"], { cwd: f.cwd, env: { ...process.env, PWD: f.cwd }, stdio: 'ignore', timeout: 60_000 })

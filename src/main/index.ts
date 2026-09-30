@@ -1,8 +1,10 @@
-import { createCommandService, listCommandRuns, projectCommands, reconcileCommands, saveCommands } from './commands.ts'
+import { commandOutput, commandRun, createCommandService, listCommandRuns, projectCommands, reconcileCommands, saveCommands } from './commands.ts'
 import { createCheckpoint as takeCheckpoint, listCheckpoints, previewRewind, rewindCheckpoint } from './checkpoints.ts'
 import { addStep, activeStep, beginStep, bindStep, failStep, listSteps, reconcileSteps, reviewStep } from './workflows.ts'
 import { todoBoard, saveTodo, todoTask } from './planning.ts'
 import { createChatService } from './chatService.ts'
+import { createAutomations } from './automations.ts'
+import { createHandover, normalizeHandover } from './handover.ts'
 import { createAccountUsageService } from './accountUsage.ts'
 import { createJarvisService } from './jarvisService.ts'
 import { createLinkedInService } from './linkedinService.ts'
@@ -484,7 +486,7 @@ const delegationDeps: Deps = {
     const grants = liveGrants(db, p.taskId, p.cwd, p.engines)
     const set = childToolset(p.provider, p.mode, p.scope, grantedEngines(grants))
     set.mcp.push(...grantedTools(grants))
-    try { wire = mcpWire(p.provider, { url: (await getMcp()).url, token, timeoutSec: 600, dir: mcpDir(), tools: set.mcp.map(x => x.name), permission: perm }) } catch { return null }
+    try { wire = mcpWire(p.provider, { url: (await getMcp()).url, token, timeoutSec: 600, dir: mcpDir(), tools: set.mcp.map(x => x.name), permission: perm, strict: p.mode === 'read' }) } catch { return null }
     if (!wire) return null
     tokens.set(token, { kind: 'child', perm, tools: set.mcp, engines: grants, t: { taskId: p.taskId, lineage: p.lineage, auth: p.auth, role: 'child', cwd: p.cwd, scope: p.scope, delegationId: p.delegationId, provider: p.provider } })
     const w = wire
@@ -526,6 +528,7 @@ const { sendTask, decideSend: decideChatSend } = createChatService({
   workspaceBusy: commands.busy, onRunStart: runStart, summaryTitles,
   accountUsageWriter: id => accountUsageService.writer(id),
   engineGrants: (game, cwd) => engineGrants(db, game, cwd),
+  onFinished: o => handover(o),
   registerParent: (token, p, perm) => { tokens.set(token, { kind: 'parent', p, perm }) },
   unregisterToken: token => { tokens.delete(token) }
 })
@@ -563,6 +566,15 @@ const accountUsageService = createAccountUsageService({
   refreshGuard: work => backups.invoke(work)
 })
 const accountUsage = (accountId: number) => accountUsageService.get(accountId)
+const automations = createAutomations({
+  getSetting, setSetting, usage: id => accountUsageService.snapshot(id), accountName: id => accountRow(id)?.name ?? `conta ${id}`,
+  peers: id => { const me = accountRow(id); return listAccounts().filter(a => a.id !== id && (!me || dirKey(a) !== dirKey(me))).map(a => a.id) } // mesma pasta = mesmo login
+})
+const handoverSettings = () => { try { return normalizeHandover(JSON.parse(getSetting('handover') ?? 'null')) } catch { return normalizeHandover(null) } }
+const handover = createHandover({
+  db, mode: () => handoverSettings().mode, itemChars: () => contextLimits().itemChars, note, emit, sendTask: (id, s, text) => sendTask(id, s, text),
+  peers: id => automations.peers(id), usage: id => accountUsageService.snapshot(id), accountName: id => accountRow(id)?.name ?? `conta ${id}`
+})
 // Perfis antigos podem compartilhar a mesma pasta: trocar login invalida todas essas contas.
 const invalidateAccountUsage = (account: any) => {
   for (const acc of listAccounts()) if (dirKey(acc) === dirKey(account)) accountUsageService.invalidate(acc.id)
@@ -770,10 +782,12 @@ const handlers: Record<string, (...a: any[]) => any> = {
     const probe = await godotProbe(organizer.config.executable, cwd)
     if (!samePath(taskCwd(asTask(taskId)), cwd) || godotOrganizer(db, t.game)?.id !== organizer.id || godotOrganizer(db, t.game)?.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Prepare novamente.')
     const command = prepareGodot(db, t.game, cwd, action, args, probe)
-    emit({ taskId, commandChanged: true }); return command
+    emit({ taskId, game: t.game, commandConfigChanged: true }); return command
   },
   godotDiagnostics: (taskId: number, commandId: unknown) => {
-    const t = asTask(taskId), run = listCommandRuns(db, t.id).find(r => r.id === asInt(commandId, 'comando')) ?? fail('Comando de outra tarefa ou fora do histórico disponível.')
+    const t = asTask(taskId), id = asInt(commandId, 'comando')
+    if (!listCommandRuns(db, t.id).some(r => r.id === id)) fail('Comando de outra tarefa ou fora do histórico disponível.')
+    const run = commandRun(db, t.id, id) ?? fail('Comando de outra tarefa ou inexistente.')
     if (!run.name.startsWith('Godot · ')) fail('Selecione um comando Godot.')
     return { run, ...godotDiagnostics(run.output) }
   },
@@ -791,10 +805,12 @@ const handlers: Record<string, (...a: any[]) => any> = {
   prepareEngineCommand: async (taskId: number, engine: unknown, action: unknown, args: unknown) => {
     const { t, cwd, probe } = await engineProbeChecked(taskId, engine)
     const result = prepareEngine(db, t.game, cwd, engine, action, args, probe)
-    emit({ taskId, commandChanged: true }); return result
+    emit({ taskId, game: t.game, commandConfigChanged: true }); return result
   },
   engineDiagnostics: (taskId: number, engine: unknown, commandId: unknown) => {
-    const e = flowEngine(engine), t = asTask(taskId), run = listCommandRuns(db, t.id).find(r => r.id === asInt(commandId, 'comando')) ?? fail('Comando de outra tarefa ou fora do histórico disponível.')
+    const e = flowEngine(engine), t = asTask(taskId), id = asInt(commandId, 'comando')
+    if (!listCommandRuns(db, t.id).some(r => r.id === id)) fail('Comando de outra tarefa ou fora do histórico disponível.')
+    const run = commandRun(db, t.id, id) ?? fail('Comando de outra tarefa ou inexistente.')
     if (!isEngineCommand(e, run.name)) fail('Selecione um comando desta engine.')
     const command = { name: run.name, purpose: 'test' as const, program: run.program, args: JSON.parse(run.args) }
     return { run, ...engineRecipe(e).diagnostics(run.output, { command, cwd: run.workspace }) }
@@ -828,8 +844,9 @@ const handlers: Record<string, (...a: any[]) => any> = {
   }), true),
   openWorktreeFolder: async (game: string, dir: unknown) => shell.openPath(await worktreeFolder(game, dir)),
   openWorktreeTerminal: async (game: string, dir: unknown) => openTerminal(await worktreeFolder(game, dir), 'Resolver integração', process.platform === 'linux' ? ':' : '', host.env),
-  saveProjectCommands: (game: string, raw: unknown) => { const c = saveCommands(db, asGame(game), raw); emit({ commandChanged: true }); return c },
+  saveProjectCommands: (game: string, raw: unknown) => { const g = asGame(game), c = saveCommands(db, g, raw); emit({ game: g, commandConfigChanged: true }); return c },
   listCommandRuns: (taskId: number) => listCommandRuns(db, asTask(taskId).id),
+  commandOutput: (taskId: number, id: number, offset: number = 0) => commandOutput(db, asTask(taskId).id, asInt(id, 'execução'), offset),
   runProjectCommand: (taskId: number, name: string) => { const t = asTask(taskId); return commands.start(t.id,t.game,taskCwd(t),asStr(name,'comando',100)) },
   cancelProjectCommand: (taskId: number, id: number) => { const t = asTask(taskId), n = asInt(id,'execução'); if (!listCommandRuns(db,t.id).some(r => r.id===n)) fail('Comando de outra tarefa.'); commands.cancel(n) },
   listSteps: (taskId: number) => listSteps(db, asTask(taskId).id),
@@ -987,7 +1004,8 @@ const handlers: Record<string, (...a: any[]) => any> = {
   setTaskState: (id: number, state: string) => setTaskState(db, asTask(id).id, TASK_STATES.includes(state) ? state : fail('Estado invalido.')),
   taskChat: (id: number, sel: any) => taskChat(asTask(id).id, asSel(sel)),
   sendTask: async (id: number, sel: any, text: string, images?: unknown, stepId?: unknown) => {
-    const t = asTask(id), s = asSel(sel)
+    const t = asTask(id), auto = automations.beforeSend(asSel(sel)), s = auto.sel
+    for (const n of auto.notes) note(t.id, n)
     const input = attachImages(path.join(attachRoot, String(t.id)), asStr(text, 'mensagem', 200_000).trim(), images) || fail('mensagem vazia')
     reconcileSteps(db)
     const step = stepId == null ? null : asInt(stepId, 'etapa')
@@ -1142,6 +1160,10 @@ const handlers: Record<string, (...a: any[]) => any> = {
     try { cwd = taskCwd(t) } catch {}
     return readImage(asStr(p, 'caminho', 2000), [...(cwd ? [cwd] : []), path.join(attachRoot, String(t.id))])
   },
+  getAutomations: () => automations.rules(),
+  setAutomations: (raw: unknown) => automations.setRules(raw),
+  getHandover: () => handoverSettings(),
+  setHandover: (raw: unknown) => { const n = normalizeHandover(raw); setSetting('handover', JSON.stringify(n)); return n },
   getContextLimits: () => contextLimits(),
   setContextLimits: (raw: any) => {
     const n = normalizeLimits(raw)

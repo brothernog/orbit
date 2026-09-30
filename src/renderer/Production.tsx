@@ -237,17 +237,33 @@ function Builds({ builds, commands, onOpenTask, ...tools }: Tools & { builds: Bu
 
 export function Production({ game, onOpenTask, onErr }: { game: string; onOpenTask: (id: number) => void; onErr: (m: string) => void }) {
   const [tab, setTab] = useState<'assets' | 'playtests' | 'builds'>('assets'), [records, setRecords] = useState<Records | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false), [images, setImages] = useState<string[]>([])
-  const live = useRef(true), sequence = useRef(0), locked = useRef(false)
+  const live = useRef(true), sequence = useRef(0), commandSequence = useRef(0), latestCommands = useRef<BuildCommand[] | null>(null), locked = useRef(false)
   const load = async () => {
-    const current = ++sequence.current
+    const current = ++sequence.current, commandCurrent = ++commandSequence.current
     const [assets, playtests, builds, commands] = await Promise.all([api.listAssets(game), api.listPlaytests(game), api.listBuilds(game), api.listBuildCommands(game)])
-    if (live.current && current === sequence.current) setRecords({ assets, playtests, builds, commands })
+    if (live.current && current === sequence.current) {
+      if (commandCurrent === commandSequence.current) latestCommands.current = commands
+      setRecords({ assets, playtests, builds, commands: latestCommands.current ?? commands })
+    }
+  }
+  const loadCommands = async () => {
+    const current = ++commandSequence.current
+    const commands: BuildCommand[] = await api.listBuildCommands(game)
+    if (live.current && current === commandSequence.current) {
+      latestCommands.current = commands
+      setRecords(records => records ? { ...records, commands } : records)
+    }
   }
   useEffect(() => {
     live.current = true
+    latestCommands.current = null; setRecords(null)
     void load().catch(e => { if (live.current) setError(errText(e)) })
-    const off = onChat(e => { if ((e.productionChanged && e.game?.toLowerCase() === game.toLowerCase()) || e.commandChanged) void load().catch(error => { if (live.current) setError(errText(error)) }) })
-    return () => { live.current = false; off() }
+    const off = onChat(e => {
+      if (e.game?.toLowerCase() !== game.toLowerCase()) return
+      const refresh = e.productionChanged ? load : e.commandChanged && e.commandRun?.status === 'completed' && e.commandRun.exit_code === 0 ? loadCommands : null
+      if (refresh) void refresh().catch(error => { if (live.current) setError(errText(error)) })
+    })
+    return () => { live.current = false; ++sequence.current; ++commandSequence.current; off() }
   }, [game])
   const action: Action = async (f, reload = true) => {
     if (locked.current) return false

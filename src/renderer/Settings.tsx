@@ -3,6 +3,8 @@ import { api, errText, type Account, type Auth, type Provider } from './api'
 import { AgentNames } from './AgentNames'
 import { PermissionRules } from './PermissionRules'
 import { BackupSettings } from './BackupSettings'
+import { Automations } from './Automations'
+import { Handover } from './Handover'
 import { effortLabel, modelName } from './Chat'
 import { Dropdown } from './Dropdown'
 import { Icon, PROVIDER } from './icons'
@@ -323,6 +325,8 @@ export function Settings({ accounts, reload, providers, refreshProviders, onGame
             <button className="primary">Adicionar conta</button>
           </form>
         </section>
+        {accounts.length > 1 && <section><h2>Automações</h2><Automations /></section>}
+        {accounts.length > 1 && <section><h2>Quando a conta atingir o limite</h2><Handover /></section>}
         <section>
           <h2>Provedores <button className="icon sm" onClick={refreshProviders} aria-label="Diagnosticar de novo" title="Diagnosticar de novo"><Icon n="refresh" size={16} /></button></h2>
           {providers ? providers.map(p => <ProviderRow key={p.id} p={p} />) : <small>Consultando as CLIs…</small>}

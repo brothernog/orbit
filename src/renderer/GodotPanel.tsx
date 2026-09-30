@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, errText, onChat } from './api'
-import type { CommandRun, ProjectCommand } from '../main/commands'
+import type { CommandRun, CommandRunSummary, ProjectCommand } from '../main/commands'
 import type { GodotAction, GodotConfig, GodotDiagnostic, GodotProject, godotProbe } from '../main/godot'
 import './godot.css'
 
@@ -10,7 +10,7 @@ type Diagnostics = { run: CommandRun; items: GodotDiagnostic[]; errorCount: numb
 const actionLabels: Record<GodotAction, string> = { import: 'Importar recursos', check: 'Verificar script GDScript', run: 'Executar jogo ou cena', editor: 'Abrir editor', export: 'Exportar para Windows' }
 const statusText: Record<string, string> = { running: 'Executando', completed: 'Concluído', failed: 'Falhou', cancelled: 'Cancelado' }
 
-export function GodotPanel({ taskId, game, disabled, commands, runs, onPrepared }: { taskId: number; game: string; disabled: boolean; commands: ProjectCommand[]; runs: CommandRun[]; onPrepared: () => Promise<void> }) {
+export function GodotPanel({ taskId, game, disabled, commands, runs, onPrepared }: { taskId: number; game: string; disabled: boolean; commands: ProjectCommand[]; runs: CommandRunSummary[]; onPrepared: (command: ProjectCommand) => void }) {
   const [state, setState] = useState<State | null>(null), [open, setOpen] = useState(false), [loading, setLoading] = useState(false), [error, setError] = useState('')
   const [probe, setProbe] = useState<Probe | null>(null), [action, setAction] = useState<GodotAction>('import'), [script, setScript] = useState(''), [scene, setScene] = useState(''), [preset, setPreset] = useState(''), [output, setOutput] = useState(''), [log, setLog] = useState(''), [debug, setDebug] = useState(false), [headless, setHeadless] = useState(false)
   const [prepared, setPrepared] = useState<ProjectCommand | null>(null), [busy, setBusy] = useState(false)
@@ -55,7 +55,7 @@ export function GodotPanel({ taskId, game, disabled, commands, runs, onPrepared 
         <dl className="godot-facts"><div><dt>Projeto</dt><dd>{project.version || 'Versão não informada'} · {project.language}</dd></div><div><dt>Cena principal</dt><dd><code>{project.mainScene || 'Não configurada'}</code></dd></div></dl>
         {project.warnings.map((warning, i) => <p className="muted" key={i}>{warning}</p>)}
         <div><button disabled={busy || loading || disabled || active} onClick={() => perform(async () => { const n = request.current, result: Probe = await api.godotProbe(taskId); if (mounted.current && n === request.current) setProbe(result) })}>Verificar instalação Godot</button>{probe && <p role="status"><b>{probe.version}</b><small>{probe.executable}</small></p>}</div>
-        <form onSubmit={e => { e.preventDefault(); if (ready) void perform(async () => { const n = request.current, command: ProjectCommand = await api.prepareGodotCommand(taskId, action, { ...(script.trim() && action === 'check' ? { script: script.trim() } : {}), ...(action === 'run' ? { headless, ...(scene.trim() ? { scene: scene.trim() } : {}) } : {}), ...(action === 'export' ? { preset, output: output.trim(), debug } : {}), ...(log.trim() ? { log: log.trim() } : {}) }); if (mounted.current && n === request.current) { setPrepared(command); await onPrepared() } }) }}>
+        <form onSubmit={e => { e.preventDefault(); if (ready) void perform(async () => { const n = request.current, command: ProjectCommand = await api.prepareGodotCommand(taskId, action, { ...(script.trim() && action === 'check' ? { script: script.trim() } : {}), ...(action === 'run' ? { headless, ...(scene.trim() ? { scene: scene.trim() } : {}) } : {}), ...(action === 'export' ? { preset, output: output.trim(), debug } : {}), ...(log.trim() ? { log: log.trim() } : {}) }); if (mounted.current && n === request.current) { setPrepared(command); onPrepared(command) } }) }}>
           <label>Ação local<select aria-label="Ação Godot" value={action} disabled={busy} onChange={e => setAction(e.target.value as GodotAction)}>{Object.entries(actionLabels).map(([key, value]) => <option key={key} value={key}>{value}</option>)}</select></label>
           {action === 'check' && <label>Script relativo ao projeto<input aria-label="Script GDScript a verificar" required value={script} disabled={busy} maxLength={2000} placeholder="scripts/player.gd" onChange={e => setScript(e.target.value)} /><small>Verifica o script escolhido; importação e gameplay são verificações separadas.</small></label>}
           {action === 'run' && <><label>Cena relativa ao projeto (opcional)<input aria-label="Cena Godot a executar" value={scene} disabled={busy} maxLength={2000} placeholder="Vazio executa a cena principal" onChange={e => setScene(e.target.value)} /></label><label className="godot-check"><input aria-label="Godot sem janela" type="checkbox" checked={headless} disabled={busy} onChange={e => setHeadless(e.target.checked)} />Executar sem janela (headless)</label></>}
@@ -77,11 +77,16 @@ export function GodotPanel({ taskId, game, disabled, commands, runs, onPrepared 
   </details>
 }
 
-function GodotRun({ taskId, run }: { taskId: number; run: CommandRun }) {
+function GodotRun({ taskId, run }: { taskId: number; run: CommandRunSummary }) {
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const [register, setRegister] = useState(false), [title, setTitle] = useState(''), [version, setVersion] = useState(''), [notes, setNotes] = useState(''), [buildId, setBuildId] = useState<number | null>(null)
   const request = useRef(0)
-  useEffect(() => { ++request.current; setDiagnostics(null); return () => { ++request.current } }, [taskId, run.output, run.status, run.truncated])
+  useEffect(() => {
+    const invalidate=()=>{++request.current;setDiagnostics(null)}
+    invalidate()
+    const off=onChat(e=>{if(e.taskId===taskId&&e.commandOutput?.id===run.id)invalidate()})
+    return()=>{++request.current;off()}
+  }, [taskId, run.id, run.status, run.truncated])
   return <details className="godot-run"><summary>#{run.id} {run.name} · {statusText[run.status]} · exit {run.exit_code ?? '—'}</summary><div className="godot-run-body">
     <small>{run.workspace}</small>
     <div className="step-actions"><button disabled={busy} onClick={async () => { const n = request.current; setBusy(true); setError(''); try { const result: Diagnostics = await api.godotDiagnostics(taskId, run.id); if (n === request.current) setDiagnostics(result) } catch (e) { if (n === request.current) setError(errText(e)) } finally { setBusy(false) } }}>{busy ? 'Consultando…' : 'Consultar diagnóstico'}</button>{run.status === 'running' && <button disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await api.cancelProjectCommand(taskId, run.id) } catch (e) { setError(errText(e)) } finally { setBusy(false) } }}>Cancelar Godot</button>}</div>

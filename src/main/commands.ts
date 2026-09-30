@@ -8,6 +8,8 @@ import { pathKey, sameKey as same } from './guard.ts'
 
 export type ProjectCommand = { name: string; purpose: 'test' | 'build' | 'run'; program: string; args: string[] }
 export type CommandRun = { id: number; task_id: number; workspace: string; name: string; program: string; args: string; status: string; output: string; truncated: number; exit_code: number | null; duration_ms: number | null; error: string | null; started_at: string }
+export type CommandRunSummary = Omit<CommandRun, 'output'>
+const summaryColumns = 'id,task_id,workspace,name,program,args,status,truncated,exit_code,duration_ms,error,started_at'
 // Chave gravada: no Windows/macOS segue minuscula como nos bancos existentes.
 const key = (game: string) => 'commands:' + pathKey(game)
 export function normalizeCommand(raw: any): ProjectCommand {
@@ -27,7 +29,16 @@ export function saveCommands(db: DatabaseSync, game: string, raw: unknown) {
   db.prepare('INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)').run(key(game), JSON.stringify(commands))
   return commands
 }
-export const listCommandRuns = (db: DatabaseSync, taskId: number) => db.prepare('SELECT * FROM command_runs WHERE task_id=? ORDER BY id DESC LIMIT 20').all(taskId) as CommandRun[]
+export const listCommandRuns = (db: DatabaseSync, taskId: number) => db.prepare(`SELECT ${summaryColumns} FROM command_runs WHERE task_id=? ORDER BY id DESC LIMIT 20`).all(taskId) as CommandRunSummary[]
+export const commandRun = (db: DatabaseSync, taskId: number, id: number) => db.prepare('SELECT * FROM command_runs WHERE task_id=? AND id=?').get(taskId, id) as CommandRun | undefined
+// Offsets em unidades UTF-16, como String.length/slice no renderer. Não aceitamos avançar além da saída persistida.
+export function commandOutput(db: DatabaseSync, taskId: number, id: number, offset = 0) {
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1_000_000) throw Error('Offset de saída inválido.')
+  const run = commandRun(db, taskId, id)
+  if (!run) throw Error('Comando de outra tarefa ou inexistente.')
+  if (offset > run.output.length) throw Error('Offset além da saída disponível.')
+  return { offset, output: run.output.slice(offset), total: run.output.length, truncated: run.truncated }
+}
 export function reconcileCommands(db: DatabaseSync) {
   db.prepare("UPDATE command_runs SET status='failed',error='Execução interrompida pelo fechamento do app.',ended_at=CURRENT_TIMESTAMP WHERE status='running'").run()
 }
@@ -50,16 +61,22 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
     let id: number
     try { id = Number(db.prepare('INSERT INTO command_runs(task_id,workspace,name,program,args) VALUES (?,?,?,?,?)').run(taskId,cwd,cmd.name,cmd.program,JSON.stringify(cmd.args)).lastInsertRowid) }
     catch(e) { guard.release(cwd,lockId); throw e }
-    const started=Date.now(); let child: ChildProcess | undefined, output='', truncated=false, stopped=false, finished=false, timer: NodeJS.Timeout | undefined, timeoutError: string | undefined, flushTimer: NodeJS.Timeout | undefined
-    const notify=()=>emit({ taskId, commandChanged: true })
-    const flush=()=>{if(flushTimer)clearTimeout(flushTimer);flushTimer=undefined;db.prepare('UPDATE command_runs SET output=?,truncated=? WHERE id=?').run(output,truncated?1:0,id);notify()}
+    const started=Date.now(); let child: ChildProcess | undefined, output='', truncated=false, stopped=false, finished=false, timer: NodeJS.Timeout | undefined, timeoutError: string | undefined, flushTimer: NodeJS.Timeout | undefined, flushedLength=0, flushedTruncated=false
+    const notify=()=>emit({ taskId, game, commandChanged: true, commandRun: db.prepare(`SELECT ${summaryColumns} FROM command_runs WHERE id=?`).get(id) as CommandRunSummary })
+    const flush=()=>{
+      if(flushTimer)clearTimeout(flushTimer);flushTimer=undefined
+      if(output.length===flushedLength&&truncated===flushedTruncated)return
+      db.prepare('UPDATE command_runs SET output=?,truncated=? WHERE id=?').run(output,truncated?1:0,id)
+      flushedLength=output.length;flushedTruncated=truncated
+      emit({taskId,game,commandOutput:{id,outputLength:output.length,truncated}})
+    }
     const finish=(code: number|null,error?: string)=>{
       if(finished)return;finished=true;if(timer)clearTimeout(timer);flush()
       if (!stopped && !error) try { error = checks.resultError?.(cmd, output, truncated, cwd) } catch { error = 'Não foi possível verificar a saída do comando.' }
       db.prepare('UPDATE command_runs SET status=?,exit_code=?,duration_ms=?,error=?,ended_at=CURRENT_TIMESTAMP WHERE id=?').run(stopped?'cancelled':error||code!==0?'failed':'completed',code,Date.now()-started,error??null,id)
       active.delete(id);guard.release(cwd,lockId);notify()
       // Para o aviso de atencao (notify.ts): so o fim de verdade, com exit code e o final da saida.
-      emit({ taskId, commandDone: { id, name: cmd.name, purpose: cmd.purpose, status: stopped ? 'cancelled' : error || code !== 0 ? 'failed' : 'completed', exitCode: code, durationMs: Date.now() - started, error: error ?? null, output: output.slice(-20_000) } })
+      emit({ taskId, game, commandDone: { id, name: cmd.name, purpose: cmd.purpose, status: stopped ? 'cancelled' : error || code !== 0 ? 'failed' : 'completed', exitCode: code, durationMs: Date.now() - started, error: error ?? null, output: output.slice(-20_000) } })
     }
     const cancel=(sync=false)=>{stopped=true;if(child){killTree(child,sync);if(sync)finish(null)}else finish(null)}
     active.set(id,{cwd,taskId,cancel});notify()
@@ -74,7 +91,11 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
         // Dentro do Electron, node.exe pode resolver para o próprio runtime: permitir scripts locais sem abrir outra janela do app.
         child=cliSpawn(exe,cmd.args,{cwd,env:{...process.env,PWD:cwd,ELECTRON_RUN_AS_NODE:'1'}}) // PWD: o Blender resolve caminhos relativos por $PWD, não pelo cwd
         child.stdin?.on('error',()=>{});child.stdin?.end()
-        const append=(text:string)=>{const remaining=1_000_000-output.length;output+=text.slice(0,Math.max(0,remaining));if(text.length>remaining)truncated=true;if(!flushTimer)flushTimer=setTimeout(flush,150)}
+        const append=(text:string)=>{
+          const length=output.length,wasTruncated=truncated,remaining=1_000_000-length
+          output+=text.slice(0,Math.max(0,remaining));if(text.length>remaining)truncated=true
+          if((output.length!==length||truncated!==wasTruncated)&&!flushTimer)flushTimer=setTimeout(flush,150)
+        }
         child.stdout?.setEncoding('utf8');child.stderr?.setEncoding('utf8')
         child.stdout?.on('data',append);child.stderr?.on('data',append)
         child.once('error',e=>finish(null,e.message));child.once('close',code=>finish(code,timeoutError))

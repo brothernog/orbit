@@ -47,6 +47,7 @@ type ChatDeps = {
   onRunStart?: (taskId: number, runId: number, cwd: string) => void // linha de base dos arquivos para o resumo do aviso
   engineGrants?: (game: string, cwd: string) => EngineGrants // engines do organizador presentes na pasta (Godot/Unity/Blender)
   summaryTitles?: () => boolean // Configuracoes: titulo-resumo pelo agente (padrao ligado)
+  onFinished?: (o: { taskId: number; sel: Sel; text: string; status: string; category?: string; partial: string; acts: Act[] }) => void // passagem entre contas (handover.ts)
 }
 export function createChatService(d: ChatDeps) {
   const { db, active, guard, broker, asTask, taskCwd, checkSel, contextLimits, delegationSettings, permissionSettings,
@@ -221,6 +222,7 @@ export function createChatService(d: ChatDeps) {
       }
       // status/tempo/resposta alimentam o aviso de atencao (notify.ts); a interface continua recarregando pelo `done`
       emit({ taskId: t.id, done: true, runId, status: r.status, paused: r.paused, error: r.error, durationMs: r.durationMs, provider: sel.provider, model: sel.model, answer: r.answer || r.text, acts })
+      try { d.onFinished?.({ taskId: t.id, sel, text, status: r.status, category: r.category, partial: r.text, acts }) } catch {}
     })
     return { status: 'started', runId }
   }

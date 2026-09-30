@@ -1,4 +1,4 @@
-// Regressao focal: Electron/React/IPC reais, dados de uso e diagnostico simulados.
+// Regressao focal: Electron/React/IPC reais, uso, diagnostico e comandos simulados.
 // Rode npm run build antes; nenhuma credencial, login ou chamada de inferencia.
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
@@ -14,7 +14,8 @@ const tempRoot = fs.realpathSync.native(os.tmpdir())
 const safeWork = () => path.dirname(fs.realpathSync.native(work)) === tempRoot && path.basename(work).startsWith('orbit-loading-e2e-') && !fs.lstatSync(work).isSymbolicLink()
 assert(safeWork(), 'Pasta temporaria fora do destino esperado.')
 const userdata = path.join(work, 'userdata'), bin = path.join(work, 'bin'), home = path.join(work, 'home')
-for (const dir of [userdata, bin, home]) fs.mkdirSync(dir)
+const game = path.join(work, 'project'), otherGame = path.join(work, 'other-project')
+for (const dir of [userdata, bin, home, game, otherGame]) fs.mkdirSync(dir)
 const unexpectedCli = path.join(work, 'unexpected-cli.log')
 for (const provider of ['claude', 'codex', 'gemini', 'opencode']) {
   fs.writeFileSync(path.join(bin, `${provider}.cmd`), `@echo off\r\n>>"${unexpectedCli}" echo ${provider}\r\nexit /b 99\r\n`)
@@ -22,7 +23,7 @@ for (const provider of ['claude', 'codex', 'gemini', 'opencode']) {
 const entry = path.join(work, 'loading-ui.cjs')
 fs.writeFileSync(entry, `
   const { app, BrowserWindow, ipcMain, shell } = require('electron');
-  const counts = {}, blocked = new Set(), waiters = new Map(), unexpected = [];
+  const counts = {}, calls = {}, blocked = new Set(), waiters = new Map(), unexpected = [];
   const locals = new Map(), handle = ipcMain.handle.bind(ipcMain);
   const localReads = new Set(['getDelegationSettings', 'getNotifySettings', 'getContextLimits', 'delegationReport']);
   ipcMain.handle = (name, fn) => { if(localReads.has(name)) locals.set(name, fn); return handle(name, fn) };
@@ -35,6 +36,14 @@ fs.writeFileSync(entry, `
   ipcMain.handle = handle;
   const quota = { fiveHour: { utilization: 27, resets_at: new Date(Date.now()+3600000).toISOString() }, sevenDay: { utilization: 53, resets_at: new Date(Date.now()+86400000).toISOString() }, seenAt: new Date().toISOString(), cached: true };
   const providers = [{ id: 'codex', exe: 'fixture/codex.cmd', version: 'fixture-known', capabilities: [], missing: [], env: [], auth: {state: 'connected'} }];
+  const game = ${JSON.stringify(game)}, otherGame = ${JSON.stringify(otherGame)};
+  const tasks = [1,2].map(id => ({id, game, title:'Fixture task '+id, state:'aberta', legacy:null, pin_id:null, branch:null, worktree:null, created_at:'2026-01-01 00:00:00', updated_at:'2026-01-01 00:00:00', archived_at:null, sel:JSON.stringify({provider:'codex'})}));
+  const output = new Map();
+  const runs = new Map(tasks.map(task => [task.id, Array.from({length:20}, (_,i) => {
+    const id = task.id*100+i; output.set(id,'log '+id+' inicial\\n');
+    return {id,task_id:task.id,workspace:game,name:'Fixture command '+id,program:'node',args:'[]',status:'completed',truncated:0,exit_code:0,duration_ms:100,error:null,started_at:'2026-01-01 00:00:00'};
+  })]));
+  const configs = [{name:'Fixture command',purpose:'build',program:'node',args:[]}];
   const fixtures = {
     diagnose: () => providers,
     accountStatus: () => ({ state: 'connected', plan: 'fixture' }),
@@ -42,23 +51,43 @@ fs.writeFileSync(entry, `
     codexUsage: () => quota, codexUsageSnapshot: () => quota,
     planetUsage: () => [], planetState: () => ({on: false, right: true, bottom: true}),
     catalog: provider => ({ provider, source: 'manual', at: new Date().toISOString(), models: [], efforts: [], allowCustomModel: true }),
-    listGames: () => []
+    listGames: () => [game,otherGame], projectNames: () => ({}), getProjectGroups: () => [],
+    listTasks: g => g===game ? tasks : [], taskBriefs: () => [], listActive: () => [],
+    novaState: () => ({waiting:[],doneToday:{}}), pulseEvents: () => ({}),
+    projectInfo: () => ({kind:'app',stack:'fixture',repo:false,git:null,worktrees:[],lastActivity:null,openTasks:2}),
+    projectsPulse: () => [], projectUsage: () => [], listDocs: () => [],
+    listAssets: () => [], listPlaytests: () => [], listBuilds: () => [],
+    listBuildCommands: g => g===game ? [...runs.values()].flat().filter(r=>r.status==='completed'&&r.exit_code===0).map(r=>({id:r.id,name:r.name,workspace:r.workspace,task_title:'Fixture task '+r.task_id})) : [],
+    taskChat: id => ({task:tasks.find(t=>t.id===id),running:false,messages:[],metric:null,sel:{provider:'codex'}}),
+    listContextPackages: () => [], listPendingSends: () => [], listSteps: () => [],
+    stopFiles: () => {}, taskFiles: () => ({repo:false,isolated:false,files:[]}),
+    godotState: () => ({organizer:null,available:false,project:null}),
+    worktreeCopy: () => ({list:[],suggestions:[]}),
+    projectCommands: () => configs,
+    listCommandRuns: id => runs.get(id)??[],
+    commandOutput: (taskId,id,offset=0) => { if(!(runs.get(taskId)??[]).some(r=>r.id===id))throw Error('Comando de outra tarefa');const text=output.get(id)??''; return {offset,output:text.slice(offset),total:text.length,truncated:0} }
   };
   const gate = name => blocked.has(name) ? new Promise(resolve => {
     const list = waiters.get(name) ?? []; list.push(resolve); waiters.set(name, list);
   }) : Promise.resolve();
   for(const [name, fn] of Object.entries(fixtures)) {
     ipcMain.removeHandler(name);
-    handle(name, async (_e, ...args) => { counts[name]=(counts[name]??0)+1; await gate(name); return fn(...args) });
+    handle(name, async (_e, ...args) => { counts[name]=(counts[name]??0)+1; (calls[name]??=[]).push(args); const result=structuredClone(fn(...args)); await gate(name); return result });
   }
   for(const [name, fn] of locals) {
     ipcMain.removeHandler(name);
     handle(name, async (e, ...args) => { counts[name]=(counts[name]??0)+1; await gate(name); return fn(e, ...args) });
   }
+  const emit = event => BrowserWindow.getAllWindows().forEach(win => win.webContents.send('chat',event));
   handle('loadingFixture', (_e, action, names=[]) => {
     if(action === 'block') names.forEach(name => blocked.add(name));
     if(action === 'release') names.forEach(name => { blocked.delete(name); for(const resolve of waiters.get(name)??[]) resolve(); waiters.delete(name) });
-    return {counts, pending: Object.fromEntries([...waiters].map(([name,list])=>[name,list.length])), unexpected};
+    if(action === 'releaseNext') names.forEach(name => waiters.get(name)?.shift()?.());
+    if(action === 'releaseLast') names.forEach(name => waiters.get(name)?.pop()?.());
+    if(action === 'emit') names.forEach(emit);
+    if(action === 'run') { const row=names, list=runs.get(row.task_id)??[]; runs.set(row.task_id,[row,...list.filter(r=>r.id!==row.id)].slice(0,20)); if(!output.has(row.id))output.set(row.id,''); emit({taskId:row.task_id,game:row.workspace,commandChanged:true,commandRun:row}) }
+    if(action === 'append') {const {taskId,id,text}=names; output.set(id,(output.get(id)??'')+text);const row=runs.get(taskId).find(r=>r.id===id);emit({taskId,game:row.workspace,commandOutput:{id,outputLength:output.get(id).length,truncated:false}})}
+    return {counts,calls, pending: Object.fromEntries([...waiters].map(([name,list])=>[name,list.length])), unexpected};
   });
 `)
 
@@ -164,9 +193,123 @@ try {
   check('Atualizar diagnostico preserva o anterior enquanto consulta esta pendente', await frames("!!document.querySelector('.prov')?.textContent.includes('fixture-known') && !document.querySelector('.settings').textContent.includes('Consultando as CLIs')"))
   const finalState = await control()
   check('Refresh manual disparou exatamente um diagnostico pendente', finalState.pending.diagnose === 1 && finalState.counts.diagnose === before.counts.diagnose + 1)
-  check('Nenhuma CLI, rede ou login real foi chamado', !fs.existsSync(unexpectedCli) && finalState.unexpected.length === 0)
-  check('Electron sem excecoes nao tratadas', !/UnhandledPromiseRejection|Uncaught|TypeError|ReferenceError/.test(log))
   await control('release', ['diagnose', 'accountUsage', 'accountStatus'])
+
+  const getters = ['listAssets', 'listPlaytests', 'listBuilds', 'listBuildCommands', 'projectCommands', 'listCommandRuns']
+  const count = (state, name) => state.counts[name] ?? 0
+  const unchanged = (a, b, names = getters) => names.every(name => count(a, name) === count(b, name))
+  const row = (id, status = 'running', workspace = game, taskId = 1) => ({ id, task_id: taskId, workspace, name: `Fixture command ${id}`, program: 'node', args: '[]', status, truncated: 0, exit_code: status === 'completed' ? 0 : status === 'failed' ? 1 : null, duration_ms: status === 'running' ? null : 100, error: null, started_at: '2026-01-01 00:00:00' })
+  const stdout = (taskId = 1, targetGame = game, id = 500) => Array.from({ length: 100 }, (_, i) => ({ taskId, game: targetGame, commandOutput: { id, outputLength: i + 1, truncated: false } }))
+  const run = value => control('run', value)
+  const emit = values => control('emit', values)
+  const append = (id, text, taskId = 1) => control('append', { taskId, id, text })
+  const runDetails = id => `[...document.querySelectorAll('.command-result')].find(r=>r.querySelector('summary').textContent.startsWith('#${id} '))`
+  const openRun = id => ev(`${runDetails(id)}.querySelector('summary').click()`)
+  const text = id => `${runDetails(id)}?.querySelector('pre')?.textContent`
+  const openTask = id => ev(`[...document.querySelectorAll('.task-row button.task,.ph-tasks button')].find(b=>b.textContent.includes('Fixture task ${id}')).click()`)
+  const toggleHistory = () => ev("[...document.querySelectorAll('.project-commands details > summary')].find(s=>s.textContent.startsWith('Histórico desta tarefa')).click()")
+
+  await click('button[aria-label="Início"]')
+  await control('block', ['listBuildCommands'])
+  await ev("[...document.querySelectorAll('.rail-ws')].find(b=>b.getAttribute('aria-label').startsWith('Sem organizador,')).click()")
+  await wait("!!document.querySelector('.production')")
+  await wait("window.invoke('loadingFixture','status').then(s=>s.pending.listBuildCommands===1)")
+  const productionBefore = await control()
+  await emit(stdout())
+  check('Rajada de stdout nao recarrega os quatro catalogos de Producao', unchanged(productionBefore, await control()))
+  await emit([{ taskId: 9, game: otherGame, commandChanged: true, commandRun: row(900, 'completed', otherGame, 9) }])
+  await run(row(401, 'failed'))
+  await run(row(402, 'cancelled'))
+  await frames('true')
+  check('Conclusoes de outro projeto, falha e cancelamento nao recarregam Producao', unchanged(productionBefore, await control()))
+  await run(row(400, 'completed'))
+  await wait("window.invoke('loadingFixture','status').then(s=>s.pending.listBuildCommands===2)")
+  const completedState = await control()
+  check('Conclusao com exit 0 recarrega somente os comandos elegiveis da build', count(completedState, 'listBuildCommands') === count(productionBefore, 'listBuildCommands') + 1 && unchanged(productionBefore, completedState, getters.filter(name => name !== 'listBuildCommands')))
+  await control('releaseLast', ['listBuildCommands'])
+  await frames('true')
+  await control('release', ['listBuildCommands'])
+  await wait("[...document.querySelectorAll('[aria-label=\"Comando da build\"] option')].some(o=>o.textContent.startsWith('#400 '))")
+  check('Resposta inicial atrasada preserva a build concluida durante a consulta', await frames("[...document.querySelectorAll('[aria-label=\"Comando da build\"] option')].some(o=>o.textContent.startsWith('#400 '))"))
+
+  await control('block', ['listCommandRuns'])
+  await openTask(1)
+  await wait("!!document.querySelector('.project-commands')")
+  await wait("window.invoke('loadingFixture','status').then(s=>s.pending.listCommandRuns===1)")
+  const taskBefore = await control()
+  check('Historico fechado nao consulta saida nem monta logs e worktree', !count(taskBefore, 'commandOutput') && !count(taskBefore, 'worktreeCopy') && await ev("document.querySelectorAll('.project-commands pre').length===0"))
+  await run(row(500))
+  await wait("document.querySelector('.project-commands > summary').textContent.includes('Executando')")
+  await run(row(500, 'completed'))
+  await wait("!document.querySelector('.project-commands > summary').textContent.includes('Executando')")
+  check('Eventos inicio e fim atualizam metadados sem reler historico/configuracao', unchanged(taskBefore, await control()) && (await control()).pending.listCommandRuns === 1)
+  await click('.project-commands > summary')
+  await wait("!!document.querySelector('.wt-copy')")
+  await toggleHistory()
+  await wait(`${runDetails(500)}?.textContent.includes('Concluído')`)
+  await control('release', ['listCommandRuns'])
+  check('Lista inicial atrasada nao sobrescreve a conclusao recebida por evento', await frames(`${runDetails(500)}?.textContent.includes('Concluído') && document.querySelectorAll('.command-result').length===20`))
+  await toggleHistory()
+  await wait("document.querySelectorAll('.command-result').length===0")
+  const historyBefore = await control()
+  await emit(stdout())
+  await frames('true')
+  check('Rajada de stdout com historico fechado nao consulta catalogos, configuracao ou logs', unchanged(historyBefore, await control()) && count(historyBefore, 'commandOutput') === count(await control(), 'commandOutput'))
+  await emit([{ taskId: 2, game, commandChanged: true, commandRun: row(700, 'running', game, 2) }, ...stdout(2, game, 700)])
+  await frames('true')
+  check('Eventos de outra tarefa nao alteram os metadados desta tarefa', unchanged(historyBefore, await control()) && await ev("!document.querySelector('.project-commands > summary').textContent.includes('Executando')"))
+  await emit([{ game: otherGame, commandConfigChanged: true }])
+  await frames('true')
+  check('Configuracao de outro projeto nao dispara consulta', unchanged(historyBefore, await control()))
+  await emit([{ game, commandConfigChanged: true }])
+  await wait(`window.invoke('loadingFixture','status').then(s=>(s.counts.projectCommands??0)===${count(historyBefore, 'projectCommands') + 1})`)
+  const configured = await control()
+  check('Evento de configuracao recarrega somente os comandos do projeto', count(configured, 'projectCommands') === count(historyBefore, 'projectCommands') + 1 && unchanged(historyBefore, configured, getters.filter(name => name !== 'projectCommands')))
+
+  await toggleHistory()
+  await wait("document.querySelectorAll('.command-result').length===20")
+  check('Abrir historico sem expandir uma execucao ainda nao consulta saida', count(await control(), 'commandOutput') === 0 && await ev("document.querySelectorAll('.project-commands pre').length===0"))
+  await append(500, 'primeira parte\n')
+  await openRun(500)
+  await wait(`${text(500)}==='primeira parte\\n'`)
+  const firstLog = await control()
+  check('Abrir uma execucao consulta somente seu log com offset zero', count(firstLog, 'commandOutput') === 1 && JSON.stringify(firstLog.calls.commandOutput) === JSON.stringify([[1, 500, 0]]))
+  await append(500, 'segunda parte\n')
+  await wait(`${text(500)}==='primeira parte\\nsegunda parte\\n'`)
+  const secondLog = await control()
+  check('Novas partes pedem somente os caracteres apos o offset conhecido', count(secondLog, 'commandOutput') === 2 && secondLog.calls.commandOutput[1][2] === 'primeira parte\n'.length && unchanged(firstLog, secondLog))
+  await control('block', ['commandOutput'])
+  await append(500, 'terceira parte\n')
+  await wait("window.invoke('loadingFixture','status').then(s=>s.pending.commandOutput===1)")
+  await append(500, 'quarta parte\n')
+  check('Eventos durante getter de log pendente compartilham a consulta', (await control()).pending.commandOutput === 1 && count(await control(), 'commandOutput') === 3)
+  await control('releaseNext', ['commandOutput'])
+  await wait(`window.invoke('loadingFixture','status').then(s=>(s.counts.commandOutput??0)===4&&s.pending.commandOutput===1)`)
+  const pendingLog = await control()
+  check('Getter seguinte usa o offset recebido e preserva parte emitida durante espera', pendingLog.calls.commandOutput[3][2] === 'primeira parte\nsegunda parte\nterceira parte\n'.length)
+  await control('release', ['commandOutput'])
+  await wait(`${text(500)}==='primeira parte\\nsegunda parte\\nterceira parte\\nquarta parte\\n'`)
+  check('Log aberto concatena todas as partes sem reler os catalogos', unchanged(secondLog, await control()))
+  await control('block', ['commandOutput'])
+  await append(500, 'resposta antiga ao fechar\n')
+  await wait("window.invoke('loadingFixture','status').then(s=>s.pending.commandOutput===1)")
+  await openRun(500)
+  check('Fechar execucao desmonta o log mesmo com resposta pendente', await frames(`!${runDetails(500)}?.querySelector('pre')`))
+  await control('release', ['commandOutput'])
+  check('Resposta de log antigo nao reaparece apos fechar', await frames(`!${runDetails(500)}?.querySelector('pre')`))
+  await openRun(500)
+  await wait(`${text(500)}?.includes('resposta antiga ao fechar')`)
+  await control('block', ['commandOutput'])
+  await append(500, 'resposta antiga da tarefa\n')
+  await wait("window.invoke('loadingFixture','status').then(s=>s.pending.commandOutput===1)")
+  await openTask(2)
+  await wait("window.invoke('loadingFixture','status').then(s=>s.calls.listCommandRuns.at(-1)?.[0]===2)")
+  await control('release', ['commandOutput'])
+  check('Trocar tarefa descarta resposta de log da tarefa anterior', await frames("![...document.querySelectorAll('.project-commands pre')].some(p=>p.textContent.includes('resposta antiga da tarefa')) && ![...document.querySelectorAll('.command-result summary')].some(s=>s.textContent.startsWith('#500 '))"))
+
+  const allState = await control()
+  check('Nenhuma CLI, rede ou login real foi chamado', !fs.existsSync(unexpectedCli) && allState.unexpected.length === 0)
+  check('Electron sem excecoes nao tratadas', !/UnhandledPromiseRejection|Uncaught|TypeError|ReferenceError/.test(log))
   passed = true
   console.log(`${checks.length}/${checks.length} verificacoes OK`)
 } catch (error) {

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { CommandRun, ProjectCommand } from '../main/commands'
+import type { CommandRunSummary, ProjectCommand } from '../main/commands'
 import type { BlenderAction, BlenderDetails } from '../main/blenderFlow'
 import { EnginePanel } from './EnginePanel'
 
@@ -7,7 +7,7 @@ const actionLabels: Record<BlenderAction, string> = { render: 'Renderizar um qua
 const size = (n: number) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KiB` : `${(n / 1024 / 1024).toFixed(1)} MiB`
 const newer = (file: string | null, blender?: string) => { if (!file || !blender) return false; const [a, b] = file.split('.').map(Number), [c, d] = blender.split('.').map(Number); return a > c || a === c && b > d }
 
-export function BlenderPanel(props: { taskId: number; game: string; disabled: boolean; commands: ProjectCommand[]; runs: CommandRun[]; onPrepared: () => Promise<void> }) {
+export function BlenderPanel(props: { taskId: number; game: string; disabled: boolean; commands: ProjectCommand[]; runs: CommandRunSummary[]; onPrepared: () => Promise<void> }) {
   const [action, setAction] = useState<BlenderAction>('render'), [file, setFile] = useState(''), [output, setOutput] = useState(''), [frame, setFrame] = useState('1'), [script, setScript] = useState('')
   return <EnginePanel<BlenderDetails> {...props} engine="blender" label="Blender"
     facts={(details, probe) => <>

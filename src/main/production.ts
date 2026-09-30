@@ -11,11 +11,11 @@ import type { CommandRun } from './commands.ts'
 export type ReviewState = 'pending' | 'approved' | 'rejected'
 export type AssetVersion = { id: number; asset_id: number; hash: string; size: number; file_name: string; note: string; state: ReviewState; created_at: string; reviewed_at: string | null; pinned: number; pruned_at: string | null }
 export type Asset = { id: number; game: string; title: string; path: string; kind: string; license: string; source: string; tags: string; created_at: string; revision: number; archived_at: string | null; versions: AssetVersion[] }
-export type BuildCommand = CommandRun & { task_title: string }
+export type BuildCommand = Pick<CommandRun, 'id' | 'name' | 'workspace'> & { task_title: string }
 export type Build = { id: number; game: string; title: string; version: string; platform: string; hash: string; size: number; file_name: string; notes: string; state: ReviewState; source_task_id: number | null; source_command_id: number | null; command: string; created_at: string; reviewed_at: string | null; revision: number; archived_at: string | null }
 export type RetentionPreview = { keep: number; token: string; versions: { id: number; asset_id: number; title: string; hash: string; size: number }[]; files: number; bytes: number }
 type Snapshot = { hash: string; size: number; file_name: string }
-type BuildSource = BuildCommand & { task_created_at: string; task_worktree: string | null; ended_at: string | null }
+type BuildSource = CommandRun & { task_title: string; task_created_at: string; task_worktree: string | null; ended_at: string | null }
 const same = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
 const text = (v: unknown, label: string, max: number, required = false) => {
   const result = asStr(v ?? '', label, max).trim()
@@ -170,7 +170,7 @@ export function createProductionService(db: DatabaseSync, dataDir: string) {
       return crypto.createHash('sha256').update(bytes).digest('hex') === v.hash ? `data:${mime};base64,${bytes.toString('base64')}` : null
     } catch { return null }
   }
-  const listBuildCommands = (game: string) => db.prepare("SELECT c.*,t.title task_title FROM command_runs c JOIN tasks t ON t.id=c.task_id WHERE t.game=? AND c.status='completed' AND c.exit_code=0 ORDER BY c.id DESC LIMIT 50").all(game) as BuildCommand[]
+  const listBuildCommands = (game: string) => db.prepare("SELECT c.id,c.name,c.workspace,t.title task_title FROM command_runs c JOIN tasks t ON t.id=c.task_id WHERE t.game=? AND c.status='completed' AND c.exit_code=0 ORDER BY c.id DESC LIMIT 50").all(game) as BuildCommand[]
   const listBuilds = (game: string) => db.prepare('SELECT * FROM project_builds WHERE game=? ORDER BY id DESC').all(game) as Build[]
   async function registerBuild(game: string, raw: any, validateSource?: () => void) {
     const title = text(raw?.title, 'Título', 300, true), version = text(raw?.version, 'Versão', 100, true), platform = text(raw?.platform, 'Plataforma', 100, true), notes = text(raw?.notes, 'Notas', 5000), rel = relativeFile(raw?.path)
