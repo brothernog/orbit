@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened Runtime entitlements (app and helpers). Only the minimum Electron needs:
+  V8 generates JIT code. No sandbox: the CLIs (claude, codex, gemini, opencode) run as
+  child processes under their own signatures and need no entitlement.
+  There are no third-party native modules, so disable-library-validation is not needed.
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+  </dict>
+</plist>

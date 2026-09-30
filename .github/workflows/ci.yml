@@ -30,19 +30,67 @@ jobs:
   package:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     needs: test
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60 # Apple notarization usually takes minutes, sometimes longer
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       - run: npm ci
-      # Sem assinatura de codigo: o Windows mostra o SmartScreen e o macOS pede liberacao manual.
-      - run: npm run build && npx electron-builder --publish never
+      # Windows and Linux without code signing: Windows shows SmartScreen.
+      - if: runner.os != 'macOS'
+        run: npm run build && npx electron-builder --publish never
         env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+      # macOS: signs and notarizes if the secrets exist (build/macos-signing.md); without them (forks, repo not
+      # configured) it builds unsigned, as before. Secrets stay in this step only: Windows would read CSC_LINK.
+      - if: runner.os == 'macOS'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          if [ -n "${CSC_LINK:-}" ] && [ -n "${CSC_KEY_PASSWORD:-}" ]; then
+            echo "Signing with the Developer ID certificate."
+          elif [ -n "${CSC_LINK:-}${CSC_KEY_PASSWORD:-}" ]; then
+            echo "::error::CSC_LINK and CSC_KEY_PASSWORD must be set together."
+            exit 1
+          else
+            # electron-builder treats an empty variable as set: unset it.
+            unset CSC_LINK CSC_KEY_PASSWORD
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            echo "::warning::No CSC_LINK/CSC_KEY_PASSWORD: dmg without a Developer ID signature (ad-hoc only)."
+          fi
+          if [ -n "${APPLE_API_KEY_P8:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
+            # notarytool wants the path to the .p8, not its contents.
+            key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$key")
+            trap 'rm -f "$key"' EXIT
+            export APPLE_API_KEY="$key"
+            if [ -z "${CSC_LINK:-}" ]; then
+              echo "::warning::Notarization key present but no certificate: nothing to notarize."
+            fi
+          elif [ -n "${APPLE_API_KEY_P8:-}${APPLE_API_KEY_ID:-}${APPLE_API_ISSUER:-}" ]; then
+            echo "::error::APPLE_API_KEY, APPLE_API_KEY_ID and APPLE_API_ISSUER must be set together."
+            exit 1
+          else
+            unset APPLE_API_KEY_ID APPLE_API_ISSUER
+            if [ -n "${CSC_LINK:-}" ]; then
+              echo "::warning::Signed but not notarized: Gatekeeper still blocks the downloaded app."
+            fi
+          fi
+          unset APPLE_API_KEY_P8
+          npm run build
+          npx electron-builder --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: orbita-${{ runner.os }}
@@ -52,3 +100,33 @@ jobs:
             dist/*.AppImage
             dist/*.deb
           if-no-files-found: error
+
+  # v* tag: a single job, after all three runners, creates the Release and attaches the installers (no race between them).
+  # If any runner fails, nothing is published. A manual Run workflow only produces artifacts.
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: orbita-*
+          path: installers
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ls -l installers
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # Workflow re-run: replace the files on the existing Release.
+            gh release upload "$TAG" installers/* --clobber
+          else
+            pre=()
+            case "$TAG" in *-*) pre=(--prerelease) ;; esac
+            gh release create "$TAG" installers/* --verify-tag --title "Orbita $TAG" --generate-notes "${pre[@]}"
+          fi
