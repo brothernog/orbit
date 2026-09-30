@@ -34,7 +34,7 @@ import { projectIconData } from './projectIcon.ts'
 import { changedFiles, dirtOf, fileDiff, recentCommits, stopWatching, watchDir } from './fileWatch.ts'
 import { createPulse } from './pulse.ts'
 import { branchView, commitAll, createBranch, issueCreate, issueList, prCreate, prView, pull, push, remoteAhead } from './gitOps.ts'
-import { openDb } from './db.ts'
+import { checkpointDb, openDb } from './db.ts'
 import { asAllowedPath, asInt, asStr, cleanGroups, commitParts, commitPaths, fail, inside, pickGames, safeJoin, samePath } from './guard.ts'
 import { cancelLogin, claudeEnv, claudeStatus, hostlessEnv, logEvent, loginShellPath, loginState, mergePath, openTerminal, probeProvider, providerAuth, startLogin, type LogEntry } from './providers.ts'
 import { parseAliases, validateAliases } from './agents.ts'
@@ -544,6 +544,8 @@ app.on('before-quit', () => {
   mcpServer?.then(m => m.close()).catch(() => {})
   pulse.stop(); stopWatching()
 })
+// Depois das gravacoes de before-quit: esvazia o -wal para o .db ficar completo com o app fechado (copias cruas, restauracao).
+app.on('will-quit', () => { try { checkpointDb(db) } catch {} })
 
 // Snapshot persistido primeiro; refresh opcional compartilhado entre chat, limites e configuracoes.
 const accountUsageService = createAccountUsageService({

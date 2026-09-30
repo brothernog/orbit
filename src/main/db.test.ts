@@ -298,3 +298,12 @@ test('parcial da execucao: grava no intervalo longo, so quando mudou, e nunca de
   save('depois'); assert.equal(partial(), '') // terminado: o UPDATE exige status running
   db.close()
 })
+
+test('v22: consultas de execucoes por tarefa usam o indice runs(task_id,id)', () => {
+  const db = openDb(':memory:')
+  const plan = (q: string) => (db.prepare('EXPLAIN QUERY PLAN ' + q).all(1) as any[]).map(r => r.detail).join(' | ')
+  assert.match(plan("SELECT status FROM runs WHERE task_id=? AND status<>'running' ORDER BY id DESC LIMIT 1"), /USING INDEX runs_task/) // briefs.ts
+  assert.match(plan("SELECT 1 FROM runs WHERE task_id=? AND status='running'"), /USING INDEX runs_task/) // worktreeTasks.ts
+  assert.doesNotMatch(plan("SELECT status FROM runs WHERE task_id=? ORDER BY id DESC LIMIT 1"), /TEMP B-TREE/)
+  db.close()
+})

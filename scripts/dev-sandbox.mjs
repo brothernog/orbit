@@ -34,6 +34,8 @@ const userData = path.join(work, 'userdata')
 fs.mkdirSync(userData, { recursive: true })
 // O seed e sempre uma COPIA que o usuario forneceu; o banco real nunca e aberto por este script.
 if (seed) fs.copyFileSync(seed, path.join(userData, 'dashboard.db'))
+// Seed em WAL: os commits que ainda nao passaram por checkpoint estao no -wal.
+if (seed && fs.existsSync(seed + '-wal')) fs.copyFileSync(seed + '-wal', path.join(userData, 'dashboard.db-wal'))
 const port = process.env.GPD_SANDBOX_PORT ? Number(process.env.GPD_SANDBOX_PORT) : await freePort(9400)
 
 // Sem ELECTRON_RENDERER_URL herdada (ex.: de um 'electron-vite dev' em execucao): a sandbox abre o renderer COMPILADO em out/, isolado do servidor de desenvolvimento.

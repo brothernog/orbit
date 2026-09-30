@@ -291,7 +291,10 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX checkpoints_task ON task_checkpoints(task_id,id);
-  `)
+  `),
+  // v22: execucoes por tarefa (resumos da lista em briefs.ts, troca de pasta em worktreeTasks.ts, exclusao da tarefa).
+  // Sem ele cada consulta varria a tabela runs inteira (EXPLAIN QUERY PLAN: SCAN runs).
+  db => db.exec('CREATE INDEX runs_task ON runs(task_id,id);')
 ]
 
 const PIN_TASK_STATE: Record<string, string> = { aberto: 'aberta', andamento: 'andamento', feito: 'concluida' }
@@ -365,9 +368,14 @@ export function migrate(db: DatabaseSync, backupPrefix?: string) {
   }
 }
 
+// WAL + synchronous=NORMAL: cada commit acrescenta ao -wal sem fsync (no modo rollback eram ~2,5 ms por escrita
+// na thread principal). Queda de energia pode perder os ultimos commits, nunca corrompe. O -wal/-shm entram na troca
+// offline de backups.ts; checkpointDb deixa o .db completo ao sair (scripts que copiam o arquivo cru).
 export function openDb(file: string) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const db = new DatabaseSync(file)
+  db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL')
   migrate(db, file)
   return db
 }
+export const checkpointDb = (db: DatabaseSync) => db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
