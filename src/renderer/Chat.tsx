@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { AGENTS, api, errText, onChat, type Account, type Catalog, type Metric, type Msg, type Provider, type Sel, type Task } from './api'
+import { AGENTS, api, errText, type Account, type Catalog, type Metric, type Msg, type Provider, type Sel, type Task } from './api'
 import { cap, Dropdown, type Opt } from './Dropdown'
 import { Avatar, Icon, PROVIDER } from './icons'
 import { Markdown } from './Markdown'
@@ -16,6 +16,7 @@ import { imageRefs, stripMarks } from './msgImages'
 import { loadRead } from './readCache'
 import { useCachedRead } from './useCachedRead'
 import { usageNote, type QuotaSnapshot } from './usageText'
+import { useTaskChat } from './useTaskChat'
 import { agoText } from './time'
 
 const parseSel = (s: string | null | undefined): Sel | null => {
@@ -163,8 +164,6 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
   task: Task; accounts: Account[]; providers: Provider[] | null; onChange: () => void; draft?: TodoDraft; onDraftUsed?: () => void
 }) {
   const [sel, setSelState] = useState<Sel>(() => parseSel(task.sel) ?? { provider: 'claude', accountId: accounts[0]?.id })
-  const [hist, setHist] = useState<{ running: boolean; awaitingContext?: boolean; messages: Msg[]; task: Task; metric: Metric | null } | null>(null)
-  const [live, setLive] = useState('')
   const [liveMetric, setLiveMetric] = useState<{ occupied: number; capacity: number | null; estimated: boolean; source?: string } | null>(null)
   const [stepId, setStepId] = useState<number | undefined>()
   const [text, setText] = useState('')
@@ -176,7 +175,6 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
   const [atEnd, setAtEnd] = useState(true)
   const msgs = useRef<HTMLDivElement>(null)
   const stick = useRef(true) // so acompanha o fim se o usuario nao estiver lendo mensagens antigas
-  const req = useRef(0) // descarta respostas antigas (troca rapida de tarefa/provedor)
   const cat = useCatalog(sel.provider)
   const pkgs = usePackages(task.id)
   const [inspect, setInspect] = useState(false)
@@ -199,34 +197,19 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
     api.setTaskSel(task.id, next).catch(e => { setSelState(prev); setErr(errText(e)) })
   }
 
-  const load = () => {
-    const n = ++req.current
-    return api.taskChat(task.id, sel).then(h => {
-      if (n !== req.current) return
-      setHist(h)
-      setLive(h.live || (h.running ? '…' : '')) // volta a mostrar o streaming de uma execucao ativa
-      // Sem escolha gravada: sugere o provedor/conta da ultima resposta desta tarefa.
-      if (!h.sel) {
-        const last = [...h.messages].reverse().find((m: Msg) => m.role === 'agent' && m.provider)
-        if (last && last.provider !== sel.provider) setSelState({ provider: last.provider!, accountId: last.account_id ?? undefined })
-      }
-    }, e => setErr(errText(e)))
-  }
+  const { hist, live, load, send: sendChat } = useTaskChat<{ running: boolean; awaitingContext?: boolean; messages: Msg[]; task: Task; metric: Metric | null; live?: string; sel?: string | null }>(task.id, {
+    sel: () => sel, msgs, stick, onError: setErr,
+    // Sem escolha gravada: sugere o provedor/conta da ultima resposta desta tarefa.
+    onLoaded: h => {
+      if (h.sel) return
+      const last = [...h.messages].reverse().find(m => m.role === 'agent' && m.provider)
+      if (last && last.provider !== sel.provider) setSelState({ provider: last.provider!, accountId: last.account_id ?? undefined })
+    },
+    onMetric: setLiveMetric,
+    onDone: loaded => { loaded.then(() => setLiveMetric(null)); onChange() }, // sem piscar vazio no meio
+    onStart: onChange, // execucao iniciada por fora desta tela (ex.: outra janela): sincroniza a lista de tarefas
+  })
   useEffect(() => { setErr(''); setLiveMetric(null); load() }, [task.id, sel.provider, sel.accountId])
-  useEffect(() => onChat(ev => {
-    if (ev.taskId !== task.id) return
-    if (ev.refresh) return void load() // delegacao iniciou/terminou: mensagem de sistema nova
-    if (ev.metric) return void setLiveMetric(ev.metric)
-    if (ev.done) { load().then(() => setLiveMetric(null)); onChange(); return } // load() limpa o streaming junto com a mensagem final: sem piscar vazio no meio
-    if (typeof ev.text !== 'string') return // pedidos de permissao/contexto tambem trazem taskId, mas nao sao texto: nao apagam o streaming
-    setLive(ev.text)
-    // Execucao iniciada por fora desta tela (ex.: outra janela): sincroniza o estado "executando" e a lista de tarefas.
-    setHist(h => { if (h && !h.running) { onChange(); return { ...h, running: true } } return h })
-  }), [task.id, sel.provider, sel.accountId])
-  useEffect(() => {
-    const m = msgs.current
-    if (m && stick.current) m.scrollTop = m.scrollHeight
-  }, [hist, live])
 
   const provider = providers?.find(p => p.id === sel.provider)
   const claudeEnabled = sel.provider === 'claude' && accounts.find(a => a.id === sel.accountId)?.login?.state !== 'connecting'
@@ -243,9 +226,9 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
     const sent = text, sentImages = images
     // Havendo contexto anterior a decidir, a mensagem fica RETIDA (nenhum agente inicia): o cartao acima do compositor pede a decisao.
     // So sai do compositor o que foi enviado: texto e imagens acrescentados durante o envio ficam.
-    api.sendTask(task.id, sel, sent.trim(), sentImages, stepId).then(() => {
+    sendChat(sent.trim(), sentImages, stepId).then(() => {
       setText(t => (t.startsWith(sent) ? t.slice(sent.length).trimStart() : t)); setImages(i => i.filter(x => !sentImages.includes(x)))
-      setStepId(undefined); stick.current = true; pkgs.load(); load(); onChange()
+      setStepId(undefined); stick.current = true; pkgs.load(); onChange()
     }, e => setErr(errText(e))).finally(() => setSending(false))
   }
   // 1568 px: o maior lado que o Claude usa sem reduzir de novo; screenshot continua legivel. Cada imagem custa ~1.500 tokens por chamada.

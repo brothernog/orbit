@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, errText, onChat, type Account, type Msg, type Sel } from './api'
+import { api, errText, type Account, type Msg, type Sel } from './api'
 import { effortLabel, modelName } from './labels'
 import { Icon, PROVIDER } from './icons'
 import { Markdown } from './Markdown'
@@ -8,6 +8,7 @@ import { ContextRequests, UnsentMessages, usePackages } from './TaskContext'
 import { stripMarks } from './msgImages'
 import { Confirm } from './Nav'
 import { useCachedRead } from './useCachedRead'
+import { useTaskChat } from './useTaskChat'
 import './linkedin.css'
 import { CMDS, expand, fold } from './linkedinText'
 
@@ -87,38 +88,31 @@ const isSel = (a: Agent, s: Sel) => a.provider === s.provider && a.model === s.m
 
 export function LinkedIn({ accounts, onErr }: { accounts: Account[]; onErr: (e: string) => void }) {
   const [page, setPage] = useState<{ taskId: number; desk: Desk } | null>(null)
-  const [hist, setHist] = useState<{ running: boolean; awaitingContext?: boolean; messages: Msg[]; sel?: Sel | null } | null>(null)
   const agents = useCachedRead<Agent[]>('getAgentAliases', () => api.getAgentAliases()).data ?? [] // mesma chave de Configuracoes > Agentes
   const [auth, setAuth] = useState<Auth | null>(null)
   const [posted, setPosted] = useState('') // link do ultimo post publicado pela API
-  const [live, setLive] = useState('')
   const [text, setText] = useState('')
   const msgs = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLTextAreaElement>(null)
   const taskId = page?.taskId ?? 0
   const pkgs = usePackages(taskId)
+  const { hist, live, load, send: sendChat } = useTaskChat<{ running: boolean; awaitingContext?: boolean; messages: Msg[]; sel?: Sel | null; live?: string }>(taskId, {
+    sel: () => sel, msgs, onError: onErr, onDone: () => { loadDesk() },
+  })
   // Sem escolha gravada: o primeiro agente nomeado (Configuracoes > Agentes); sem nenhum, o Claude com o modelo padrao da CLI.
   const sel: Sel = hist?.sel?.provider ? hist.sel : agents[0] ? selOf(agents[0], accounts) : { provider: 'claude', accountId: accounts[0]?.id }
   const pick = (a: Agent) => api.setTaskSel(taskId, selOf(a, accounts)).then(() => load(), (e: any) => onErr(errText(e)))
 
   const loadDesk = () => api.linkedin().then(setPage, (e: any) => onErr(errText(e)))
-  const load = () => taskId ? api.taskChat(taskId, sel).then((h: any) => { setHist(h); setLive(h.live || (h.running ? '…' : '')) }, (e: any) => onErr(errText(e))) : Promise.resolve()
   useEffect(() => { loadDesk(); api.linkedinAuth().then(setAuth, () => {}) }, [])
   useEffect(() => { load() }, [taskId])
-  useEffect(() => onChat(ev => {
-    if (ev.taskId !== taskId) return
-    if (ev.refresh) return void load()
-    if (ev.done) { load(); loadDesk(); return }
-    if (typeof ev.text === 'string') { setLive(ev.text); setHist(h => (h && !h.running ? { ...h, running: true } : h)) }
-  }), [taskId])
-  useEffect(() => { const m = msgs.current; if (m) m.scrollTop = m.scrollHeight }, [hist, live])
 
   const running = hist?.running ?? false
   const awaiting = !!hist?.awaitingContext || pkgs.sends.some(s => s.state === 'awaiting_context_approval')
   const send = (raw = text) => {
     const t = raw.trim()
     if (!t || running || awaiting || !taskId) return
-    api.sendTask(taskId, sel, expand(t), []).then(() => { setText(''); pkgs.load(); load() }, (e: any) => onErr(errText(e)))
+    sendChat(expand(t)).then(() => { setText(''); pkgs.load() }, (e: any) => onErr(errText(e)))
   }
 
   const desk = page?.desk
