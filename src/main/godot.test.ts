@@ -99,7 +99,7 @@ test('Godot: ferramentas dependem de um organizador ativo único, aliases e exec
   const group = { id: 'g', name: 'Examples', games: [f.d], godot: { enabled: true, executable: 'godot' } }
   try {
     assert.equal(godotOrganizer(db, f.d), null)
-    save([group]); assert.equal(godotOrganizer(db, f.d.toUpperCase())?.id, 'g')
+    save([group]); assert.equal(godotOrganizer(db, process.platform === 'linux' ? f.d : f.d.toUpperCase())?.id, 'g') // Linux diferencia caixa: outra pasta
     save([{ ...group, godot: { enabled: true, executable: '  ' } }]); assert.equal(godotOrganizer(db, f.d)?.config.executable, 'godot')
     assert.equal(godotOrganizer(db, path.join(f.d, 'other')), null)
     save([{ ...group, godot: { enabled: false, executable: 'godot' } }]); assert.equal(godotOrganizer(db, f.d), null)

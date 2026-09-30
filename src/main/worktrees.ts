@@ -92,10 +92,11 @@ export function createWorktreeService(db: DatabaseSync) {
   const pair = async (game: string, source: string, knownTarget?: Checkout, knownRegistry?: Awaited<ReturnType<typeof registry>>) => {
     const target = knownTarget ?? await checkout(game)
     const managed = path.resolve(target.path, '.worktrees'), requested = path.resolve(source)
-    if (!inside(managed, requested) || !fs.existsSync(requested) || !fs.existsSync(managed)) throw new Error('Worktree fora da pasta gerenciada ou ausente.')
+    if (!fs.existsSync(requested) || !fs.existsSync(managed)) throw new Error('Worktree fora da pasta gerenciada ou ausente.')
+    // Compara caminhos reais: target.path ja e real e a origem pode chegar por symlink (macOS: /var -> /private/var).
     const realManaged = fs.realpathSync.native(managed), realSource = fs.realpathSync.native(requested)
     if (!inside(target.path, realManaged) || !inside(realManaged, realSource)) throw new Error('Worktree fora da pasta gerenciada.')
-    const item = (knownRegistry ?? await registry(game)).find(w => typeof w.worktree === 'string' && samePath(w.worktree, requested))
+    const item = (knownRegistry ?? await registry(game)).find(w => typeof w.worktree === 'string' && samePath(fs.existsSync(w.worktree) ? fs.realpathSync.native(w.worktree) : w.worktree, realSource))
     if (!item) throw new Error('Pasta nao registrada como worktree deste projeto.')
     const from = await checkout(requested)
     if (!samePath(from.commonDir, target.commonDir) || samePath(from.path, target.path) || from.branch === target.branch) throw new Error('Origem e destino precisam ser worktrees distintas do mesmo repositorio.')

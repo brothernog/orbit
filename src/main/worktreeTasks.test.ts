@@ -63,7 +63,7 @@ test('remover worktree limpa todas as referências, inclusive alias após remoç
   fs.mkdirSync(parent); fs.symlinkSync(parent, alias, process.platform === 'win32' ? 'junction' : 'dir')
   const removed = path.join(parent, 'removed'), pinPath = path.join(alias, 'removed')
   const pin = Number(db.prepare("INSERT INTO pins(game,title,worktree,branch) VALUES ('game','Problema',?,'task/source')").run(pinPath).lastInsertRowid)
-  const orphanPin = Number(db.prepare("INSERT INTO pins(game,title,worktree,branch) VALUES ('game','Sem tarefa',?,'task/source')").run(removed.toUpperCase()).lastInsertRowid)
+  const orphanPin = Number(db.prepare("INSERT INTO pins(game,title,worktree,branch) VALUES ('game','Sem tarefa',?,'task/source')").run(process.platform === 'linux' ? removed : removed.toUpperCase()).lastInsertRowid) // Linux diferencia caixa
   const same = createTask(db, 'game', 'Mesma pasta')
   db.prepare("UPDATE tasks SET pin_id=?,worktree=?,branch='task/source' WHERE id=?").run(pin, pinPath, task)
   db.prepare("UPDATE tasks SET worktree=?,branch='task/source' WHERE id=?").run(path.join(parent, '.', 'removed'), same)
