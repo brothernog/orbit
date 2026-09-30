@@ -5,6 +5,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { Worker } from 'node:worker_threads'
 import { sha } from './artifacts.ts'
 import { safeJoin } from './guard.ts'
 
@@ -12,7 +13,9 @@ const SKIP = new Set(['node_modules', '.git', '.worktrees', 'out', 'dist', 'buil
 export type WsCtx = { cwd: string; allow?: (rel: string) => boolean; session?: string } // allow: escopo da delegacao (relativo, com /); session: identidade de execucao (recibos de leitura)
 const MAX_FILE = 1_000_000, MAX_SCAN = 5000, LINE_CLIP = 200
 
-const rel = (root: string, abs: string) => path.relative(fs.realpathSync(root), abs).split(path.sep).join('/') || '.'
+// `root` ja resolvido (realpath): a varredura resolve a raiz uma vez, nao por arquivo.
+const relFrom = (rootReal: string, abs: string) => path.relative(rootReal, abs).split(path.sep).join('/') || '.'
+const rel = (root: string, abs: string) => relFrom(fs.realpathSync(root), abs)
 function resolve(ctx: WsCtx, p: string | undefined): { abs: string; rel: string } {
   const p0 = (p ?? '.').trim() || '.'
   if (path.isAbsolute(p0) || /^[a-z]:/i.test(p0) || p0.split(/[\\/]/).includes('..')) throw new Error(`Caminho fora da area de trabalho: "${p0}".`)
@@ -25,60 +28,122 @@ function resolve(ctx: WsCtx, p: string | undefined): { abs: string; rel: string 
 export const globToRegex = (g: string) =>
   new RegExp('^' + g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\/?/g, '\0').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\0/g, '(?:.*/)?') + '$', 'i')
 
-function* walk(ctx: WsCtx, dirAbs: string, state: { scanned: number; stopped: boolean }): Generator<{ abs: string; rel: string }> {
+function* walk(ctx: WsCtx, dirAbs: string, state: { scanned: number; stopped: boolean }, rootReal = fs.realpathSync(ctx.cwd)): Generator<{ abs: string; rel: string }> {
   let entries: fs.Dirent[]
   try { entries = fs.readdirSync(dirAbs, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)) } catch { return }
   for (const e of entries) {
     const abs = path.join(dirAbs, e.name)
-    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walk(ctx, abs, state) } // links/junctions nao sao seguidos
+    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walk(ctx, abs, state, rootReal) } // links/junctions nao sao seguidos
     else if (e.isFile()) {
       if (state.scanned >= MAX_SCAN) { state.stopped = true; return }
       state.scanned++
-      const r = rel(ctx.cwd, abs)
+      const r = relFrom(rootReal, abs)
+      if (!ctx.allow || ctx.allow(r)) yield { abs, rel: r }
+    }
+  }
+}
+// Mesma varredura (ordem, SKIP, MAX_SCAN, escopo), assincrona: a busca do MCP roda no processo principal do app.
+async function* walkAsync(ctx: WsCtx, dirAbs: string, state: { scanned: number; stopped: boolean }, rootReal: string): AsyncGenerator<{ abs: string; rel: string }> {
+  let entries: fs.Dirent[]
+  try { entries = (await fs.promises.readdir(dirAbs, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name)) } catch { return }
+  for (const e of entries) {
+    if (state.stopped) return
+    const abs = path.join(dirAbs, e.name)
+    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walkAsync(ctx, abs, state, rootReal) }
+    else if (e.isFile()) {
+      if (state.scanned >= MAX_SCAN) { state.stopped = true; return }
+      state.scanned++
+      const r = relFrom(rootReal, abs)
       if (!ctx.allow || ctx.allow(r)) yield { abs, rel: r }
     }
   }
 }
 
+// O padrao regex vem do agente: backtracking catastrofico travaria a thread principal. Ele roda num worker que e encerrado
+// quando a busca estoura FIND_BUDGET_MS; o resultado parcial sai rotulado. Busca literal (padrao escapado) e linear.
+const FIND_BUDGET_MS = 10_000, READ_BATCH = 8
+const REGEX_WORKER = `const { parentPort, workerData } = process.getBuiltinModule('node:worker_threads') // vale em CJS e ESM
+const re = new RegExp(workerData, 'i')
+parentPort.on('message', text => { const hits = [], lines = text.split(/\\r?\\n/); for (let i = 0; i < lines.length; i++) if (re.test(lines[i])) hits.push(i); parentPort.postMessage(hits) })`
+type Matcher = { match: (text: string, deadline: number) => Promise<number[] | null>; close: () => void } // null = tempo esgotado
+function literalMatcher(re: RegExp): Matcher {
+  return { match: async text => text.split(/\r?\n/).flatMap((line, i) => re.test(line) ? [i] : []), close: () => {} }
+}
+function regexMatcher(pattern: string): Matcher {
+  const w = new Worker(REGEX_WORKER, { eval: true, workerData: pattern })
+  let failure: Error | undefined, pending: ((e: Error) => void) | undefined
+  w.on('error', (e: Error) => { failure = e; pending?.(e) }) // sempre ouvido: erro antes da primeira busca nao derruba o processo
+  return {
+    match: (text, deadline) => new Promise((ok, fail) => {
+      if (failure) return fail(failure)
+      const done = (fn: () => void) => { clearTimeout(timer); w.off('message', onHits); pending = undefined; fn() }
+      const onHits = (hits: number[]) => done(() => ok(hits))
+      const timer = setTimeout(() => done(() => { void w.terminate(); ok(null) }), Math.max(0, deadline - Date.now()))
+      pending = e => done(() => fail(e))
+      w.on('message', onHits); w.postMessage(text)
+    }),
+    close: () => { void w.terminate() }
+  }
+}
+
 export type FindArgs = { mode?: 'search' | 'list'; pattern?: string; regex?: boolean; path?: string; glob?: string; maxResults?: number }
-export function findInWorkspace(ctx: WsCtx, a: FindArgs): string {
+const readText = async (abs: string): Promise<string | null> => {
+  try { if ((await fs.promises.stat(abs)).size > MAX_FILE) return null; const b = await fs.promises.readFile(abs); return b.subarray(0, 4096).includes(0) ? null : b.toString('utf8') } catch { return null }
+}
+export async function findInWorkspace(ctx: WsCtx, a: FindArgs, o: { budgetMs?: number } = {}): Promise<string> {
   const mode = a.mode ?? (a.pattern ? 'search' : 'list')
   const max = Math.min(Math.max(Math.round(a.maxResults ?? 50), 1), 200)
   const base = resolve(ctx, a.path)
   if (!fs.existsSync(base.abs)) throw new Error(`Caminho inexistente: "${base.rel}".`)
   const glob = a.glob ? globToRegex(a.glob) : null
-  const state = { scanned: 0, stopped: false }
-  const files = fs.statSync(base.abs).isFile() ? [{ abs: base.abs, rel: base.rel }].filter(f => !ctx.allow || ctx.allow(f.rel)) : walk(ctx, base.abs, state)
+  let re: RegExp | undefined
+  if (mode !== 'list') {
+    if (!a.pattern || a.pattern.length > 200) throw new Error('pattern obrigatorio (ate 200 caracteres).')
+    try { re = a.regex ? new RegExp(a.pattern, 'i') : new RegExp(a.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } catch { throw new Error('Expressao regular invalida.') }
+  }
+  const state = { scanned: 0, stopped: false }, deadline = Date.now() + (o.budgetMs ?? FIND_BUDGET_MS)
+  const files = (await fs.promises.stat(base.abs)).isFile() ? (async function* () { if (!ctx.allow || ctx.allow(base.rel)) yield { abs: base.abs, rel: base.rel } })() : walkAsync(ctx, base.abs, state, fs.realpathSync(ctx.cwd))
   const out: string[] = []
-  let total = 0, matchedFiles = 0
+  let total = 0, matchedFiles = 0, timedOut = false
   if (mode === 'list') {
-    for (const f of files) {
+    for await (const f of files) {
       if (glob && !glob.test(f.rel)) continue
       total++
-      if (out.length < max) out.push(`${f.rel} (${fs.statSync(f.abs).size} bytes)`)
+      if (out.length < max) out.push(`${f.rel} (${(await fs.promises.stat(f.abs)).size} bytes)`)
     }
   } else {
-    if (!a.pattern || a.pattern.length > 200) throw new Error('pattern obrigatorio (ate 200 caracteres).')
-    let re: RegExp
-    try { re = a.regex ? new RegExp(a.pattern, 'i') : new RegExp(a.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') } catch { throw new Error('Expressao regular invalida.') }
-    for (const f of files) {
-      if (glob && !glob.test(f.rel)) continue
-      let text: string
-      try { if (fs.statSync(f.abs).size > MAX_FILE) continue; const b = fs.readFileSync(f.abs); if (b.subarray(0, 4096).includes(0)) continue; text = b.toString('utf8') } catch { continue }
-      let hit = false
-      text.split(/\r?\n/).forEach((line, i) => {
-        if (!re.test(line)) return
-        total++; hit = true
-        if (out.length < max) out.push(`${f.rel}:${i + 1}: ${line.length > LINE_CLIP ? line.slice(0, LINE_CLIP) + '…' : line}`)
-      })
-      if (hit) matchedFiles++
+    const matcher = a.regex ? regexMatcher(a.pattern!) : literalMatcher(re!)
+    // Leitura em lotes de READ_BATCH (concorrencia limitada); a contagem segue a ordem da varredura.
+    const scan = async (batch: { abs: string; rel: string }[]) => {
+      const texts = await Promise.all(batch.map(f => readText(f.abs)))
+      for (let k = 0; k < batch.length && !timedOut; k++) {
+        const text = texts[k]
+        if (text === null) continue
+        const hits = await matcher.match(text, deadline)
+        if (!hits) { timedOut = true; break }
+        const lines = hits.length ? text.split(/\r?\n/) : []
+        for (const i of hits) { total++; if (out.length < max) { const line = lines[i]; out.push(`${batch[k].rel}:${i + 1}: ${line.length > LINE_CLIP ? line.slice(0, LINE_CLIP) + '…' : line}`) } }
+        if (hits.length) matchedFiles++
+      }
     }
+    try {
+      let batch: { abs: string; rel: string }[] = []
+      for await (const f of files) {
+        if (glob && !glob.test(f.rel)) continue
+        batch.push(f)
+        if (batch.length === READ_BATCH) { await scan(batch); batch = [] }
+        if (timedOut || Date.now() > deadline) { timedOut = true; break }
+      }
+      if (!timedOut) await scan(batch)
+    } finally { matcher.close() }
   }
   const truncated = total > out.length
   const head = mode === 'list'
     ? `${total} arquivo(s)${truncated ? `; mostrando ${out.length} (TRUNCADO: use path/glob mais estreito ou aumente maxResults)` : ''}`
     : `${total} ocorrencia(s) em ${matchedFiles} arquivo(s)${truncated ? `; mostrando ${out.length} (TRUNCADO: refine pattern/path/glob ou aumente maxResults)` : ''}`
-  return [head, state.stopped ? `AVISO: varredura interrompida apos ${MAX_SCAN} arquivos; o total pode estar incompleto.` : '', ...out].filter(Boolean).join('\n')
+  const warning = timedOut ? `AVISO: busca interrompida no limite de ${Math.round((o.budgetMs ?? FIND_BUDGET_MS) / 1000)} s (expressao regular lenta ou area grande demais); o total pode estar incompleto.`
+    : state.stopped ? `AVISO: varredura interrompida apos ${MAX_SCAN} arquivos; o total pode estar incompleto.` : ''
+  return [head, warning, ...out].filter(Boolean).join('\n')
 }
 
 // ---- Recibos de leitura: prova de que UM intervalo exato de UM arquivo ja foi entregue a ESTA sessao. Ficam so em memoria (limite por sessao,
