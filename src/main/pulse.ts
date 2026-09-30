@@ -31,7 +31,16 @@ export function createPulse(o: {
   const dirs = new Map<string, { t: Tracked; off: () => void; base: Totals | null; timer?: ReturnType<typeof setTimeout> }>()
   const events = new Map<string, PulseEvent[]>() // por projeto
 
-  const measure = async (key: string) => {
+  // Uma leitura por pasta de cada vez: duas em paralelo podiam terminar fora de ordem e deixar a base mais antiga por ultimo.
+  // Gravacoes durante a leitura pedem uma nova rodada ao terminar.
+  const running = new Set<string>(), again = new Set<string>()
+  const measure = async (key: string): Promise<void> => {
+    if (running.has(key)) { again.add(key); return }
+    running.add(key)
+    try { await measureOnce(key) } finally { running.delete(key) }
+    if (again.delete(key)) return measure(key)
+  }
+  const measureOnce = async (key: string) => {
     const d = dirs.get(key)
     if (!d) return
     let cur: Totals

@@ -34,3 +34,24 @@ test('pulso: linha de base ao entrar, evento por rodada de gravacao com o proved
   clock += 3600_001
   assert.deepEqual(p.events(), {}) // passou uma hora: some
 })
+
+test('pulso: leituras da mesma pasta nao se sobrepoem; a base final e a leitura mais nova', async () => {
+  const pending: ((t: Totals) => void)[] = []
+  let fire: (() => void) | null = null, inFlight = 0, maxInFlight = 0
+  const p = createPulse({
+    watch: (_d, cb) => { fire = cb; return () => {} },
+    sample: () => new Promise<Totals>(r => { inFlight++; maxInFlight = Math.max(maxInFlight, inFlight); pending.push(t => { inFlight--; r(t) }) }),
+    now: () => 1, settleMs: 0,
+  })
+  p.track([{ dir: 'C:/jogo', game: 'C:/jogo', provider: 'codex' }]) // linha de base pendente
+  fire!(); await tick(); fire!(); await tick() // duas rajadas enquanto a base ainda le
+  assert.equal(pending.length, 1)
+  pending.shift()!(T({ 'a.gd': [1, 0] })); await tick() // base; as rajadas viram UMA nova leitura
+  assert.equal(pending.length, 1)
+  pending.shift()!(T({ 'a.gd': [5, 0] })); await tick()
+  assert.equal(pending.length, 0); assert.equal(maxInFlight, 1)
+  assert.deepEqual(p.events()['C:/jogo'].map(e => e.v), [4])
+  fire!(); await tick(); pending.shift()!(T({ 'a.gd': [5, 0] })); await tick()
+  assert.deepEqual(p.events()['C:/jogo'].map(e => e.v), [4]) // base ficou na leitura mais nova: sem pico repetido
+  p.stop()
+})
