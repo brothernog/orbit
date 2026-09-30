@@ -118,9 +118,9 @@ function NovaStream() {
 type JAction = { type: 'todo'; text: string; project?: string; topic?: string; done?: { tid: string; iid: string; topic: string } } | { type: 'open'; project: string }
 
 // Nova: topo igual em toda parte (roda, titulo, chat). Embaixo, por secao: no Inicio, o resumo de tudo e as to-dos;
-// numa pasta (`below`), as secoes dela. `tag` = organizador da pasta.
+// numa pasta (`below`), as secoes dela, com a mesma to-do. `tag` = organizador da pasta.
 export function Home({ games, tag, siblings, below, active, onOpen, onAdd, lastGame, onTodoTask }: {
-  games: string[]; tag?: { name: string; color: string } | null; siblings?: string[]; below?: ReactNode; active: Active[]; onOpen: (g: string) => void; onAdd: () => void; lastGame: string | null
+  games: string[]; tag?: { name: string; color: string } | null; siblings?: string[]; below?: (todo: TodoApi) => ReactNode; active: Active[]; onOpen: (g: string) => void; onAdd: () => void; lastGame: string | null
   onTodoTask: (game: string, id: number, draft?: TodoDraft) => void
 }) {
   const nova = useNovaState()
@@ -240,7 +240,7 @@ export function Home({ games, tag, siblings, below, active, onOpen, onAdd, lastG
           )}
         </div>
 
-        {below ?? <>
+        {below ? below(todo) : <>
         <section className="digest" aria-label="O que pede você">
           {dg.items.length === 0
             ? <p className="dg-empty"><Icon n="check" size={16} />Nada pede você agora. Bom momento para começar algo novo.</p>

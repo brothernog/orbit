@@ -4,7 +4,7 @@ import { RoadmapCard } from './Home'
 import { Avatar, Icon, PROVIDER } from './icons'
 import { BranchPanel } from './Branch'
 import { useProjects } from './projects'
-import { useTodo } from './Todo'
+import type { TodoApi } from './Todo'
 import { coverTitle, totalText, type TotalLike } from './usageText'
 import { Production } from './Production'
 import { agoText, elapsedMin, same } from './time'
@@ -12,10 +12,9 @@ import { agoText, elapsedMin, same } from './time'
 const STATE = { aberta: 'Aberta', andamento: 'Em andamento', concluida: 'Concluída' }
 
 // Parte de baixo da Nova de uma pasta: proximo passo, recentes, branch e roadmap. O topo (roda, titulo, chat) e o da Nova.
-export function ProjectHome({ game, tasks, active, onOpenTask, onNewTask, onErr }: {
-  game: string; tasks: Task[] | null; active: Active[]; onOpenTask: (id: number) => void; onNewTask: (title?: string) => unknown; onErr: (m: string) => void
+export function ProjectHome({ game, todo, tasks, active, onOpenTask, onNewTask, onErr }: {
+  game: string; todo: TodoApi; tasks: Task[] | null; active: Active[]; onOpenTask: (id: number) => void; onNewTask: (title?: string) => unknown; onErr: (m: string) => void
 }) {
-  const todo = useTodo()
   const [usage, setUsage] = useState<Record<number, TotalLike>>({})
   const info = useProjects([game], 20_000)[game]
   useEffect(() => { api.projectUsage(game).then((rows: { taskId: number; tokens: number | null; state: TotalLike['state']; estimated: boolean }[]) => setUsage(Object.fromEntries(rows.map(r => [r.taskId, { sum: r.tokens, state: r.state, estimated: r.estimated }]))), () => {}) }, [game, tasks])
