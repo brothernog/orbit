@@ -1,7 +1,9 @@
-import type { GodotConfig } from '../main/godot'
+import type { EngineConfig, EngineId } from '../main/engines'
 export type { GodotConfig } from '../main/godot'
-// Organizadores do app; integrações opcionais só valem para os projetos deste grupo.
-export type Group = { id: string; name: string; color: string; games: string[]; open: boolean; godot?: GodotConfig }
+export type { EngineConfig, EngineId } from '../main/engines'
+export type EngineSettings = Partial<Record<EngineId, EngineConfig>>
+// Organizadores do app; integrações opcionais (Godot/Unity/Blender) só valem para os projetos deste grupo.
+export type Group = { id: string; name: string; color: string; games: string[]; open: boolean } & EngineSettings
 
 export const GROUP_COLORS = ['#7cc4ff', '#69d6b5', '#c6a2ff', '#f0a36b', '#f2b45c', '#ff7b6b']
 export const SUGGESTED: [string, string][] = [['Pessoais', '#c6a2ff'], ['Trabalho', '#7cc4ff'], ['Jogos', '#69d6b5'], ['Sites', '#f0a36b']]
@@ -14,8 +16,8 @@ export const moveTo = (groups: Group[], game: string, id: string | null): Group[
     ? { ...x, open: true, games: x.games.includes(game) ? x.games : [...x.games, game] }
     : { ...x, games: x.games.filter(p => p !== game) })
 
-export const newGroup = (groups: Group[], name: string, color: string, games: string[], godot?: GodotConfig): Group[] => {
-  const g: Group = { id: Math.random().toString(36).slice(2, 10), name, color, games: [], open: true, ...(godot ? { godot } : {}) }
+export const newGroup = (groups: Group[], name: string, color: string, games: string[], engines: EngineSettings = {}): Group[] => {
+  const g: Group = { id: Math.random().toString(36).slice(2, 10), name, color, games: [], open: true, ...engines }
   return games.reduce((acc, p) => moveTo(acc, p, g.id), [...groups, g])
 }
 

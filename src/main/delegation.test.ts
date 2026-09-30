@@ -127,13 +127,13 @@ test('leitura: executa o filho com modo read (limitado pelo executor), sem recur
 test('delegação herda somente a capacidade Godot capturada na invocação do pai', async () => {
   reset()
   const f = fake(); f.wire = true
-  const parent = ctx(); parent.godotOrganizerId = 'jogos'
+  const parent = ctx(); parent.engines = { godot: 'jogos' }
   assert.equal((await call(f, parent, { objective: 'leia a cena', provider: 'codex', mode: 'read' })).isError, false)
-  assert.equal(f.wired[0].godotOrganizerId, 'jogos')
+  assert.deepEqual(f.wired[0].engines, { godot: 'jogos' })
   reset()
   const plain = fake(); plain.wire = true
   assert.equal((await call(plain, ctx(), { objective: 'leia a cena', provider: 'codex', mode: 'read' })).isError, false)
-  assert.equal(plain.wired[0].godotOrganizerId, undefined)
+  assert.equal(plain.wired[0].engines, undefined)
 })
 
 test('leitura efetiva por provedor: nao depende so do prompt', () => {

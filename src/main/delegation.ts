@@ -12,6 +12,7 @@ import {
   ApprovalWaiters, bindGrantSession, bindSession, createPackage, currentPackage, finishDelivery, getPackage, invalidatePending, openGrant, pendingItems, PackageLimitError, recordDelivery, renderPackage, verifyForDelivery,
   type Grant, type PackageItem, type PackageRow, type Recipient
 } from './consent.ts'
+import { ENGINES, type EngineGrants } from './engines.ts'
 import { buildEnvelope, excerpt, extractConclusion, type Conclusion } from './envelope.ts'
 import { inScope, pathKey, safeJoin, sameKey } from './guard.ts'
 import type { ContextLimits } from './limits.ts'
@@ -220,7 +221,7 @@ export type ParentCtx = {
   depth: number // 0 = execucao do usuario; filhos nunca recebem a ferramenta, esta checagem e uma segunda barreira
   fails: Map<string, number> // falhas seguidas por provedor nesta execucao
   children: Set<{ cancel: (sync?: boolean) => void }> // cancelados junto com o pai
-  godotOrganizerId?: string // capacidade herdada da invocação, revalidada pelo MCP a cada consulta
+  engines?: EngineGrants // engines concedidas pelo organizador à invocação; revalidadas pelo MCP a cada consulta
 }
 // Ferramentas de contexto/area de trabalho que o filho recebe (nunca delegate_to_agent). null = CLI sem transporte compativel.
 // native: ferramentas nativas do filho quando ele tem o MCP (ver taskContext.childToolset); keepSession: a execucao terminou na MESMA sessao nativa,
@@ -237,7 +238,7 @@ export type Deps = {
   waiters: ApprovalWaiters
   catalogCheck: (provider: string, model?: string, effort?: string) => Promise<string | null>
   runChild: (p: { provider: string; opts: ChatOpts; cwd: string; env: NodeJS.ProcessEnv; input: string; session?: string }) => Child
-  childTools?: (p: { taskId: number; lineage: string; auth: Grant; delegationId: number; provider: string; mode: 'read' | 'edit'; cwd: string; scope: string[]; godotOrganizerId?: string }) => Promise<ChildWire | null>
+  childTools?: (p: { taskId: number; lineage: string; auth: Grant; delegationId: number; provider: string; mode: 'read' | 'edit'; cwd: string; scope: string[]; engines?: EngineGrants }) => Promise<ChildWire | null>
   envFor: (provider: string, accountId?: number) => NodeJS.ProcessEnv
   otherTasksActiveIn: (workspace: string, taskId: number) => boolean
   note: (taskId: number, text: string) => void // mensagem de sistema no chat do pai (+ atualizacao da tela)
@@ -365,7 +366,7 @@ export async function runDelegation(d: Deps, ctx: ParentCtx, raw: unknown, signa
   const before = snapshot(ctx.cwd)
   // Identidade efetiva do filho (criada aqui, nunca informada por ele): continuacao legitima = mesma sessao + mesmo destinatario = mesmo grant.
   const grant = openGrant(d.db, { taskId: ctx.taskId, recipient, sessionId: sid ?? null })
-  const wire = await d.childTools?.({ taskId: ctx.taskId, lineage, auth: grant, delegationId: id, provider: a.provider, mode: a.mode, cwd: ctx.cwd, scope, godotOrganizerId: ctx.godotOrganizerId }).catch(() => null) ?? null
+  const wire = await d.childTools?.({ taskId: ctx.taskId, lineage, auth: grant, delegationId: id, provider: a.provider, mode: a.mode, cwd: ctx.cwd, scope, engines: ctx.engines }).catch(() => null) ?? null
   // Politica nativa de "sempre permitir" (Codex sandbox/rede, OpenCode --auto e regras): so em edicao. O modo leitura nunca e alargado.
   const np = a.mode === 'edit' ? d.nativePolicy?.(a.provider) : undefined
   const extra = [...(wire?.extra ?? []), ...(np?.opts.extra ?? [])]
@@ -379,7 +380,7 @@ export async function runDelegation(d: Deps, ctx: ParentCtx, raw: unknown, signa
   const packageText = deliver.length ? renderPackage(deliver.flatMap(x => x.items), { uncertain: deliver.some(x => x.uncertain) }) : ''
   const input = buildChildInput({
     mode: a.mode, scope, objective: a.objective, filesText: excerptsText, rangeTool: !!wire, packageText, delegationId: id, continuationOf: a.continuationOf,
-    brief: runtimeBrief({ memoryTools: !!wire, workspaceTools: !!wire, nativeSearch: !!wire?.native?.includes('Grep'), testEvidence: !wire?.tools || wire.tools.includes('test_evidence'), ...(wire ? { skills: 'child' as const } : {}) }) // sem MCP compativel: so o resumo minimo
+    brief: runtimeBrief({ memoryTools: !!wire, workspaceTools: !!wire, nativeSearch: !!wire?.native?.includes('Grep'), testEvidence: !wire?.tools || wire.tools.includes('test_evidence'), ...(wire ? { skills: 'child' as const, engines: ENGINES.filter(e => wire.tools?.some(t => t.startsWith(e + '_'))) } : {}) }) // sem MCP compativel: so o resumo minimo
   })
   const deliveries = deliver.map(x => ({ x, id: recordDelivery(d.db, x.pkg, sid ?? '', x.items) }))
 

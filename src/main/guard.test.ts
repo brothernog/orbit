@@ -74,6 +74,10 @@ test('Godot é opt-in por organizador e configuração inválida não habilita f
   assert.deepEqual(cleanGroups([{ ...base, godot: { enabled: true, executable: ' godot ' } }])[0].godot, { enabled: true, executable: 'godot' })
   assert.deepEqual(cleanGroups([{ ...base, godot: { enabled: false, executable: '' } }])[0].godot, { enabled: false, executable: '' })
   for (const godot of [true, [], { enabled: 'true', executable: '' }, { enabled: true, executable: 4 }, { enabled: true, executable: 'godot\n--other' }]) assert.throws(() => cleanGroups([{ ...base, godot }]), /Godot inválida/)
+  const both = cleanGroups([{ ...base, unity: { enabled: true, executable: ' C:/Unity/Editor/Unity.exe ' }, blender: { enabled: false, executable: '' }, other: { enabled: true } }])[0] as any
+  assert.deepEqual([both.unity, both.blender, both.other], [{ enabled: true, executable: 'C:/Unity/Editor/Unity.exe' }, { enabled: false, executable: '' }, undefined])
+  assert.throws(() => cleanGroups([{ ...base, unity: { enabled: true, executable: 'x\0' } }]), /Unity inválida/)
+  assert.throws(() => cleanGroups([{ ...base, blender: { enabled: 1, executable: '' } }]), /Blender inválida/)
 })
 
 test('arquivos do commit: relativos e dentro da pasta', () => {

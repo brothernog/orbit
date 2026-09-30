@@ -36,7 +36,7 @@ test('chat: Godot prepara MCP mesmo sem delegação; revogação durante preparo
   const service = createChatService({ db, active: new Map(), guard: new WorkspaceGuard(), broker: {} as any,
     asTask: id => getTask(db, id), taskCwd: () => process.cwd(), checkSel: async () => {}, workspaceBusy: () => false,
     contextLimits: () => DEFAULT_LIMITS, delegationSettings: () => ({ ...DEFAULT_SETTINGS, enabled: false }), permissionSettings: () => normalizePermissionSettings(null),
-    godotOrganizer: () => organizer, getMcp: () => { entered(); return waiting }, mcpDir: () => process.cwd(), nativeFor: forbidden, envFor: forbidden,
+    engineGrants: () => organizer ? { godot: organizer } : {}, getMcp: () => { entered(); return waiting }, mcpDir: () => process.cwd(), nativeFor: forbidden, envFor: forbidden,
     emit: () => {}, note: () => {}, logFor: () => () => {}, accountRow: () => null, setSetting: () => {}, recordMetric: () => {}, registerParent: forbidden, unregisterToken: () => {}, attachRoot: process.cwd(), linkedinDir: process.cwd() + '/linkedin'
   })
   const send = service.sendTask(task, { provider: 'codex' }, 'Consulte a cena')

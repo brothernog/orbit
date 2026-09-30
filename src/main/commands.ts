@@ -33,7 +33,7 @@ export function reconcileCommands(db: DatabaseSync) {
 }
 export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, agentsBusy: (cwd: string) => boolean, emit: (ev: object) => void, checks: {
   beforeSpawn?: (taskId: number, game: string, cwd: string, command: ProjectCommand) => void
-  resultError?: (command: ProjectCommand, output: string, truncated: boolean) => string | undefined
+  resultError?: (command: ProjectCommand, output: string, truncated: boolean, cwd: string) => string | undefined
 } = {}) {
   const active = new Map<number, { cwd: string; taskId: number; cancel: (sync?: boolean) => void }>()
   const busy = (cwd: string) => [...active.values()].some(r => same(r.cwd,cwd))
@@ -55,7 +55,7 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
     const flush=()=>{if(flushTimer)clearTimeout(flushTimer);flushTimer=undefined;db.prepare('UPDATE command_runs SET output=?,truncated=? WHERE id=?').run(output,truncated?1:0,id);notify()}
     const finish=(code: number|null,error?: string)=>{
       if(finished)return;finished=true;if(timer)clearTimeout(timer);flush()
-      if (!stopped && !error) try { error = checks.resultError?.(cmd, output, truncated) } catch { error = 'Não foi possível verificar a saída do comando.' }
+      if (!stopped && !error) try { error = checks.resultError?.(cmd, output, truncated, cwd) } catch { error = 'Não foi possível verificar a saída do comando.' }
       db.prepare('UPDATE command_runs SET status=?,exit_code=?,duration_ms=?,error=?,ended_at=CURRENT_TIMESTAMP WHERE id=?').run(stopped?'cancelled':error||code!==0?'failed':'completed',code,Date.now()-started,error??null,id)
       active.delete(id);guard.release(cwd,lockId);notify()
       // Para o aviso de atencao (notify.ts): so o fim de verdade, com exit code e o final da saida.
@@ -72,7 +72,7 @@ export function createCommandService(db: DatabaseSync, guard: WorkspaceGuard, ag
         normalizeCommand({...cmd,program:exe})
         checks.beforeSpawn?.(taskId, game, cwd, cmd) // resolução assíncrona: revalidar destino e arquivos imediatamente antes de executar
         // Dentro do Electron, node.exe pode resolver para o próprio runtime: permitir scripts locais sem abrir outra janela do app.
-        child=cliSpawn(exe,cmd.args,{cwd,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}})
+        child=cliSpawn(exe,cmd.args,{cwd,env:{...process.env,PWD:cwd,ELECTRON_RUN_AS_NODE:'1'}}) // PWD: o Blender resolve caminhos relativos por $PWD, não pelo cwd
         child.stdin?.on('error',()=>{});child.stdin?.end()
         const append=(text:string)=>{const remaining=1_000_000-output.length;output+=text.slice(0,Math.max(0,remaining));if(text.length>remaining)truncated=true;if(!flushTimer)flushTimer=setTimeout(flush,150)}
         child.stdout?.setEncoding('utf8');child.stderr?.setEncoding('utf8')

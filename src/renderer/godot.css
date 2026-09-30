@@ -3,27 +3,27 @@
 .gd-godot .check { min-height: 40px; color: var(--text); }
 .gd-body .gd-godot input[type=checkbox] { width: 16px; height: 16px; padding: 0; border-radius: 0; flex: none; }
 .group-dlg .gd-body { max-height: 65vh; overflow-y: auto; }
-.godot-panel { min-width: 0; }
-.godot-panel > summary { color: var(--text); }
-.godot-panel > summary span { color: var(--muted); }
-.godot-panel .workflow-body { display: grid; gap: 12px; }
-.godot-panel .godot-head, .godot-panel .step-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.godot-panel .godot-head { justify-content: space-between; }
-.godot-panel .godot-facts { display: grid; gap: 4px; margin: 0; }
+:is(.godot-panel, .engine-panel) { min-width: 0; }
+:is(.godot-panel, .engine-panel) > summary { color: var(--text); }
+:is(.godot-panel, .engine-panel) > summary span { color: var(--muted); }
+:is(.godot-panel, .engine-panel) .workflow-body { display: grid; gap: 12px; }
+:is(.godot-panel, .engine-panel) .godot-head, :is(.godot-panel, .engine-panel) .step-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+:is(.godot-panel, .engine-panel) .godot-head { justify-content: space-between; }
+:is(.godot-panel, .engine-panel) .godot-facts { display: grid; gap: 4px; margin: 0; }
 .godot-facts > div { display: flex; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
 .godot-facts dt { color: var(--muted); }
 .godot-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-.godot-panel form { margin: 0; }
-.godot-panel label { display: grid; gap: 4px; color: var(--muted); }
-.godot-panel select, .godot-panel input { min-width: 0; width: 100%; }
-.godot-panel button { min-height: 36px; }
-.godot-panel .godot-check { display: flex; align-items: center; gap: 8px; min-height: 40px; }
-.godot-panel .godot-check input { width: 16px; height: 16px; flex: none; }
+:is(.godot-panel, .engine-panel) form { margin: 0; }
+:is(.godot-panel, .engine-panel) label { display: grid; gap: 4px; color: var(--muted); }
+:is(.godot-panel, .engine-panel) select, :is(.godot-panel, .engine-panel) input { min-width: 0; width: 100%; }
+:is(.godot-panel, .engine-panel) button { min-height: 36px; }
+:is(.godot-panel, .engine-panel) .godot-check { display: flex; align-items: center; gap: 8px; min-height: 40px; }
+:is(.godot-panel, .engine-panel) .godot-check input { width: 16px; height: 16px; flex: none; }
 .godot-preview { display: grid; gap: 8px; padding: 12px; background: var(--surface); border-radius: var(--r-sm); }
-.godot-panel code { overflow-wrap: anywhere; white-space: pre-wrap; }
-.godot-panel small { overflow-wrap: anywhere; }
-.godot-panel [role=status] > small { display: block; }
-.godot-panel .godot-runs { display: grid; gap: 8px; }
+:is(.godot-panel, .engine-panel) code { overflow-wrap: anywhere; white-space: pre-wrap; }
+:is(.godot-panel, .engine-panel) small { overflow-wrap: anywhere; }
+:is(.godot-panel, .engine-panel) [role=status] > small { display: block; }
+:is(.godot-panel, .engine-panel) .godot-runs { display: grid; gap: 8px; }
 .godot-run { min-width: 0; padding: 8px 12px; background: var(--surface); border-radius: var(--r-sm); }
 .godot-run > summary { cursor: pointer; color: var(--muted); }
 .godot-run-body { display: grid; gap: 8px; margin-top: 8px; }

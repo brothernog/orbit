@@ -9,6 +9,7 @@ import { inScope } from './guard.ts'
 import type { ContextLimits } from './limits.ts'
 import { addMemory, fileEvidence, getMemory, KINDS, normalize, TODO_STATES, validate, type MemoryRow } from './memory.ts'
 import { loadSkill, READ_SKILL_TOOL_NAME, skillTool } from './skills.ts'
+import type { EngineId } from './engines.ts'
 import type { ToolDef, ToolResult } from './mcp.ts'
 import { findInWorkspace, readFileRange } from './workspaceTools.ts'
 
@@ -21,6 +22,7 @@ export type ToolCtx = {
   scope: string[] // escopo da delegacao (filho); vazio = area inteira
   runId?: number; delegationId?: number
   provider?: string // provedor da execucao (usado nos pedidos de permissao do filho)
+  engines?: EngineId[] // engines concedidas e revalidadas nesta consulta (skills de engine)
 }
 
 const obj = (properties: object, required: string[] = []) => ({ type: 'object', properties, required })
@@ -63,16 +65,16 @@ export const TEST_EVIDENCE_TOOL: ToolDef = {
 // Ferramentas anunciadas por papel. Pai: so consulta/registro de contexto (mais delegar, acrescentado pelo chamador).
 // Filho: alem disso, operacoes locais. Nunca delegar_to_agent para filho (a recursao tambem e barrada no backend).
 // read_task_skill: instrucoes detalhadas sob demanda, com a lista do que o PAPEL pode consultar (pai: delegacao e memoria; filho: so memoria).
-export const toolsFor = (role: 'parent' | 'child', delegate?: ToolDef): ToolDef[] =>
-  role === 'parent' ? [...(delegate ? [delegate] : []), READ_CONTEXT_TOOL, RECORD_MEMORY_TOOL, skillTool('parent')] : [READ_CONTEXT_TOOL, RECORD_MEMORY_TOOL, FIND_TOOL, READ_RANGE_TOOL, TEST_EVIDENCE_TOOL, skillTool('child')]
+export const toolsFor = (role: 'parent' | 'child', delegate?: ToolDef, engines: readonly EngineId[] = []): ToolDef[] =>
+  role === 'parent' ? [...(delegate ? [delegate] : []), READ_CONTEXT_TOOL, RECORD_MEMORY_TOOL, skillTool('parent', engines)] : [READ_CONTEXT_TOOL, RECORD_MEMORY_TOOL, FIND_TOOL, READ_RANGE_TOOL, TEST_EVIDENCE_TOOL, skillTool('child', engines)]
 
 // Ferramentas do filho por provedor e modo, sem pagar duas vezes pela mesma capacidade. O Claude ja tem busca nativa (Grep/Glob, ripgrep):
 // find_in_workspace seria so schema repetido. Em LEITURA o Read nativo sai (read_file_range cobre, com escopo validado e readToken); com ESCOPO,
 // nenhuma nativa: so a busca e a leitura do MCP respeitam o escopo. Em EDICAO as nativas ficam (o Edit do Claude exige o Read nativo).
 // Claude em LEITURA tambem nao recebe test_evidence: sem Bash ele nao roda teste para registrar, e nenhum lookup devolve reusable=true pelo endpoint do agente (evidence.ts).
 // `native` ausente = lista padrao do modo (outros provedores nao aceitam lista por execucao).
-export function childToolset(provider: string, mode: 'read' | 'edit', scope: string[]): { mcp: ToolDef[]; native?: string[] } {
-  const all = toolsFor('child')
+export function childToolset(provider: string, mode: 'read' | 'edit', scope: string[], engines: readonly EngineId[] = []): { mcp: ToolDef[]; native?: string[] } {
+  const all = toolsFor('child', undefined, engines)
   if (provider !== 'claude') return { mcp: all }
   if (mode === 'edit') return { mcp: all.filter(t => t.name !== FIND_TOOL.name) }
   const read = all.filter(t => t.name !== TEST_EVIDENCE_TOOL.name)
@@ -167,7 +169,7 @@ export function callTaskTool(db: DatabaseSync, lim: ContextLimits, c: ToolCtx, n
     switch (name) {
       case READ_CONTEXT_TOOL.name: return { text: readContext(db, lim, c, args), isError: false }
       case RECORD_MEMORY_TOOL.name: return { text: recordMemory(db, c, args), isError: false }
-      case READ_SKILL_TOOL_NAME: return { text: loadSkill(c.auth.authId, c.role, args), isError: false }
+      case READ_SKILL_TOOL_NAME: return { text: loadSkill(c.auth.authId, c.role, args, c.engines), isError: false }
       case FIND_TOOL.name: if (c.role !== 'child') return { text: 'Ferramenta indisponivel neste papel.', isError: true }; return { text: findInWorkspace(ws, args), isError: false }
       case READ_RANGE_TOOL.name: if (c.role !== 'child') return { text: 'Ferramenta indisponivel neste papel.', isError: true }; return { text: readFileRange(ws, args, { maxChars: lim.queryChars }), isError: false }
       case TEST_EVIDENCE_TOOL.name: {

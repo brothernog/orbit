@@ -1,0 +1,5 @@
+.engine-files { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.engine-files li { display: flex; flex-wrap: wrap; gap: 2px 8px; min-width: 0; overflow-wrap: anywhere; }
+.engine-files small { color: var(--muted); }
+.engine-files small.err { color: var(--hot); flex-basis: 100%; }
+.godot-preview .engine-review { max-height: 240px; overflow: auto; margin: 4px 0 0; padding: 8px; background: var(--bg); border-radius: var(--r-sm); white-space: pre; font-size: 12px; }
