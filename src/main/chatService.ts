@@ -194,12 +194,19 @@ export function createChatService(d: ChatDeps) {
       unregisterToken(token)
       wire?.cleanup()
       for (const c of dctx.children) c.cancel()
-      if (titleTag) {
-        const title = titleIn(r.text) ?? r.messages?.map(titleIn).find(Boolean)
-        r = { ...r, text: stripTitle(r.text), answer: r.answer && stripTitle(r.answer), messages: r.messages?.map(stripTitle) }
-        if (title && provisional) { summaryTitle(db, t.id, title, provisional); emit({ taskId: t.id, refresh: true }) }
+      let saved = true
+      try {
+        if (titleTag) {
+          const title = titleIn(r.text) ?? r.messages?.map(titleIn).find(Boolean)
+          r = { ...r, text: stripTitle(r.text), answer: r.answer && stripTitle(r.answer), messages: r.messages?.map(stripTitle) }
+          if (title && provisional) { summaryTitle(db, t.id, title, provisional); emit({ taskId: t.id, refresh: true }) }
+        }
+        finishRun(db, runId, r)
+      } catch (e: any) { // banco fechado (backup) ou falha de gravacao: a interface ainda recebe o `done`, como falha
+        saved = false
+        logFor('app')({ category: 'unknown', detail: `resposta da tarefa ${t.id} nao foi gravada: ${e?.message}` })
+        r = { ...r, status: 'failed', error: `A resposta nao foi gravada: ${e?.message ?? e}`, category: 'unknown' } // unknown: nao dispara passagem de conta
       }
-      finishRun(db, runId, r)
       try { broker.expire({ runId }) } catch {} // pedidos de permissao pendentes desta execucao perdem o sentido
       try { recordMetric(t.id, sel, profile, r.session ?? sid, r.metric) } catch {} // medida e opcional: nunca derruba a execucao
       try { // contabilidade: so numeros (sem prompt nem texto); campo que o provedor nao informou fica NULL
@@ -214,15 +221,20 @@ export function createChatService(d: ChatDeps) {
         }
         invalidatePending(db, { parentRunId: runId, state: 'cancelled', reason: 'a execucao do agente pai terminou' }) // aprovar depois nao inicia nada
       } catch {}
-      if (r.status === 'failed') {
-        logFor(sel.provider, sel.provider === 'claude' ? accountRow(sel.accountId)?.name : undefined)({ cwd, args, code: r.code, category: r.category, detail: r.error })
-        setSetting(`lastError:${sel.provider}`, JSON.stringify({ at: new Date().toISOString(), code: r.code, category: r.category, detail: (r.error ?? '').slice(0, 300) }))
-      } else if (r.status === 'completed') {
-        db.prepare('DELETE FROM settings WHERE key=?').run(`lastError:${sel.provider}`) // uma execucao bem-sucedida resolve a falha antiga do painel Provedores
-      }
+      if (saved) try { // falha ao gravar e do app, nao do provedor: o painel Provedores fica como estava
+        if (r.status === 'failed') {
+          logFor(sel.provider, sel.provider === 'claude' ? accountRow(sel.accountId)?.name : undefined)({ cwd, args, code: r.code, category: r.category, detail: r.error })
+          setSetting(`lastError:${sel.provider}`, JSON.stringify({ at: new Date().toISOString(), code: r.code, category: r.category, detail: (r.error ?? '').slice(0, 300) }))
+        } else if (r.status === 'completed') {
+          db.prepare('DELETE FROM settings WHERE key=?').run(`lastError:${sel.provider}`) // uma execucao bem-sucedida resolve a falha antiga do painel Provedores
+        }
+      } catch {}
       // status/tempo/resposta alimentam o aviso de atencao (notify.ts); a interface continua recarregando pelo `done`
       emit({ taskId: t.id, done: true, runId, status: r.status, paused: r.paused, error: r.error, durationMs: r.durationMs, provider: sel.provider, model: sel.model, answer: r.answer || r.text, acts })
       try { d.onFinished?.({ taskId: t.id, sel, text, status: r.status, category: r.category, partial: r.text, acts }) } catch {}
+    }).catch(e => { // falha inesperada antes do `done`: registra e ainda avisa a interface
+      logFor('app')({ category: 'unknown', detail: `fim da execucao da tarefa ${t.id}: ${e?.message}` })
+      try { emit({ taskId: t.id, done: true, runId, status: 'failed', error: String(e?.message ?? e), provider: sel.provider, model: sel.model }) } catch {}
     })
     return { status: 'started', runId }
   }

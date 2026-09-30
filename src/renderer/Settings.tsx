@@ -288,12 +288,14 @@ function NotifySettings() {
 function HiddenFolders({ onChange }: { onChange: () => void }) {
   const read = useCachedRead<string[]>('listHidden', () => api.listHidden())
   const list = read.data
+  const [err, setErr] = useState('')
   if (!list) return <small>{read.error ? errText(read.error) : 'Carregando pastas…'}</small>
   if (!list.length) return <small>Nenhuma pasta removida. Remover da lista nunca apaga nada; as removidas aparecem aqui para voltar.</small>
   return (
     <ul className="hidden-list">
       {list.map(p => <li key={p}><span className="mono-sm" title={p}>{p}</span>
-        <button className="mini" onClick={() => api.unhideGame(p).then(() => { void read.reload().catch(() => {}); onChange() })}>Restaurar</button></li>)}
+        <button className="mini" onClick={() => api.unhideGame(p).then(() => { setErr(''); void read.reload().catch(() => {}); onChange() }, (e: any) => setErr(errText(e)))}>Restaurar</button></li>)}
+      {err && <li><small className="err" role="alert">{err}</small></li>}
     </ul>
   )
 }
@@ -301,7 +303,7 @@ function HiddenFolders({ onChange }: { onChange: () => void }) {
 export function Settings({ accounts, reload, providers, refreshProviders, onGamesChange }: {
   accounts: Account[]; reload: () => void; providers: Provider[] | null; refreshProviders: () => void; onGamesChange: () => void
 }) {
-  const [newName, setNewName] = useState('')
+  const [newName, setNewName] = useState(''), [addErr, setAddErr] = useState('')
   const [tab, setTab] = useState<(typeof TABS)[number][0]>('contas')
   useEffect(() => { // acompanha logins em andamento
     if (!accounts.some(a => a.login?.state === 'connecting')) return
@@ -320,10 +322,11 @@ export function Settings({ accounts, reload, providers, refreshProviders, onGame
         <section>
           <h2>Contas Claude</h2>
           {accounts.map(a => <AccountRow key={a.id} a={a} reload={reload} />)}
-          <form className="inline" onSubmit={e => { e.preventDefault(); if (newName.trim()) api.addAccount(newName.trim()).then(() => { setNewName(''); reload() }) }}>
+          <form className="inline" onSubmit={e => { e.preventDefault(); if (newName.trim()) api.addAccount(newName.trim()).then(() => { setNewName(''); setAddErr(''); reload() }, (x: any) => setAddErr(errText(x))) }}>
             <input aria-label="Nome da nova conta" placeholder="Nome da nova conta" value={newName} onChange={e => setNewName(e.target.value)} />
             <button className="primary">Adicionar conta</button>
           </form>
+          {addErr && <small className="err" role="alert">{addErr}</small>}
         </section>
         {accounts.length > 1 && <section><h2>Automações</h2><Automations /></section>}
         {accounts.length > 1 && <section><h2>Quando a conta atingir o limite</h2><Handover /></section>}

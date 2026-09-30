@@ -175,6 +175,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
   const [stepId, setStepId] = useState<number | undefined>()
   const [text, setText] = useState('')
   const [images, setImages] = useState<string[]>([]) // data: URLs ja reduzidas; viram arquivo so no envio
+  const [sending, setSending] = useState(false) // sendTask pendente: segundo Ctrl+Enter nao reenvia
   const [view, setView] = useState<string | null>(null) // imagem ampliada
   const file = useRef<HTMLInputElement>(null)
   const [err, setErr] = useState('')
@@ -243,10 +244,15 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
 
   const awaiting = !!hist?.awaitingContext || pkgs.sends.some(s => s.state === 'awaiting_context_approval')
   const send = () => {
-    if ((!text.trim() && !images.length) || running || awaiting) return
-    setErr('')
+    if ((!text.trim() && !images.length) || running || awaiting || sending) return
+    setErr(''); setSending(true)
+    const sent = text, sentImages = images
     // Havendo contexto anterior a decidir, a mensagem fica RETIDA (nenhum agente inicia): o cartao acima do compositor pede a decisao.
-    api.sendTask(task.id, sel, text.trim(), images, stepId).then(() => { setText(''); setImages([]); setStepId(undefined); stick.current = true; pkgs.load(); load(); onChange() }, e => setErr(errText(e)))
+    // So sai do compositor o que foi enviado: texto e imagens acrescentados durante o envio ficam.
+    api.sendTask(task.id, sel, sent.trim(), sentImages, stepId).then(() => {
+      setText(t => (t.startsWith(sent) ? t.slice(sent.length).trimStart() : t)); setImages(i => i.filter(x => !sentImages.includes(x)))
+      setStepId(undefined); stick.current = true; pkgs.load(); load(); onChange()
+    }, e => setErr(errText(e))).finally(() => setSending(false))
   }
   // 1568 px: o maior lado que o Claude usa sem reduzir de novo; screenshot continua legivel. Cada imagem custa ~1.500 tokens por chamada.
   const attach = (files: Blob[]) => Promise.all(files.map(f => shrink(f, 1568))).then(out => setImages(i => [...i, ...out].slice(0, 6)), () => setErr('Não foi possível ler a imagem.'))
@@ -329,7 +335,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
               : <>
                 <button type="button" className="icon sm" aria-label="Anexar imagem" title="Anexar imagem (ou cole com Ctrl+V)" disabled={awaiting || images.length >= 6} onClick={() => file.current?.click()}><Icon n="image" size={16} /></button>
                 <input ref={file} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={e => { attach([...(e.target.files ?? [])]); e.target.value = '' }} />
-                <button className="send" aria-label="Enviar" title={awaiting ? 'Há uma mensagem retida aguardando a sua decisão sobre contexto' : 'Enviar (Ctrl+Enter)'} disabled={!!missing || (!text.trim() && !images.length) || awaiting}><Icon n="send" size={18} /></button>
+                <button className="send" aria-label="Enviar" title={awaiting ? 'Há uma mensagem retida aguardando a sua decisão sobre contexto' : 'Enviar (Ctrl+Enter)'} disabled={!!missing || (!text.trim() && !images.length) || awaiting || sending}><Icon n="send" size={18} /></button>
               </>}
           </div>
         </form>

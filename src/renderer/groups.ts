@@ -8,6 +8,10 @@ export type Group = { id: string; name: string; color: string; games: string[]; 
 export const GROUP_COLORS = ['#7cc4ff', '#69d6b5', '#c6a2ff', '#f0a36b', '#f2b45c', '#ff7b6b']
 export const SUGGESTED: [string, string][] = [['Pessoais', '#c6a2ff'], ['Trabalho', '#7cc4ff'], ['Jogos', '#69d6b5'], ['Sites', '#f0a36b']]
 
+// Tarefa a lembrar como a ultima da pasta: so a que pertence a ela. Na troca de pasta, taskId/tasks ainda sao da anterior no mesmo render.
+export const taskToRemember = (game: string, taskId: number | null, tasks: { id: number; game: string }[] | null) =>
+  tasks?.find(t => t.id === taskId && t.game.toLowerCase() === game.toLowerCase())?.id ?? null
+
 export const groupOf = (groups: Group[], game: string) => groups.find(x => x.games.includes(game)) ?? null
 
 // Move o projeto para o grupo (null tira de todos). Um projeto fica em um grupo so; o destino abre para mostrar onde ele foi parar.

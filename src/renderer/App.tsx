@@ -17,7 +17,7 @@ import { FilesPanel } from './FilesPanel'
 import { LinkedIn } from './LinkedIn'
 import orbitMark from './orbit-mark.svg'
 import { Confirm, ContextMenu, GroupDialog, ProjectIcon, RenameInput, type MenuItem } from './Nav'
-import { groupOf, initials, moveTo, newGroup, placeBefore, type Group } from './groups'
+import { groupOf, initials, moveTo, newGroup, placeBefore, taskToRemember, type Group } from './groups'
 import { expireRead, loadRead, readSnapshot, setRead } from './readCache'
 import type { QuotaSnapshot } from './usageText'
 
@@ -118,11 +118,12 @@ function AgentDock({ active, onOpen }: { active: Active[]; onOpen: (a: Active) =
 
 // Conversas das outras pastas do workspace (a pasta atual vem de loadTasks). ponytail: recarrega todas a cada evento; cache por pasta se pesar.
 function useFolderTasks(folders: string[], ver: unknown[]) {
-  const [map, setMap] = useState<Record<string, Task[]>>({})
+  const [map, setMap] = useState<Record<string, Task[] | string>>({}) // string = erro da leitura (sem lista anterior)
   const key = folders.join('|')
   useEffect(() => {
     let live = true
-    const load = () => folders.forEach(g => api.listTasks(g, {}).then((l: Task[]) => { if (live) setMap(m => ({ ...m, [g]: l })) }, () => {}))
+    const load = () => folders.forEach(g => api.listTasks(g, {}).then((l: Task[]) => { if (live) setMap(m => ({ ...m, [g]: l })) },
+      (e: unknown) => { if (live) setMap(m => (Array.isArray(m[g]) ? m : { ...m, [g]: errText(e) })) }))
     load()
     const off = onChat(ev => { if (ev.done || ev.refresh) load() })
     return () => { live = false; off() }
@@ -206,6 +207,7 @@ export default function App() {
       setProviders(p => p ?? []); setErr(errText(e))
     })
   }
+  const loadGames = () => { api.listGames().then(setGames, (e: any) => setErr(errText(e))) }
   const loadAliases = () => api.projectNames().then((a: Record<string, string>) => { setAliases(a); setAliasVer(v => v + 1) }, () => {})
   const saveGroups = (n: Group[]) => { setGroups(n); api.setProjectGroups(n).catch((e: any) => setErr(errText(e))) }
   useEffect(() => {
@@ -214,7 +216,7 @@ export default function App() {
     return onChat(e => { if (e.groupsChanged) load() })
   }, [])
   useEffect(() => {
-    api.listGames().then(setGames); loadAccounts(); loadAliases()
+    loadGames(); loadAccounts(); loadAliases()
     loadRead<Provider[]>('diagnose', () => api.diagnose(), 600_000).then(setProviders, () => setProviders([]))
     // So metadados locais; catalogos/CLIs e consulta de quotas continuam sob demanda.
     for (const read of ['getContextLimits', 'getNotifySettings', 'getJarvisSettings', 'getDelegationSettings', 'getPermissionSettings', 'getAgentAliases', 'summaryTitles', 'backupInfo'])
@@ -250,7 +252,10 @@ export default function App() {
   }
   useEffect(() => { setTasks(null); setTaskId(null); setErr('') }, [game])
   useEffect(() => { loadTasks() }, [game])
-  useEffect(() => { if (game && taskId != null) lsSet(`task:${game}`, String(taskId)) }, [game, taskId])
+  useEffect(() => { // so a tarefa que e desta pasta (openIn ja gravou a escolhida antes de trocar)
+    const id = game ? taskToRemember(game, taskId, tasks) : null
+    if (id != null) lsSet(`task:${game}`, String(id))
+  }, [game, taskId, tasks])
 
   const pick = (g: string) => {
     const w = groupOf(groups, g)
@@ -261,8 +266,8 @@ export default function App() {
   const addGame = (groupId?: string) => api.addGame().then((g: string | null) => {
     if (!g) return
     if (groupId && groupId !== INBOX) saveGroups(moveTo(groups, g, groupId))
-    api.listGames().then(setGames); pick(g)
-  })
+    loadGames(); pick(g)
+  }, (e: any) => setErr(errText(e)))
   // Organizador no trilho: a Nova troca (animada) para a ultima pasta usada nele, com a gaveta aberta. Vazio: pede a primeira pasta.
   const openGroup = (x: Group) => {
     const list = x.id === INBOX ? x.games : games.filter(g => x.games.includes(g))
@@ -369,7 +374,8 @@ export default function App() {
   // Esperando voce e trabalhando sobem; concluidas ficam recolhidas. Arraste a pasta para um organizador do trilho.
   const folderSection = (g: string) => {
     const cur = g === game
-    const list = cur ? tasks : folderTasks[g] ?? null
+    const got = cur ? tasks : folderTasks[g] ?? null
+    const failed = typeof got === 'string' ? got : null, list = failed != null ? [] : got as Task[] | null
     const open = folderOpen[g] ?? cur
     const rank = (t: Task) => (cur && waits(t) ? 0 : isLive(t) ? 1 : 2)
     const sorted = [...(list ?? [])].sort((a, b) => rank(a) - rank(b) || b.updated_at.localeCompare(a.updated_at))
@@ -379,7 +385,7 @@ export default function App() {
     const body = (
       <ul className="tasklist">
         {list === null ? <li><span className="loader sm" aria-label="Carregando conversas" /></li> : openList.map(taskRow)}
-        {list?.length === 0 && <li className="chats-empty">Nenhuma conversa ainda.</li>}
+        {failed != null ? <li className="chats-empty" role="alert">{failed}</li> : list?.length === 0 && <li className="chats-empty">Nenhuma conversa ainda.</li>}
         {done.length > 0 && <li className="chats-group" role="presentation">
           <button className="group-toggle" aria-expanded={!!doneOpen[g]} onClick={() => setDoneOpen(m => ({ ...m, [g]: !m[g] }))}><Icon n="chevron" size={12} />Concluídas <span>{done.length}</span></button>
         </li>}
@@ -515,7 +521,7 @@ export default function App() {
         </header>
         {err && <div className="banner" role="alert">{err}<button className="icon sm" aria-label="Fechar aviso" onClick={() => setErr('')}><Icon n="close" size={14} /></button></div>}
         {settings
-          ? <Settings accounts={accounts} reload={loadAccounts} providers={providers} refreshProviders={refreshProviders} onGamesChange={() => api.listGames().then(setGames)} />
+          ? <Settings accounts={accounts} reload={loadAccounts} providers={providers} refreshProviders={refreshProviders} onGamesChange={loadGames} />
           : li ? <LinkedIn accounts={accounts} onErr={setErr} />
           : home ? <Home games={games} active={active} onOpen={pick} onAdd={addGame} lastGame={game} onTodoTask={(g, id, d) => { setDraft(d); openIn(g, id) }} />
           : !game ? <div className="empty"><h1>Escolha um projeto</h1><p>Selecione um projeto no trilho à esquerda ou adicione a pasta de um jogo ou app.</p></div>

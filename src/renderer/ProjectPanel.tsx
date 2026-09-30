@@ -92,7 +92,7 @@ export function ProjectPanel({ game, accounts, onOpenTask, onClose }: { game: st
               <div className="row"><button className="text-btn" onClick={() => setOpen(null)}>Voltar aos documentos</button><small>{open.path}</small></div>
               <Markdown text={open.text} />
             </>
-          : <ul className="docs">{docs.map(d => <li key={d}><button className="link" onClick={async () => setOpen({ path: d, text: await api.readDoc(game, d) })}>{d}</button></li>)}</ul>)}
+          : <ul className="docs">{docs.map(d => <li key={d}><button className="link" onClick={() => api.readDoc(game, d).then((text: string) => setOpen({ path: d, text }), (e: any) => setErr(errText(e)))}>{d}</button></li>)}</ul>)}
       </div>
     </aside>
   )
