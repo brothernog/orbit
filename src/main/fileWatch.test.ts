@@ -22,18 +22,24 @@ test('lista de arquivos: novo conta as proprias linhas, pastas ignoradas somem, 
   assert.ok(ignored('.godot/imported/x') && ignored('sub/node_modules/y') && !ignored('src/build_tools.ts'))
 })
 
-test('pasta real com git: mudancas, diff do arquivo, caminho de fora recusado e gravacao observada', async () => {
+test('pasta real com git: mudancas, diff do arquivo, caminho de fora recusado e gravacao observada', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-watch-'))
+  // Close the watcher even when an assertion fails: an open fs.watch handle keeps the test process alive forever.
+  t.after(() => { stopWatching(); try { fs.rmSync(dir, { recursive: true, force: true }) } catch {} })
   const git = (...a: string[]) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...a], { cwd: dir, windowsHide: true })
   git('init', '-q')
   fs.writeFileSync(path.join(dir, 'player.gd'), 'a\nb\nc\n')
   git('add', '.'); git('commit', '-qm', 'base')
   let seen: string[] = []
   watchDir(dir, rel => seen.push(rel))
-  fs.writeFileSync(path.join(dir, 'player.gd'), 'a\nB\nc\nd\n')
   fs.mkdirSync(path.join(dir, 'save'))
   fs.writeFileSync(path.join(dir, 'save', 'slot.gd'), 'x\ny\n')
-  for (let i = 0; i < 40 && !seen.includes('player.gd'); i++) await new Promise(r => setTimeout(r, 50))
+  // On macOS the recursive watcher starts delivering events shortly after fs.watch returns, so a write right
+  // away can be missed under load: rewrite the same content until the watcher reports it.
+  for (let i = 0; i < 40 && !seen.includes('player.gd'); i++) {
+    fs.writeFileSync(path.join(dir, 'player.gd'), 'a\nB\nc\nd\n')
+    await new Promise(r => setTimeout(r, 50))
+  }
   const { repo, files } = await changedFiles(dir)
   assert.equal(repo, true)
   const byPath = Object.fromEntries(files.map(f => [f.path, f]))
@@ -44,6 +50,4 @@ test('pasta real com git: mudancas, diff do arquivo, caminho de fora recusado e 
   assert.match(await fileDiff(dir, 'player.gd'), /-b\n\+B/)
   assert.equal(await fileDiff(dir, 'save/slot.gd'), '+x\n+y')
   await assert.rejects(fileDiff(dir, '../fora.txt'), /fora da pasta/)
-  stopWatching()
-  try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
 })
