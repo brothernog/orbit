@@ -14,7 +14,8 @@ import { createWorktreeService } from './worktrees.ts'
 import { resetWorkspace, unlinkWorktree } from './worktreeTasks.ts'
 import { godotDiagnostics, godotOrganizer, godotProbe, godotProject } from './godot.ts'
 import { callEngineTool, engineOf, grantedEngines, grantedTools, liveGrants } from './engineMcp.ts'
-import { engineGrants, type EngineGrants } from './engines.ts'
+import { ENGINE_LABELS, engineGrants, engineOrganizer, engineProjectAt, type EngineGrants } from './engines.ts'
+import { engineCommandError, engineRecipe, flowEngine, isEngineCommand, prepareEngine, validatePreparedEngine } from './engineFlow.ts'
 import { setBlenderScriptRoots } from './blender.ts'
 import { prepareGodot, validatePreparedGodot, godotCommandError, godotBuildFile } from './godotFlow.ts'
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron'
@@ -515,8 +516,8 @@ const getMcp = () => (mcpServer ??= startMcpServer<McpCtx>({
 }))
 
 const commands = createCommandService(db, guard, cwd => { worktrees.assertAvailable(cwd); return [...active.values()].some(r => sameDir(r.workspace,cwd)) || (db.prepare("SELECT 1 FROM delegations WHERE status='running' AND workspace=?").get(cwd) != null) }, emit, {
-  beforeSpawn: (taskId, game, cwd, command) => { if (!samePath(taskCwd(asTask(taskId)), cwd)) fail('A pasta da tarefa mudou. Prepare o comando novamente.'); validatePreparedGodot(db, game, cwd, command) },
-  resultError: godotCommandError
+  beforeSpawn: (taskId, game, cwd, command) => { if (!samePath(taskCwd(asTask(taskId)), cwd)) fail('A pasta da tarefa mudou. Prepare o comando novamente.'); validatePreparedGodot(db, game, cwd, command); validatePreparedEngine(db, game, cwd, command) },
+  resultError: (command, output, truncated, cwd) => godotCommandError(command, output, truncated) ?? engineCommandError(command, output, truncated, cwd)
 })
 
 const { sendTask, decideSend: decideChatSend } = createChatService({
@@ -670,6 +671,14 @@ const manifestHash = (folder: string) => {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 }
 
+// Sonda o executável configurado e confirma que tarefa, pasta e organizador não mudaram durante a espera.
+async function engineProbeChecked(taskId: number, engine: unknown) {
+  const e = flowEngine(engine), recipe = engineRecipe(e), t = asTask(taskId), cwd = taskCwd(t)
+  const organizer = engineOrganizer(db, t.game, e) ?? fail(`Ative ${ENGINE_LABELS[e]} no organizador deste projeto.`)
+  const probe = await recipe.probe(organizer.config.executable, cwd), now = engineOrganizer(db, t.game, e)
+  if (!samePath(taskCwd(asTask(taskId)), cwd) || now?.id !== organizer.id || now.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Confira novamente.')
+  return { t, cwd, probe }
+}
 const handlers: Record<string, (...a: any[]) => any> = {
   backupInfo: () => ({ dataDir: app.getPath('userData'), lastRestore }),
   createBackup: () => backups.exclusive(async () => {
@@ -767,6 +776,27 @@ const handlers: Record<string, (...a: any[]) => any> = {
     const t = asTask(taskId), run = listCommandRuns(db, t.id).find(r => r.id === asInt(commandId, 'comando')) ?? fail('Comando de outra tarefa ou fora do histórico disponível.')
     if (!run.name.startsWith('Godot · ')) fail('Selecione um comando Godot.')
     return { run, ...godotDiagnostics(run.output) }
+  },
+  // Unity/Blender (engineFlow): mesmo modelo do Godot, genérico por engine.
+  engineState: async (taskId: number, engine: unknown, details = false) => {
+    const e = flowEngine(engine), t = asTask(taskId), organizer = engineOrganizer(db, t.game, e)
+    if (!organizer) return { organizer: null, available: false, details: null }
+    const cwd = taskCwd(t)
+    try {
+      if (!engineProjectAt(e, cwd)) return { organizer, available: false, details: null }
+      return { organizer, available: true, details: details === true ? await engineRecipe(e).details(cwd) : null }
+    } catch (err) { return { organizer, available: true, details: null, error: err instanceof Error ? err.message : String(err) } }
+  },
+  engineProbe: async (taskId: number, engine: unknown) => (await engineProbeChecked(taskId, engine)).probe,
+  prepareEngineCommand: async (taskId: number, engine: unknown, action: unknown, args: unknown) => {
+    const { t, cwd, probe } = await engineProbeChecked(taskId, engine)
+    const result = prepareEngine(db, t.game, cwd, engine, action, args, probe)
+    emit({ taskId, commandChanged: true }); return result
+  },
+  engineDiagnostics: (taskId: number, engine: unknown, commandId: unknown) => {
+    const e = flowEngine(engine), t = asTask(taskId), run = listCommandRuns(db, t.id).find(r => r.id === asInt(commandId, 'comando')) ?? fail('Comando de outra tarefa ou fora do histórico disponível.')
+    if (!isEngineCommand(e, run.name)) fail('Selecione um comando desta engine.')
+    return { run, ...engineRecipe(e).diagnostics(run.output) }
   },
   registerGodotBuild: (taskId: number, commandId: unknown, raw: any) => {
     const t = asTask(taskId), cwd = taskCwd(t), id = asInt(commandId, 'comando')

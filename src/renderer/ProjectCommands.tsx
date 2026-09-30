@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, errText, onChat } from './api'
 import type { ProjectCommand, CommandRun } from '../main/commands'
 import { GodotPanel } from './GodotPanel'
+import { BlenderPanel } from './BlenderPanel'
 import './workflow.css'
 const labels: Record<string,string>={test:'Teste',build:'Build',run:'Jogo',running:'Executando',completed:'Concluído',failed:'Falhou',cancelled:'Cancelado'}
 export function ProjectCommands({taskId,game,disabled}:{taskId:number;game:string;disabled:boolean}) {
@@ -9,8 +10,8 @@ export function ProjectCommands({taskId,game,disabled}:{taskId:number;game:strin
   const [editing,setEditing]=useState(false),[name,setName]=useState(''),[program,setProgram]=useState(''),[args,setArgs]=useState('[]'),[purpose,setPurpose]=useState<ProjectCommand['purpose']>('test')
   useEffect(()=>{let live=true;const load=()=>Promise.all([api.projectCommands(game),api.listCommandRuns(taskId)]).then(([c,r])=>{if(live){setCommands(c);setRuns(r)}},e=>live&&setError(errText(e)));load();const off=onChat(e=>{if(e.commandChanged&&(e.taskId===taskId||!e.taskId))load()});return()=>{live=false;off()}},[game,taskId])
   const action=async(f:()=>Promise<unknown>)=>{setSaving(true);setError('');try{await f();setCommands(await api.projectCommands(game));setRuns(await api.listCommandRuns(taskId))}catch(e){setError(errText(e))}finally{setSaving(false)}}
-  const active=runs.some(r=>r.status==='running')
-  return <><GodotPanel taskId={taskId} game={game} disabled={disabled} commands={commands} runs={runs} onPrepared={async()=>{setCommands(await api.projectCommands(game))}}/><details className="workflow project-commands" name="task-tools"><summary>Comandos do projeto <span>{active?'Executando':commands.length}</span></summary><div className="workflow-body">
+  const active=runs.some(r=>r.status==='running'),refresh=async()=>{setCommands(await api.projectCommands(game))}
+  return <><GodotPanel taskId={taskId} game={game} disabled={disabled} commands={commands} runs={runs} onPrepared={refresh}/><BlenderPanel taskId={taskId} game={game} disabled={disabled} commands={commands} runs={runs} onPrepared={refresh}/><details className="workflow project-commands" name="task-tools"><summary>Comandos do projeto <span>{active?'Executando':commands.length}</span></summary><div className="workflow-body">
     <p className="muted">Executa na pasta desta tarefa (incluindo worktree). Revise o programa e os argumentos antes de executar.</p>
     <ul className="command-list">{commands.map(c=><li key={c.name}><div><b>{c.name}</b><span>{labels[c.purpose]}</span></div><code>{c.program} {JSON.stringify(c.args)}</code><div className="step-actions"><button className="primary" disabled={disabled||saving||active} onClick={()=>action(()=>api.runProjectCommand(taskId,c.name))}>Executar</button><button className="text-btn" disabled={saving} onClick={()=>{setName(c.name);setProgram(c.program);setArgs(JSON.stringify(c.args));setPurpose(c.purpose);setEditing(true)}}>Editar</button><button className="text-btn" disabled={saving||active} onClick={()=>action(()=>api.saveProjectCommands(game,commands.filter(x=>x.name!==c.name)))}>Remover</button></div></li>)}</ul>
     <div className="step-actions"><button className="text-btn" onClick={()=>{setEditing(!editing);setName('');setProgram('');setArgs('[]')}}>Configurar comando</button></div>
