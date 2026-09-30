@@ -57,6 +57,7 @@ import { callTaskTool, childToolset, toolsFor, type ToolCtx } from './taskContex
 import { delegationReport, taskUsage } from './usage.ts'
 import { finishRun, reconcileRuns } from './runs.ts'
 import { projectInfo, run as gitRun } from './projectInfo.ts'
+import { claudeProjects } from './claudeProjects.ts'
 import { dropReceipts } from './workspaceTools.ts'
 import { dropSkillSession, READ_SKILL_TOOL_NAME, setSkillRoots, skillTool } from './skills.ts'
 import { markPublished, readDesk } from './linkedin.ts'
@@ -110,10 +111,7 @@ const IGNORED = new Set(['node_modules', '.git', '.worktrees', 'out', 'dist', 'b
 
 function listGames(): string[] {
   const docs = app.getPath('documents').toLowerCase()
-  let projects: string[] = []
-  try {
-    projects = Object.keys(JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8')).projects ?? {})
-  } catch {}
+  const projects = claudeProjects(path.join(os.homedir(), '.claude.json'))
   const extra: string[] = JSON.parse(getSetting('extraGames') ?? '[]')
   const hidden: string[] = JSON.parse(getSetting('hiddenGames') ?? '[]')
   return pickGames({ docs, projects, extra, hidden, appPath: app.getAppPath(), isDir: p => fs.existsSync(p) && fs.statSync(p).isDirectory() })
