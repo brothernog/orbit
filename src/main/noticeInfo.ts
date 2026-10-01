@@ -6,7 +6,9 @@ import { getPackage } from './consent.ts'
 import { providerLabel, runChanges, type NoticeInfo } from './notify.ts'
 import { getTask } from './tasks.ts'
 
-export function createNoticeInfo(db: DatabaseSync, projectNames: () => Record<string, string>) {
+// `question`: perguntas ficam so em memoria (questions.ts), entao vem por funcao.
+type Question = { provider: string; questions: { question: string }[] }
+export function createNoticeInfo(db: DatabaseSync, projectNames: () => Record<string, string>, question: (id: number) => Question | undefined) {
   type GitStat = { path: string; status: string; added: number | null; removed: number | null }
   const snapFiles = (cwd: string): Promise<GitStat[] | null> => changedFiles(cwd).then(r => (r.repo ? r.files : null), () => null)
   const baselines = new Map<number, { cwd: string; files: Promise<GitStat[] | null> }>() // runId -> estado do Git no inicio
@@ -27,6 +29,10 @@ export function createNoticeInfo(db: DatabaseSync, projectNames: () => Record<st
     if (ev.permissionRequest) {
       const perm = db.prepare('SELECT provider, summary FROM permission_requests WHERE id=?').get(ev.permissionRequest) as any
       info.permission = perm && { provider: perm.provider, summary: perm.summary ?? '' }
+    }
+    if (ev.questionRequest) {
+      const q = question(ev.questionRequest)
+      info.question = q && { provider: q.provider, summary: q.questions.map(x => x.question).join(' ') }
     }
     if (ev.contextRequest) {
       const pkg = getPackage(db, ev.contextRequest)

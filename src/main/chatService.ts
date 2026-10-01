@@ -47,6 +47,7 @@ type ChatDeps = {
   onRunStart?: (taskId: number, runId: number, cwd: string) => void // linha de base dos arquivos para o resumo do aviso
   engineGrants?: (game: string, cwd: string) => EngineGrants // engines do organizador presentes na pasta (Godot/Unity/Blender)
   summaryTitles?: () => boolean // Configuracoes: titulo-resumo pelo agente (padrao ligado)
+  questions?: { expire: (o: { runId: number }) => void } // perguntas pendentes do agente (questions.ts)
   onFinished?: (o: { taskId: number; sel: Sel; text: string; status: string; category?: string; partial: string; acts: Act[] }) => void // passagem entre contas (handover.ts)
 }
 export type SendResult = { status: 'started'; runId: number } | { status: 'awaiting_context_approval'; sendId: number; packageId: number }
@@ -105,22 +106,21 @@ export function createChatService(d: ChatDeps) {
       emit({ taskId: t.id, contextRequest: plan.pending.id, refresh: true })
       return { status: 'awaiting_context_approval', sendId: send.id, packageId: plan.pending.id }
     }
-    // Ferramenta de delegacao: so nas execucoes do usuario e so nos provedores cujo cliente MCP aceita configuracao por execucao.
+    // Ferramentas do pai (contexto, perguntar ao usuario, sugerir tarefa, delegar): so nas execucoes do usuario e so nos provedores cujo
+    // cliente MCP aceita configuracao por execucao (mcpWire devolve null nos outros).
     const ds = delegationSettings()
     let wire = null as ReturnType<typeof mcpWire>
     let token = ''
     const pset = permissionSettings()
     const perm = sel.provider === 'claude' && pset.prompt // Claude: as permissoes do modo headless vao ao pop-up do dashboard
     const engines = d.engineGrants?.(t.game, cwd) ?? {}, hasEngines = grantedEngines(engines).length > 0
-    if (ds.enabled || perm || hasEngines) {
-      try {
-        token = newToken()
-        // O pai pode esperar a aprovacao humana antes de o filho comecar (e o usuario responder um pedido de permissao): o timeout do cliente MCP cobre tudo.
-        const timeoutSec = (ds.timeoutMin + Math.max(contextLimits().approvalTimeoutMin, pset.timeoutMin)) * 60 + 60
-        wire = mcpWire(sel.provider, { url: (await getMcp()).url, token, timeoutSec, dir: mcpDir(), tools: [...toolsFor('parent', ds.enabled ? delegateTool() : undefined, grantedEngines(engines)), ...grantedTools(engines)].map(x => x.name), permission: perm })
-      } catch (e: any) { // a delegacao e um extra: se o servidor local nao subir, a conversa segue sem a ferramenta
-        logFor('app')({ category: 'config', detail: `ferramenta de delegacao indisponivel: ${e?.message}` })
-      }
+    try {
+      token = newToken()
+      // O pai pode esperar a aprovacao humana antes de o filho comecar (e o usuario responder um pedido de permissao ou uma pergunta, mesmo prazo: index.ts): o timeout do cliente MCP cobre tudo.
+      const timeoutSec = (ds.timeoutMin + Math.max(contextLimits().approvalTimeoutMin, pset.timeoutMin)) * 60 + 60
+      wire = mcpWire(sel.provider, { url: (await getMcp()).url, token, timeoutSec, dir: mcpDir(), tools: [...toolsFor('parent', ds.enabled ? delegateTool() : undefined, grantedEngines(engines)), ...grantedTools(engines)].map(x => x.name), permission: perm })
+    } catch (e: any) { // as ferramentas sao um extra: se o servidor local nao subir, a conversa segue sem elas
+      logFor('app')({ category: 'config', detail: `ferramentas MCP indisponiveis: ${e?.message}` })
     }
     // MCP é assíncrono: um comando/execução pode reservar a pasta durante sua preparação.
     try { requireIdle() } catch(e) { wire?.cleanup(); throw e }
@@ -208,6 +208,7 @@ export function createChatService(d: ChatDeps) {
         r = { ...r, status: 'failed', error: `A resposta nao foi gravada: ${e?.message ?? e}`, category: 'unknown' } // unknown: nao dispara passagem de conta
       }
       try { broker.expire({ runId }) } catch {} // pedidos de permissao pendentes desta execucao perdem o sentido
+      try { d.questions?.expire({ runId }) } catch {} // perguntas tambem: a CLI que esperava a resposta acabou
       try { recordMetric(t.id, sel, profile, r.session ?? sid, r.metric) } catch {} // medida e opcional: nunca derruba a execucao
       try { // contabilidade: so numeros (sem prompt nem texto); campo que o provedor nao informou fica NULL
         recordUsage(db, { taskId: t.id, runId, provider: sel.provider, profile, model: sel.model, effort: sel.effort, session: r.session ?? sid, sessionWasNew: !sid, metric: r.metric,

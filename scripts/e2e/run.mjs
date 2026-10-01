@@ -428,10 +428,24 @@ try {
   check('reserva liberada quando a delegacao termina', freed.ok === true)
   await waitDone(ev, tE)
 
+  // Sem delegacao o pai continua com o MCP para perguntar (ask_user, que espera a resposta) e sugerir tarefas (suggest_task).
   await inv(ev, 'setDelegationSettings', { enabled: false })
-  await inv(ev, 'sendTask', tE, { provider: 'codex' }, 'sem delegacao')
-  await waitDone(ev, tE)
-  check('delegacao desativada: o pai nao recebe a ferramenta', !argvLog().at(-1).argv.some(a => /mcp_servers/.test(a)), argvLog().at(-1).argv.join(' ').slice(0, 120))
+  const sugArgs = { title: 'Corrigir colisao da rampa', tldr: 'O inimigo atravessa a rampa.', prompt: 'Em level2 a rampa nao colide: corrigir e testar.' }
+  const askArgs = { questions: [{ question: 'Posso mudar a camada?', header: 'Camada', options: [{ label: 'Sim' }, { label: 'Nao' }] }] }
+  await inv(ev, 'sendTask', tE, { provider: 'codex' }, 'MCPCALLS:' + JSON.stringify([{ name: 'suggest_task', arguments: sugArgs }, { name: 'ask_user', arguments: askArgs }]))
+  let asked = []
+  for (let i = 0; i < 100 && !asked.length; i++) { await sleep(100); asked = (await inv(ev, 'listQuestions', tE)).value ?? [] }
+  const nova = (await inv(ev, 'novaState')).value, briefQ = ((await inv(ev, 'taskBriefs', gameArg)).value ?? []).find(b => b.id === tE)
+  check('pergunta pendente aparece na Nova e no resumo da conversa', nova?.waiting.some(w => w.id === tE && /^Responder: Posso mudar/.test(w.why)) && briefQ?.question === 'Posso mudar a camada?', JSON.stringify(nova?.waiting)?.slice(0, 120))
+  const answered = asked.length ? await inv(ev, 'answerQuestion', asked[0].id, [{ selected: ['Sim'] }]) : { ok: false, error: 'pergunta nao apareceu' }
+  const cQ = await waitDone(ev, tE)
+  const qParts = cQ.messages.filter(m => m.role === 'agent').at(-1).text.split('\n\n---\n\n')
+  check('delegacao desativada: o pai nao recebe delegar, mas pode perguntar e sugerir', !/delegate_to_agent/.test(qParts[0]) && /ask_user/.test(qParts[0]) && /suggest_task/.test(qParts[0]), qParts[0].slice(0, 160))
+  check('ask_user: a chamada espera a resposta no app e ela volta ao agente; fica nota no chat', answered.ok && /Resposta: Sim/.test(qParts[2]) && cQ.messages.some(m => m.role === 'system' && /Sua resposta: Sim/.test(m.text)), `${answered.error ?? ''} ${qParts[2]?.slice(0, 120)}`)
+  const sugs = (await inv(ev, 'listSuggestions', tE)).value ?? []
+  const started = sugs.length ? (await inv(ev, 'startSuggestion', sugs[0].id)).value : null
+  const fresh = started && (await inv(ev, 'taskChat', started.taskId, { provider: 'codex' })).value
+  check('suggest_task: cartao na tarefa; usar cria tarefa com a ordem so para o compositor (nada enviado)', sugs.length === 1 && started?.text === sugArgs.prompt && fresh?.messages.length === 0 && !(await inv(ev, 'listSuggestions', tE)).value.length, JSON.stringify(started)?.slice(0, 120))
   await inv(ev, 'setDelegationSettings', {})
 
   // ---- falha, cancelamento e reinicio

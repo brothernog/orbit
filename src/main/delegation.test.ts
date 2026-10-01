@@ -301,6 +301,9 @@ test('como cada provedor enxerga a ferramenta: sem tocar configuracao global; ge
   const ed = mcpWire('claude', { ...o, strict: false })!; assert.ok(!ed.extra.includes('--strict-mcp-config')); ed.cleanup()
   assert.ok(!cl.extra.includes('--strict-mcp-config'))
   assert.ok(!mcpWire('codex', { ...o, strict: true })!.extra.join(' ').includes('strict')) // so o Claude tem essa via
+  // Pai com ask_user: o AskUserQuestion nativo (sem resposta no headless) sai; quem nao recebe ask_user (filho) fica como estava
+  const pa = mcpWire('claude', { ...o, tools: ['read_task_context', 'ask_user'] })!
+  assert.deepEqual(pa.extra.slice(2), ['--disallowedTools', 'AskUserQuestion', '--allowedTools', 'mcp__dashboard__read_task_context', 'mcp__dashboard__ask_user']); pa.cleanup()
   const oc = mcpWire('opencode', o)!
   assert.equal(JSON.parse(oc.env.OPENCODE_CONFIG_CONTENT).mcp.dashboard.url, o.url)
   assert.equal(mcpWire('gemini', o), null)

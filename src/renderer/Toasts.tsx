@@ -25,6 +25,7 @@ export function Toasts({ openTaskId, onOpen }: { openTaskId?: number; onOpen: (g
     if (n && n.kind !== 'permission' && !(n.taskId === openTaskId && document.hasFocus()))
       setItems(l => [n, ...l.filter(x => x.taskId !== n.taskId || !x.command !== !n.command || x.taskId < 0)]) // um aviso do agente e um de comando por tarefa: o mais novo vale
     if (ev?.contextResolved) drop(x => x.ref?.context === ev.contextResolved)
+    if (ev?.questionResolved) drop(x => x.ref?.question === ev.questionResolved)
     if (ev?.openTask?.taskId > 0) openRef.current(ev.openTask.game, ev.openTask.taskId, !!ev.openTask.files) // clique na janela de aviso
   }), [openTaskId])
   useEffect(() => { if (openTaskId != null) drop(x => x.taskId === openTaskId) }, [openTaskId])

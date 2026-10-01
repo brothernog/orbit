@@ -292,7 +292,18 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
     );
     CREATE INDEX checkpoints_task ON task_checkpoints(task_id,id);
   `),
-  // v22: execucoes por tarefa (resumos da lista em briefs.ts, troca de pasta em worktreeTasks.ts, exclusao da tarefa).
+  // v22: sugestoes de tarefa do agente (suggest_task). Cartao no chat da tarefa de origem; usar cria uma tarefa nova com a ordem so
+  // no compositor. Sem vinculo com a tarefa criada (nada a limpar se ela for excluida); excluir a origem apaga as sugestoes (task_id).
+  db => db.exec(`
+    CREATE TABLE task_suggestions (
+      id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL, run_id INTEGER, provider TEXT,
+      title TEXT NOT NULL, tldr TEXT NOT NULL, prompt TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','started','dismissed')),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP, decided_at TEXT
+    );
+    CREATE INDEX task_suggestions_task ON task_suggestions(task_id,state);
+  `),
+  // v23: execucoes por tarefa (resumos da lista em briefs.ts, troca de pasta em worktreeTasks.ts, exclusao da tarefa).
   // Sem ele cada consulta varria a tabela runs inteira (EXPLAIN QUERY PLAN: SCAN runs).
   db => db.exec('CREATE INDEX runs_task ON runs(task_id,id);')
 ]

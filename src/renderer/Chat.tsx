@@ -5,6 +5,7 @@ import { Avatar, Icon, PROVIDER } from './icons'
 import { Markdown } from './Markdown'
 import { Confirm, ContextMenu, type MenuItem } from './Nav'
 import { PermissionPrompt } from './PermissionPrompt'
+import { QuestionPrompt, SuggestionChips } from './AgentAsks'
 import { ContextRequests, TaskInspector, UnsentMessages, usePackages } from './TaskContext'
 import { CONN_STATE, effortLabel, modelName } from './labels'
 import { Bar } from './UsageBar'
@@ -160,8 +161,9 @@ function ModelPicker({ cat, sel, disabled, onChange }: { cat: Catalog | null; se
   )
 }
 
-export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }: {
+export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed, onOpenDraft }: {
   task: Task; accounts: Account[]; providers: Provider[] | null; onChange: () => void; draft?: TodoDraft; onDraftUsed?: () => void
+  onOpenDraft?: (game: string, taskId: number, draft: TodoDraft) => void // sugestao do agente: abre a tarefa nova com a ordem no compositor
 }) {
   const [sel, setSelState] = useState<Sel>(() => parseSel(task.sel) ?? { provider: 'claude', accountId: accounts[0]?.id })
   const [liveMetric, setLiveMetric] = useState<{ occupied: number; capacity: number | null; estimated: boolean; source?: string } | null>(null)
@@ -294,6 +296,8 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed }
         <ContextRequests pkgs={pkgs.list} sends={pkgs.sends} accounts={accounts} reload={() => { pkgs.load(); load(); onChange() }} />
         <UnsentMessages sends={pkgs.sends} reload={pkgs.load} onRecover={t => setText(cur => (cur.trim() ? `${cur}\n\n${t}` : t))} />
         <PermissionPrompt inline taskId={task.id} />
+        <QuestionPrompt taskId={task.id} />
+        {onOpenDraft && <SuggestionChips taskId={task.id} onStart={(g, id, t) => onOpenDraft(g, id, { taskId: id, text: t, images: [] })} />}
         <form className={`composer ${running ? 'running' : ''}`} onSubmit={e => { e.preventDefault(); send() }}>
           <textarea aria-label="Mensagem" placeholder={awaiting ? 'Decida sobre o contexto pendente acima para continuar' : `Mensagem para ${PROVIDER[sel.provider]?.label ?? sel.provider} (Ctrl+Enter envia)`} value={text} rows={1}
             onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && e.ctrlKey) send() }}

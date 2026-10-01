@@ -299,7 +299,7 @@ test('parcial da execucao: grava no intervalo longo, so quando mudou, e nunca de
   db.close()
 })
 
-test('v22: consultas de execucoes por tarefa usam o indice runs(task_id,id)', () => {
+test('v23: consultas de execucoes por tarefa usam o indice runs(task_id,id)', () => {
   const db = openDb(':memory:')
   const plan = (q: string) => (db.prepare('EXPLAIN QUERY PLAN ' + q).all(1) as any[]).map(r => r.detail).join(' | ')
   assert.match(plan("SELECT status FROM runs WHERE task_id=? AND status<>'running' ORDER BY id DESC LIMIT 1"), /USING INDEX runs_task/) // briefs.ts

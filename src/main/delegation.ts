@@ -8,6 +8,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { AGENTS, SAFE_ARG, type ChatOpts } from './adapters.ts'
 import { describeAliases, resolveAlias, type AgentAlias } from './agents.ts'
 import { saveArtifact } from './artifacts.ts'
+import { ASK_TOOL_NAME } from './questions.ts'
 import {
   ApprovalWaiters, bindGrantSession, bindSession, createPackage, currentPackage, finishDelivery, getPackage, invalidatePending, openGrant, pendingItems, PackageLimitError, recordDelivery, renderPackage, verifyForDelivery,
   type Grant, type PackageItem, type PackageRow, type Recipient
@@ -505,7 +506,10 @@ export function mcpWire(provider: string, o: { url: string; token: string; timeo
     // strict: so o servidor do dashboard (filho de leitura). Sem ele o Claude carrega tambem os MCP globais/do projeto e as definicoes
     // dessas ferramentas entram no contexto. Edicao e pai ficam sem: podem precisar de um MCP do projeto (ex.: Godot do jogo).
     // Caminho SEM aspas: cliSpawn so as poe quando roda pelo cmd.exe (claude.cmd); claude.exe (ou Linux) as receberia literais e recusaria a configuracao.
-    return { extra: ['--mcp-config', file, ...(o.strict ? ['--strict-mcp-config'] : []), ...(o.permission ? ['--permission-prompt-tool', 'mcp__dashboard__permission_prompt'] : []), '--allowedTools', ...allowed], env: { MCP_TOOL_TIMEOUT: String(o.timeoutSec * 1000) }, cleanup: () => { try { fs.rmSync(file, { force: true }) } catch {} } }
+    // Com ask_user anunciado, o AskUserQuestion nativo sai: no headless ninguem o responde (viraria um pedido de permissao sem sentido).
+    // Antes de --allowedTools, que e variadico e engoliria o resto.
+    const noNativeAsk = o.tools?.includes(ASK_TOOL_NAME) ? ['--disallowedTools', 'AskUserQuestion'] : []
+    return { extra: ['--mcp-config', file, ...(o.strict ? ['--strict-mcp-config'] : []), ...(o.permission ? ['--permission-prompt-tool', 'mcp__dashboard__permission_prompt'] : []), ...noNativeAsk, '--allowedTools', ...allowed], env: { MCP_TOOL_TIMEOUT: String(o.timeoutSec * 1000) }, cleanup: () => { try { fs.rmSync(file, { force: true }) } catch {} } }
   }
   return null // gemini: a CLI so le servidores MCP de arquivos de configuracao (global ou do projeto); nao alteramos esses arquivos
 }
