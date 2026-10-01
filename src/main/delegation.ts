@@ -168,22 +168,30 @@ export function scopePaths(workspace: string, paths: string[]): string[] {
 // ---- Alteracoes de arquivos: comparacao de instantaneos (independe de Git)
 const SKIP = new Set(['node_modules', '.git', '.worktrees', 'out', 'dist', 'build', '.godot', '.import', 'tmp', 'temp'])
 export type Snap = Map<string, string>
-export function snapshot(root: string, limit = 20000): Snap | null {
+// Assincrono (ate 20.000 stats antes e depois de cada filho): o processo principal segue respondendo durante a varredura.
+// Stats em lotes de STAT_BATCH por pasta, aplicados na ordem das entradas: mesmo resultado e mesmo corte da versao sincrona.
+const STAT_BATCH = 64
+export async function snapshot(root: string, limit = 20000): Promise<Snap | null> {
   const snap: Snap = new Map()
-  const walk = (dir: string): boolean => {
+  const walk = async (dir: string): Promise<boolean> => {
     let entries: fs.Dirent[]
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return true }
-    for (const e of entries) {
-      const abs = path.join(dir, e.name)
-      if (e.isDirectory()) { if (!SKIP.has(e.name) && !walk(abs)) return false }
-      else if (e.isFile()) {
-        if (snap.size >= limit) return false
-        try { const st = fs.statSync(abs); snap.set(path.relative(root, abs).split(path.sep).join('/'), `${st.size}:${Math.round(st.mtimeMs)}`) } catch {}
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { return true }
+    for (let i = 0; i < entries.length; i += STAT_BATCH) {
+      const chunk = entries.slice(i, i + STAT_BATCH)
+      const stats = await Promise.all(chunk.map(e => e.isFile() ? fs.promises.stat(path.join(dir, e.name)).catch(() => null) : null))
+      for (let k = 0; k < chunk.length; k++) {
+        const e = chunk[k], abs = path.join(dir, e.name)
+        if (e.isDirectory()) { if (!SKIP.has(e.name) && !await walk(abs)) return false }
+        else if (e.isFile()) {
+          if (snap.size >= limit) return false
+          const st = stats[k]
+          if (st) snap.set(path.relative(root, abs).split(path.sep).join('/'), `${st.size}:${Math.round(st.mtimeMs)}`)
+        }
       }
     }
     return true
   }
-  return walk(root) ? snap : null // null = pasta grande demais para acompanhar
+  return await walk(root) ? snap : null // null = pasta grande demais para acompanhar
 }
 export function diffSnap(a: Snap, b: Snap): string[] {
   const out = new Set<string>()
@@ -364,7 +372,7 @@ export async function runDelegation(d: Deps, ctx: ParentCtx, raw: unknown, signa
   const target = `${a.agent ? `${a.agent} = ` : ''}${a.provider}${a.model ? `/${a.model}` : ''}${a.effort ? ` (${a.effort})` : ''}`
   d.note(ctx.taskId, `↳ Delegacao #${id}${a.continuationOf ? ` (continuacao da #${a.continuationOf})` : ''} para ${target} em modo ${a.mode === 'read' ? 'somente leitura' : 'edicao'}${scope.length ? ` · escopo: ${scope.join(', ')}` : ''}${a.files.length ? ` · trechos anexados: ${a.files.map(f => f.path).join(', ')}` : ''}: “${clip(a.objective, 200)}”`)
 
-  const before = snapshot(ctx.cwd)
+  const before = await snapshot(ctx.cwd)
   // Identidade efetiva do filho (criada aqui, nunca informada por ele): continuacao legitima = mesma sessao + mesmo destinatario = mesmo grant.
   const grant = openGrant(d.db, { taskId: ctx.taskId, recipient, sessionId: sid ?? null })
   const wire = await d.childTools?.({ taskId: ctx.taskId, lineage, auth: grant, delegationId: id, provider: a.provider, mode: a.mode, cwd: ctx.cwd, scope, engines: ctx.engines }).catch(() => null) ?? null
@@ -391,6 +399,7 @@ export async function runDelegation(d: Deps, ctx: ParentCtx, raw: unknown, signa
   const timer = setTimeout(() => { timedOut = true; child.cancel() }, s.timeoutMin * 60_000)
   const onAbort = () => child.cancel() // o pai desistiu da chamada
   signal.addEventListener('abort', onAbort)
+  if (signal.aborted) onAbort() // desistiu durante a preparacao (instantaneo, ferramentas)
   let r: ChatResult | undefined
   try { r = await child.result } finally {
     clearTimeout(timer); signal.removeEventListener('abort', onAbort); ctx.children.delete(child)
@@ -400,7 +409,7 @@ export async function runDelegation(d: Deps, ctx: ParentCtx, raw: unknown, signa
   }
 
   // O que mudou na pasta (e se o modo leitura foi realmente respeitado).
-  const after = snapshot(ctx.cwd)
+  const after = await snapshot(ctx.cwd)
   const changed = before && after ? diffSnap(before, after) : null
   const outOfScope = changed && scope.length ? changed.filter(f => !inScope(f, scope)) : []
   const violation = a.mode === 'read' && !!changed?.length

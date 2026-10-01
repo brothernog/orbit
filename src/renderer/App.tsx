@@ -18,9 +18,10 @@ import { FilesPanel } from './FilesPanel'
 import { LinkedIn } from './LinkedIn'
 import orbitMark from './orbit-mark.svg'
 import { Confirm, ContextMenu, GroupDialog, ProjectIcon, RenameInput, type MenuItem } from './Nav'
-import { groupOf, initials, moveTo, newGroup, placeBefore, type Group } from './groups'
+import { groupOf, initials, moveTo, newGroup, placeBefore, taskToRemember, type Group } from './groups'
 import { expireRead, loadRead, readSnapshot, setRead } from './readCache'
 import type { QuotaSnapshot } from './usageText'
+import { ago, clock, same } from './time'
 
 const ls = (k: string) => { try { return localStorage.getItem(k) } catch { return null } }
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch {} }
@@ -42,32 +43,30 @@ function useAuto(query: string, initial: boolean) {
 }
 
 // Agentes ativos em todos os projetos. ponytail: polling de 3 s num Map local; trocar por evento se ficar pesado.
+// Lista igual nao troca o estado (nada re-renderiza) e janela oculta/minimizada nao consulta.
 function useActive() {
   const [list, setList] = useState<Active[]>([])
   useEffect(() => {
-    const load = () => api.listActive().then(setList, () => {})
+    const load = () => api.listActive().then((next: Active[]) => setList(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next)), () => {})
     load()
-    const t = setInterval(load, 3000)
+    const t = setInterval(() => { if (document.visibilityState === 'visible') load() }, 3000)
+    const vis = () => { if (document.visibilityState === 'visible') load() }
+    document.addEventListener('visibilitychange', vis)
     const off = onChat(ev => { if (ev.done || ev.refresh) load() })
-    return () => { clearInterval(t); off() }
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', vis); off() }
   }, [])
   return list
 }
 
-const ago = (iso: string) => {
-  const s = (Date.now() - new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z')).getTime()) / 1000
-  if (!(s >= 0)) return ''
-  if (s < 90) return 'agora'
-  if (s < 5400) return `${Math.round(s / 60)} min`
-  if (s < 129600) return `${Math.round(s / 3600)} h`
-  return `${Math.round(s / 86400)} d`
+// Textos relativos ("há 5 min") da gaveta e do Inicio: um re-render por minuto com a janela visivel.
+function useMinuteTick() {
+  const [, tick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => { if (document.visibilityState === 'visible') tick(n => n + 1) }, 60_000)
+    return () => clearInterval(t)
+  }, [])
 }
-const elapsed = (from: number) => {
-  const s = Math.max(0, Math.floor((Date.now() - from) / 1000))
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60
-  return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}:${String(r).padStart(2, '0')}`
-}
-const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+
 
 // Uma conversa que pede voce (fila do Ctrl+J, do dock e do Ctrl+K).
 export type QueueItem = { t: Task; a: Attention }
@@ -129,7 +128,7 @@ function AgentDock({ active, queue, onOpen, onOpenTask, onNext }: {
                     <span className="dock-task">{a.title}</span>
                     <span className="dock-meta">{doingText(a.doing) ?? `${PROVIDER[a.provider]?.label ?? a.provider}${a.model ? ` ${a.model}` : ''}`} · {name(a.game)}{a.kind === 'delegation' ? ', delegação' : ''}</span>
                   </span>
-                  <span className="dock-time">{a.startedAt ? elapsed(a.startedAt) : ''}</span>
+                  <span className="dock-time">{a.startedAt ? clock(a.startedAt) : ''}</span>
                 </button>
               </li>
             ))}
@@ -142,15 +141,16 @@ function AgentDock({ active, queue, onOpen, onOpenTask, onNext }: {
 
 // Conversas e resumos de TODAS as pastas: alimentam o modelo de atencao (gaveta, trilho, dock, Ctrl+J, Ctrl+K).
 // Leituras locais do SQLite; recarrega em lote quando um agente termina, pede permissao ou contexto.
+// Leitura que falha sem lista anterior guarda o erro (string): a gaveta mostra o motivo em vez de carregar para sempre.
 type Folder = { tasks: Task[]; briefs: Map<number, Brief> }
 function useWorld(games: string[], deps: unknown[]) {
-  const [map, setMap] = useState<Record<string, Folder>>({})
+  const [map, setMap] = useState<Record<string, Folder | string>>({})
   const key = games.join('|')
   useEffect(() => {
     let live = true, t: ReturnType<typeof setTimeout> | undefined
     const load = () => games.forEach(g => Promise.all([api.listTasks(g, {}), api.taskBriefs(g)]).then(([l, b]: [Task[], Brief[]]) => {
       if (live) setMap(m => ({ ...m, [g.toLowerCase()]: { tasks: l, briefs: new Map(b.map(x => [x.id, x])) } }))
-    }, () => {}))
+    }, (e: unknown) => { if (live) setMap(m => (typeof m[g.toLowerCase()] === 'object' ? m : { ...m, [g.toLowerCase()]: errText(e) })) }))
     load()
     const off = onChat((ev: any) => {
       if (ev?.done || ev?.refresh || ev?.permissionRequest || ev?.permissionResolved || ev?.contextRequest || ev?.contextResolved) { clearTimeout(t); t = setTimeout(load, 120) }
@@ -219,6 +219,7 @@ export default function App() {
   const [, setAliasVer] = useState(0)
   const req = useRef(0)
   const active = useActive()
+  useMinuteTick()
 
   const loadAccounts = () => api.listAccounts().then((list: Account[]) => {
     setAccounts(list)
@@ -237,6 +238,7 @@ export default function App() {
     })
   }
   const loadAliases = () => api.projectNames().then((a: Record<string, string>) => { setAliases(a); setAliasVer(v => v + 1) }, () => {})
+  const loadGames = () => { api.listGames().then(setGames, (e: any) => setErr(errText(e))) }
   const saveGroups = (n: Group[]) => { setGroups(n); api.setProjectGroups(n).catch((e: any) => setErr(errText(e))) }
   useEffect(() => {
     const load = () => api.getProjectGroups().then(setGroups, () => {})
@@ -244,7 +246,7 @@ export default function App() {
     return onChat(e => { if (e.groupsChanged) load() })
   }, [])
   useEffect(() => {
-    api.listGames().then(setGames); loadAccounts(); loadAliases()
+    loadGames(); loadAccounts(); loadAliases()
     loadRead<Provider[]>('diagnose', () => api.diagnose(), 600_000).then(setProviders, () => setProviders([]))
     // So metadados locais; catalogos/CLIs e consulta de quotas continuam sob demanda.
     for (const read of ['getContextLimits', 'getNotifySettings', 'getJarvisSettings', 'getDelegationSettings', 'getPermissionSettings', 'getAgentAliases', 'summaryTitles', 'backupInfo'])
@@ -280,7 +282,10 @@ export default function App() {
   }
   useEffect(() => { setTasks(null); setTaskId(null); setErr('') }, [game])
   useEffect(() => { loadTasks() }, [game])
-  useEffect(() => { if (game && taskId != null) lsSet(`task:${game}`, String(taskId)) }, [game, taskId])
+  useEffect(() => { // so a tarefa que e desta pasta (openIn ja gravou a escolhida antes de trocar)
+    const id = game ? taskToRemember(game, taskId, tasks) : null
+    if (id != null) lsSet(`task:${game}`, String(id))
+  }, [game, taskId, tasks])
 
   const pick = (g: string) => {
     const w = groupOf(groups, g)
@@ -291,8 +296,8 @@ export default function App() {
   const addGame = (groupId?: string) => api.addGame().then((g: string | null) => {
     if (!g) return
     if (groupId && groupId !== INBOX) saveGroups(moveTo(groups, g, groupId))
-    api.listGames().then(setGames); pick(g)
-  })
+    loadGames(); pick(g)
+  }, (e: any) => setErr(errText(e)))
   // Organizador no trilho: a Nova troca (animada) para a ultima pasta usada nele, com a gaveta aberta. Vazio: pede a primeira pasta.
   const openGroup = (x: Group) => {
     const list = x.id === INBOX ? x.games : games.filter(g => x.games.includes(g))
@@ -371,7 +376,10 @@ export default function App() {
   const folders = ws ? ws.games.filter(g => games.includes(g)) : []
   // Modelo unico de atencao (attention.ts): o mesmo estado na gaveta, no trilho, no dock, no Ctrl+K e no Ctrl+J.
   const seen = useSeen()
-  const world = useWorld(games, [tasks, ver, active.map(a => a.taskId).join(',')])
+  // Sem `tasks` nas dependencias: o `done`/`refresh` que recarrega a pasta atual ja recarrega o mundo.
+  const worldRaw = useWorld(games, [ver, active.map(a => a.taskId).join(',')])
+  const world: Record<string, Folder> = {}, worldErr: Record<string, string> = {}
+  for (const [k, v] of Object.entries(worldRaw)) if (typeof v === 'string') worldErr[k] = v; else world[k] = v
   const tasksOf = (g: string) => (game && same(g, game) && tasks) || world[g.toLowerCase()]?.tasks || null
   const briefOf = (t: Task) => world[t.game.toLowerCase()]?.briefs.get(t.id)
   const attOf = (t: Task) => attentionOf(t, briefOf(t), active.find(a => a.taskId === t.id), seen[t.id])
@@ -405,7 +413,7 @@ export default function App() {
 
   const when = (t: Task) => {
     const who = active.find(x => x.taskId === t.id)
-    if (who?.startedAt) return elapsed(who.startedAt)
+    if (who?.startedAt) return clock(who.startedAt)
     return ago(t.updated_at)
   }
   const taskRow = (t: Task) => {
@@ -439,7 +447,7 @@ export default function App() {
   // Arraste a pasta para um organizador do trilho.
   const folderSection = (g: string) => {
     const cur = g === game
-    const list = tasksOf(g)
+    const list = tasksOf(g), failed = list === null ? worldErr[g.toLowerCase()] ?? null : null
     const open = folderOpen[g] ?? cur
     const rows = (list ?? []).map(t => ({ t, a: attOf(t) }))
     const sorted = rows.sort((x, y) => RANK[x.a] - RANK[y.a] || y.t.updated_at.localeCompare(x.t.updated_at))
@@ -448,7 +456,8 @@ export default function App() {
     const sum = sumOf([g])
     const body = (
       <ul className="tasklist">
-        {list === null ? <li className="chats-empty"><span className="loader sm" aria-label="Carregando conversas" /></li> : openList.map(taskRow)}
+        {failed != null ? <li className="chats-empty" role="alert">{failed}</li>
+          : list === null ? <li className="chats-empty"><span className="loader sm" aria-label="Carregando conversas" /></li> : openList.map(taskRow)}
         {list?.length === 0 && <li className="chats-empty">Nenhuma conversa ainda.</li>}
         {done.length > 0 && <li className="chats-group" role="presentation">
           <button className="group-toggle" aria-expanded={!!doneOpen[g]} onClick={() => setDoneOpen(m => ({ ...m, [g]: !m[g] }))}><Icon n="chevron" size={12} />Concluídas <span>{done.length}</span></button>
@@ -592,7 +601,7 @@ export default function App() {
         </header>
         {err && <div className="banner" role="alert">{err}<button className="icon sm" aria-label="Fechar aviso" onClick={() => setErr('')}><Icon n="close" size={14} /></button></div>}
         {settings
-          ? <Settings accounts={accounts} reload={loadAccounts} providers={providers} refreshProviders={refreshProviders} onGamesChange={() => api.listGames().then(setGames)} />
+          ? <Settings accounts={accounts} reload={loadAccounts} providers={providers} refreshProviders={refreshProviders} onGamesChange={loadGames} />
           : li ? <LinkedIn accounts={accounts} onErr={setErr} />
           : home ? <Home games={games} active={active} onOpen={pick} onAdd={addGame} lastGame={game} onTodoTask={(g, id, d) => { setDraft(d); openIn(g, id) }} />
           : !game ? <div className="empty"><h1>Escolha um projeto</h1><p>Selecione um projeto no trilho à esquerda ou adicione a pasta de um jogo ou app.</p></div>

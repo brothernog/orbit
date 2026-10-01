@@ -172,12 +172,12 @@ export function createProductionService(db: DatabaseSync, dataDir: string) {
   }
   const listBuildCommands = (game: string) => db.prepare("SELECT c.id,c.name,c.workspace,t.title task_title FROM command_runs c JOIN tasks t ON t.id=c.task_id WHERE t.game=? AND c.status='completed' AND c.exit_code=0 ORDER BY c.id DESC LIMIT 50").all(game) as BuildCommand[]
   const listBuilds = (game: string) => db.prepare('SELECT * FROM project_builds WHERE game=? ORDER BY id DESC').all(game) as Build[]
-  async function registerBuild(game: string, raw: any, validateSource?: () => void) {
+  async function registerBuild(game: string, raw: any, validateSource?: () => void | Promise<void>) {
     const title = text(raw?.title, 'Título', 300, true), version = text(raw?.version, 'Versão', 100, true), platform = text(raw?.platform, 'Plataforma', 100, true), notes = text(raw?.notes, 'Notas', 5000), rel = relativeFile(raw?.path)
     const run = buildSource(game, raw?.commandId), command = commandSnapshot(run)
-    validateSource?.()
+    await validateSource?.()
     const snapshot = await capture(run.workspace, rel)
-    validateSource?.()
+    await validateSource?.()
     if (commandSnapshot(buildSource(game, run.id)) !== command) throw Error('O comando mudou durante a captura. Atualize a lista.')
     const existing = db.prepare('SELECT id FROM project_builds WHERE game=? AND source_command_id=? AND hash=? AND title=? AND version=? AND platform=?').get(game, run.id, snapshot.hash, title, version, platform) as { id: number } | undefined
     if (existing) return existing.id

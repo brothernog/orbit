@@ -292,3 +292,40 @@ test('claude: cota esgotada (rejected/rate_limit) vira categoria limit; outros e
   assert.deepEqual(p({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning' } }), [])
   assert.equal((await run('stdout-error').result).category === 'limit', false)
 })
+
+test('streaming: muitos fragmentos viram poucos envios, marcador de ferramenta na ordem e o texto final sai antes do resultado', async () => {
+  const s = path.join(tmp, 'burst.js')
+  fs.writeFileSync(s, `process.stdin.resume(); process.stdin.on('end', () => {
+    const o = x => process.stdout.write(JSON.stringify(x) + '\\n')
+    o({ type: 'init', session_id: 'b1' })
+    for (let i = 0; i < 300; i++) o({ type: 'message', role: 'assistant', content: 'a', delta: true })
+    o({ type: 'tool_use', tool_name: 'read_file', tool_id: 't1' })
+    for (let i = 0; i < 300; i++) o({ type: 'message', role: 'assistant', content: 'b', delta: true })
+    o({ type: 'result', status: 'success' })
+  })`)
+  const sent: string[] = []
+  let resolved = false
+  const r = await runChat({ cmd: process.execPath, args: [s], cwd: tmp, input: 'x', parse: AGENTS.gemini.parse, onText: t => { assert.ok(!resolved, 'texto depois do resultado'); sent.push(t) } }).result
+  resolved = true
+  assert.equal(r.status, 'completed', r.error ?? '')
+  assert.ok(sent.length < 50, `envios demais: ${sent.length}`)
+  assert.equal(sent[sent.length - 1], r.text) // o final chega inteiro
+  assert.ok(sent.every((t, i) => i === 0 || (t.length > sent[i - 1].length && t.startsWith(sent[i - 1])))) // nunca volta no tempo
+  assert.match(r.text, /^a{300}\n\n`> read_file`\n\nb{300}$/)
+  await sleep(150)
+  assert.equal(sent[sent.length - 1], r.text)
+})
+
+test('streaming: cancelar entrega o parcial antes do resultado e nada chega depois', async () => {
+  const pidFile = path.join(tmp, 'kid3.pid')
+  const sent: string[] = []
+  let resolved = false
+  const h = run('hang-tree', { arg: pidFile, opts: { onText: (t: string) => { assert.ok(!resolved); sent.push(t) } } })
+  while (!fs.existsSync(pidFile) || !fs.readFileSync(pidFile, 'utf8')) await sleep(50)
+  await sleep(200)
+  h.cancel()
+  const r = await h.result
+  resolved = true
+  assert.equal(r.status, 'cancelled')
+  assert.deepEqual(sent, ['antes de travar'])
+})

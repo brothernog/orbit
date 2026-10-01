@@ -112,3 +112,34 @@ test('comandos: rajadas de saída emitem metadados; início/fim únicos e flush 
     assert.ok(events.indexOf(outputs.at(-1))<events.indexOf(changes[1]));assert.ok(events.indexOf(changes[1])<events.indexOf(done[0]))
   } finally {service.stopAll();db.close()}
 })
+
+test('comandos: saída viva vem da memória; SQLite grava só no intervalo longo e no fim, antes da conclusão',async()=>{
+  const db=new DatabaseSync(':memory:');migrate(db)
+  let writes=0
+  const counted=new Proxy(db,{get(target,prop){
+    if(prop==='prepare')return (sql:string)=>{if(/SET output=/.test(sql))writes++;return target.prepare(sql)}
+    const value=(target as any)[prop];return typeof value==='function'?value.bind(target):value
+  }}) as DatabaseSync
+  const game=process.cwd(),task=createTask(db,game),other=createTask(db,game),events:any[]=[]
+  // ~1,2 s de saída em 40 pedaços: antes eram ~8 regravações do texto inteiro; agora uma só, no fim.
+  saveCommands(db,game,[{name:'Longo',purpose:'test',program:process.execPath,args:['-e','let n=0;const t=setInterval(()=>{process.stdout.write("é😀".repeat(500));if(++n===40)clearInterval(t)},30)']}])
+  const service=createCommandService(counted,new WorkspaceGuard(),()=>false,event=>{
+    if(event && (event as any).commandDone)events.push({done:true,writes,stored:commandRun(db,task,(event as any).commandDone.id)!.output.length})
+    events.push(event)
+  })
+  try {
+    const id=await service.start(task,game,game,'Longo')
+    let live:any
+    for(let i=0;i<100;i++){await sleep(30);live=service.output(task,id);if(live.total>=3000)break}
+    assert.ok(live.total>=3000);assert.equal(commandRun(db,task,id)!.output,'') // ainda não persistido
+    assert.ok(service.output(task,id,2).output.startsWith(live.output.slice(2))) // offsets UTF-16; a saída só cresce
+    assert.throws(()=>service.output(other,id),/outra tarefa/)
+    assert.throws(()=>service.output(task,id,1_000_001),/inválido/)
+    for(let i=0;i<150&&commandRun(db,task,id)!.status==='running';i++)await sleep(30)
+    const run=commandRun(db,task,id)!
+    assert.equal(run.status,'completed');assert.equal(run.output.length,40*500*3);assert.equal(writes,1)
+    const marker=events.find(e=>e.done);assert.equal(marker.writes,1);assert.equal(marker.stored,run.output.length) // flush final antes do commandDone
+    assert.deepEqual(service.output(task,id,3),commandOutput(db,task,id,3)) // terminado: lê do SQLite
+    assert.deepEqual(events.filter(e=>e.commandOutput).at(-1).commandOutput,{id,outputLength:run.output.length,truncated:false})
+  } finally {service.stopAll();db.close()}
+})

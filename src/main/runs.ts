@@ -51,6 +51,16 @@ export function startRun(db: DatabaseSync, c: RunConfig, userText: string, notic
 export const savePartial = (db: DatabaseSync, runId: number, text: string) =>
   db.prepare("UPDATE runs SET partial=? WHERE id=? AND status='running'").run(text, runId)
 
+// O parcial so serve para reconcileRuns (queda do app): a UI ao vivo usa o texto em memoria. Cada gravacao reescreve o
+// texto inteiro, entao grava no maximo a cada `everyMs` e so quando mudou; o texto final vai por finishRun.
+export function partialSaver(db: DatabaseSync, runId: number, everyMs = 10_000, now = Date.now) {
+  let last = now(), saved = ''
+  return (text: string) => {
+    if (text === saved || now() - last < everyMs) return
+    last = now(); saved = text; savePartial(db, runId, text)
+  }
+}
+
 // Encerra a execucao e grava a mensagem do agente uma unica vez (repetir a chamada nao duplica nada).
 export function finishRun(db: DatabaseSync, runId: number, r: Reply) {
   db.exec('BEGIN')

@@ -3,6 +3,7 @@
 import path from 'node:path'
 import type { Ev, Metric } from './adapters.ts'
 import { categorize, cliSpawn, killTree, resolveCli, sanitize, type Category } from './providers.ts'
+import { coalesce } from './coalesce.ts'
 
 // Junta medidas: contexto/janela = o mais recente; consumo = o mais recente ou, com `accumulate`, a soma dos passos.
 export function mergeMetric(prev: Metric | undefined, n: Metric, accumulate = false): Metric {
@@ -53,6 +54,8 @@ export type RunOptions = {
 
 const tail = (s: string, n = 2000) => s.slice(-n)
 const GENERIC_ERROR = /unexpected server error|check server logs/i
+// Cadencia do texto ao vivo: cada fragmento reenviaria o texto inteiro (IPC + markdown na tela); o fim sai sempre na hora.
+const TEXT_EVERY_MS = 80
 const CAUSE = /\b([A-Z]\w*Error): ([^"\\\n)]{3,300})/ // ex.: ProviderModelNotFoundError: Model not found: x/y. Did you mean: ...
 
 export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; result: Promise<ChatResult> } {
@@ -91,6 +94,7 @@ export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; resu
     if (cancelled) return finish(null)
     if (!exe) return { status: 'failed', text: '', notes, code: null, category: 'command', error: `${o.cmd} nao encontrado no PATH.` }
     const child = cliSpawn(exe, o.args, { cwd: o.cwd, env: o.env })
+    const textOut = coalesce<string>(t => o.onText?.(t), TEXT_EVERY_MS)
 
     const handle = (line: string) => {
       if (!line.trim()) return
@@ -99,7 +103,7 @@ export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; resu
       for (const e of o.parse(ev)) {
         if (e.kind === 'session') { if (e.id !== session) { session = e.id; o.onSession?.(e.id) } }
         else if (e.kind === 'text') {
-          text += (text && !e.delta && !text.endsWith('\n') ? '\n\n' : '') + e.text; o.onText?.(text)
+          text += (text && !e.delta && !text.endsWith('\n') ? '\n\n' : '') + e.text; textOut.push(text)
           if (e.delta && lastWasText) messages[messages.length - 1] += e.text; else messages.push(e.text)
           lastWasText = true
         }
@@ -109,7 +113,7 @@ export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; resu
           return
         }
         else if (e.kind === 'toolResult') o.onToolResult?.(e.ref, e.ok, e.output ?? '')
-        else if (e.kind === 'tool') { o.onTool?.(e.name, e.detail, e.ref); text += `\n\n\`> ${e.name.replace(/`/g, "'").slice(0, 200)}\`\n\n`; o.onText?.(text); tools.push(e.name.slice(0, 500)); lastWasText = false }
+        else if (e.kind === 'tool') { o.onTool?.(e.name, e.detail, e.ref); text += `\n\n\`> ${e.name.replace(/`/g, "'").slice(0, 200)}\`\n\n`; textOut.push(text); tools.push(e.name.slice(0, 500)); lastWasText = false }
         else if (e.kind === 'usage') { usage = e.data; o.onUsage?.(e.data) }
         else if (e.kind === 'context') {
           if (e.key && e.accumulate) { if (seenKeys.has(e.key)) continue; seenKeys.add(e.key) }
@@ -124,7 +128,7 @@ export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; resu
 
     return new Promise<ChatResult>(resolve => {
       let settled = false
-      const settle = (r: ChatResult) => { if (!settled) { settled = true; resolve(r) } }
+      const settle = (r: ChatResult) => { if (!settled) { settled = true; textOut.close(); resolve(r) } } // texto pendente sai antes do resultado; depois dele, nada
       let buf = ''
       child.stdout.setEncoding('utf8')
       child.stderr.setEncoding('utf8')

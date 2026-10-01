@@ -1,20 +1,34 @@
 // Ponte com o processo principal (ver src/preload/index.ts) e tipos compartilhados da interface.
 import { expireRead, invalidateRead, setRead } from './readCache.ts'
+import { SETTINGS_READS } from '../main/settingsReads.ts'
+import type { Catalog, ModelOpt } from '../main/catalog.ts'
+import type { SendResult } from '../main/chatService.ts'
+import type { StoredMetric, Task as StoredTask, TaskSel } from '../main/tasks.ts'
+export type { Catalog, ModelOpt, SendResult }
 
-const settingsReads: Record<string, string> = {
-  setContextLimits: 'getContextLimits', setNotifySettings: 'getNotifySettings', setJarvisSettings: 'getJarvisSettings',
-  setDelegationSettings: 'getDelegationSettings', setPermissionSettings: 'getPermissionSettings',
-  setAgentAliases: 'getAgentAliases', setSummaryTitles: 'summaryTitles', setAutomations: 'getAutomations', setHandover: 'getHandover'
-}
 const changedLists: Record<string, string[]> = {
   addPermissionRule: ['listPermissionRules', 'listPermissionRequests'],
   removePermissionRule: ['listPermissionRules', 'listPermissionRequests'],
   resolvePermissionRequest: ['listPermissionRules', 'listPermissionRequests'],
   hideGame: ['listHidden'], unhideGame: ['listHidden']
 }
-export const api = new Proxy({} as Record<string, (...a: any[]) => Promise<any>>, {
+// Contratos dos canais mais usados (formatos do processo principal); os demais continuam sem tipo.
+type Api = {
+  [name: string]: (...a: any[]) => Promise<any>
+  listGames(): Promise<string[]>
+  listAccounts(): Promise<Account[]>
+  listActive(): Promise<Active[]>
+  listTasks(game: string, o: { search?: string; archived?: boolean }): Promise<Task[]>
+  createTask(game: string, title?: string): Promise<number>
+  taskChat(id: number, sel: Sel): Promise<TaskChat>
+  sendTask(id: number, sel: Sel, text: string, images?: string[], stepId?: number): Promise<SendResult>
+  setTaskSel(id: number, sel: Sel): Promise<void>
+  stopTask(id: number): Promise<void>
+  catalog(provider: string, force?: boolean): Promise<Catalog>
+}
+export const api = new Proxy({} as Api, {
   get: (_t, name: string) => (...args: any[]) => {
-    const read = settingsReads[name]
+    const read = SETTINGS_READS[name] // o main devolve em cada setter o formato da leitura
     if (read) expireRead(read)
     changedLists[name]?.forEach(expireRead)
     return (window as any).invoke(name, ...args).then((value: any) => {
@@ -34,9 +48,8 @@ export type Provider = {
   auth?: Auth; lastError?: { at: string; code: number; category: string; detail: string } | null
 }
 export type Pin = { id: number; game: string; title: string; body: string; status: string; agent?: string; branch?: string; worktree?: string }
-export type Task = {
-  id: number; game: string; title: string; state: 'aberta' | 'andamento' | 'concluida'; legacy: string | null; pin_id: number | null
-  branch: string | null; worktree: string | null; created_at: string; updated_at: string; archived_at: string | null
+export type Task = StoredTask & {
+  state: 'aberta' | 'andamento' | 'concluida'
   messages?: number; running?: boolean
   sel?: string | null // JSON da escolha de provedor/perfil/modelo/esforco da tarefa
 }
@@ -44,20 +57,17 @@ export type Msg = {
   id: number; role: 'user' | 'agent' | 'system'; text: string; status?: 'completed' | 'failed' | 'cancelled' | null
   provider?: string | null; account_id?: number | null; model?: string | null; effort?: string | null; created_at: string
 }
-export type Sel = { provider: string; accountId?: number; model?: string; effort?: string }
-export type ModelOpt = { id: string; label?: string; efforts: string[] | null; defaultEffort?: string | null; contextWindow?: number | null }
-export type Catalog = {
-  provider: string; source: 'native' | 'help' | 'manual'; at: string; models: ModelOpt[]; efforts: string[]
-  allowCustomModel: boolean; note?: string; error?: string
-}
-export type Metric = {
-  model: string | null; effort: string | null; occupied: number | null; capacity: number | null; estimated: boolean
-  consumed_in: number | null; consumed_out: number | null; scope: string | null; source: string | null; at: string
+export type Sel = TaskSel
+export type Metric = StoredMetric
+// Conversa da tarefa (IPC taskChat).
+export type TaskChat = {
+  task: Task; running: boolean; awaitingContext: boolean; live: string; session: string | null; sessions: { provider: string; profile: string }[]
+  sel: Sel | null; metric: Metric | null; messages: Msg[]
 }
 
 // Eventos de streaming do chat: { taskId, text } enquanto executa e { taskId, done } ao terminar.
 const listeners = new Set<(ev: any) => void>()
-;(window as any).onChat?.((ev: any) => {
+const offBridge: (() => void) | undefined = (window as any).onChat?.((ev: any) => {
   if (Number.isSafeInteger(ev.accountUsage?.accountId)) {
     const key = `accountUsage:${ev.accountUsage.accountId}`
     if (ev.accountUsage.usage === null) {
@@ -65,8 +75,10 @@ const listeners = new Set<(ev: any) => void>()
       invalidateRead(`accountStatus:${ev.accountUsage.accountId}`)
     } else setRead(key, ev.accountUsage.usage)
   }
-  listeners.forEach(f => f(ev))
+  // Um listener com erro nao impede a entrega aos outros.
+  for (const f of listeners) try { f(ev) } catch (e) { console.error(e) }
 })
+import.meta.hot?.dispose(() => offBridge?.()) // HMR recarrega este modulo: sem isso os listeners da ponte se acumulam
 export const onChat = (f: (ev: any) => void) => {
   listeners.add(f)
   return () => { listeners.delete(f) }

@@ -1,7 +1,6 @@
 // Integracao local: Git mantem o indice/conflitos; a dashboard so confirma estados revisados.
 import fs from 'node:fs'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { inside, samePath } from './guard.ts'
@@ -216,27 +215,31 @@ export function createWorktreeService(db: DatabaseSync) {
     if (!m || !samePath(m.source.path, source)) throw new Error('Registro de limpeza nao corresponde a worktree removida.')
     db.prepare('DELETE FROM settings WHERE key=?').run(removalKey(game))
   }
-  const assertAvailable = (cwd: string) => {
+  // Assincrono (git com timeout de 8 s, fora da thread principal): chamado antes de cada envio/comando. Os marcadores
+  // no banco e as operacoes pendentes sao conferidos depois do ultimo await, sem intervalo antes de o chamador continuar.
+  const assertAvailable = async (cwd: string) => {
     let dirs: string[]
-    try { dirs = execFileSync('git', ['rev-parse', '--git-dir', '--git-common-dir'], { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim().split(/\r?\n/).map(d => fs.realpathSync.native(path.resolve(cwd, d))) } catch (e: any) {
-      if (/not a git repository/i.test(String(e.stderr))) return
+    try { dirs = (await run(cwd, ['rev-parse', '--git-dir', '--git-common-dir'])).trim().split(/\r?\n/).map(d => fs.realpathSync.native(path.resolve(cwd, d))) } catch (e: any) {
+      if (/not a git repository/i.test(String(e.stderr ?? e.message))) return
       if (e.code === 'ENOENT') {
         let p = path.resolve(cwd)
         while (!exists(path.join(p, '.git'))) { const up = path.dirname(p); if (up === p) return; p = up }
       }
       throw new Error('Nao foi possivel verificar o estado Git da pasta.')
     }
-    if (operations(dirs[0]).length) throw new Error('Conclua ou aborte a operacao Git pendente antes de executar.')
-    for (const row of db.prepare("SELECT key,value FROM settings WHERE key LIKE 'worktreeMerge:%'").all() as { key: string; value: string }[]) {
+    const markers = () => (db.prepare("SELECT key,value FROM settings WHERE key LIKE 'worktreeMerge:%'").all() as { key: string; value: string }[]).map(row => {
       let m: Marker
       try { m = JSON.parse(row.value) } catch { throw new Error('Registro de integracao invalido; confira os dados antes de executar.') }
       if (!m?.target?.path || !m.target.commonDir) throw new Error('Registro de integracao invalido; confira os dados antes de executar.')
-      if (samePath(m.target.path, cwd) && samePath(m.target.commonDir, dirs[1])) {
-        const branch = execFileSync('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd, encoding: 'utf8', windowsHide: true }).trim()
-        const parents = execFileSync('git', ['rev-list', '--parents', '-n', '1', 'HEAD'], { cwd, encoding: 'utf8', windowsHide: true })
-        if (branch === m.target.branch && completed(m, parents)) db.prepare('DELETE FROM settings WHERE key=?').run(row.key)
-        else throw new Error('Conclua ou aborte a integracao de worktree antes de executar.')
-      }
+      return { key: row.key, m, here: samePath(m.target.path, cwd) && samePath(m.target.commonDir, dirs[1]) }
+    })
+    if (operations(dirs[0]).length) throw new Error('Conclua ou aborte a operacao Git pendente antes de executar.')
+    // O estado Git so e lido (async) quando ha marcador desta pasta; a decisao usa os marcadores relidos depois disso.
+    const head = markers().some(x => x.here) ? { branch: (await run(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim(), parents: await run(cwd, ['rev-list', '--parents', '-n', '1', 'HEAD']) } : null
+    if (operations(dirs[0]).length) throw new Error('Conclua ou aborte a operacao Git pendente antes de executar.')
+    for (const { key, m, here } of markers()) if (here) {
+      if (head && head.branch === m.target.branch && completed(m, head.parents)) db.prepare('DELETE FROM settings WHERE key=?').run(key)
+      else throw new Error('Conclua ou aborte a integracao de worktree antes de executar.')
     }
   }
   return { view, previewMerge, beginMerge, finishMerge, abortMerge, dismissMerge, previewRemoval, remove, recoverRemoval, ackRemoval, assertAvailable }

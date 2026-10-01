@@ -1,7 +1,7 @@
 // Painel de branch da pasta (no resumo do projeto): o que mudou, commit, push, PR e issues, sem sair do app.
 // Uma acao principal por vez: o botao em destaque e sempre o proximo passo (commit -> push -> PR). Publicar pede confirmacao.
 // Arquivos desmarcados ficam fora do commit (continuam alterados na pasta).
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api, errText, onChat } from './api'
 import { Icon } from './icons'
@@ -86,10 +86,14 @@ export function BranchPanel({ dirs, onErr }: { dirs: { path: string; label: stri
   const [hskip, setHskip] = useState<Record<string, string[]>>({}) // trechos desmarcados por arquivo (so arquivos modificados)
   const [mergePending, setMergePending] = useState(true), [refresh, setRefresh] = useState(0)
 
+  // So a ultima leitura vale, e sempre da pasta atual: trocar de pasta com uma resposta pendente nao mostra nem commita a anterior.
+  const cur = useRef({ dir, n: 0 })
+  cur.current.dir = dir
   const load = () => {
     setRefresh(n => n + 1)
-    api.branchView(dir).then(setV, (e: any) => { setV(null); onErr(errText(e)) })
-    api.prView(dir).then(setPr, () => setPr({ pr: null, error: null }))
+    const d = cur.current.dir, n = ++cur.current.n, live = () => n === cur.current.n
+    api.branchView(d).then((x: View) => { if (live()) setV(x) }, (e: any) => { if (live()) { setV(null); onErr(errText(e)) } })
+    api.prView(d).then((x: any) => { if (live()) setPr(x) }, () => { if (live()) setPr({ pr: null, error: null }) })
   }
   useEffect(() => { setV(null); setPr(null); setIssues(null); setDiff({}); setSkip(new Set()); setHskip({}); load() }, [dir])
   useEffect(() => onChat(ev => {
@@ -103,9 +107,10 @@ export function BranchPanel({ dirs, onErr }: { dirs: { path: string; label: stri
   const toggleDiff = (p: string) => {
     if (p in diff) return setDiff(({ [p]: _, ...rest }) => rest)
     setDiff(d => ({ ...d, [p]: null }))
-    api.branchDiff(dir, p).then((t: string) => setDiff(d => ({ ...d, [p]: t })), (e: any) => setDiff(d => ({ ...d, [p]: errText(e) })))
+    const here = () => cur.current.dir === dir
+    api.branchDiff(dir, p).then((t: string) => { if (here()) setDiff(d => ({ ...d, [p]: t })) }, (e: any) => { if (here()) setDiff(d => ({ ...d, [p]: errText(e) })) })
   }
-  const loadIssues = () => api.issueList(dir).then(setIssues, (e: any) => setIssues(errText(e)))
+  const loadIssues = () => { const here = () => cur.current.dir === dir; api.issueList(dir).then((x: Issue[]) => { if (here()) setIssues(x) }, (e: any) => { if (here()) setIssues(errText(e)) }) }
 
   if (!v) return <section className="branch" aria-label="Branch"><span className="loader" aria-label="Lendo o Git" /></section>
   const canPush = v.ahead > 0 || (!v.upstream && !!v.branch && v.recent.length > 0)

@@ -6,7 +6,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { sha } from './artifacts.ts'
 import { findGrantId, type HistoryCandidate, type Omitted, type PackageItem, type Recipient } from './consent.ts'
 import type { ContextLimits } from './limits.ts'
-import { getMemory, validate, type MemoryRow } from './memory.ts'
+import { getMemory, validate, type EvidenceReads, type MemoryRow } from './memory.ts'
 
 const all = (db: DatabaseSync, sql: string, ...p: any[]) => db.prepare(sql).all(...p) as any[]
 
@@ -28,7 +28,7 @@ export function selectMemory(db: DatabaseSync, o: { taskId: number; recipient: R
   const omitted: Omitted[] = []
   let alreadyDelivered = 0
   type Cand = { m: MemoryRow; item: PackageItem; requirement: boolean }
-  const cands: Cand[] = []
+  const cands: Cand[] = [], seen: EvidenceReads = new Map()
   const rows = all(db, "SELECT id FROM memory_items WHERE task_id=? AND state IN ('active','stale') AND (owner='user' OR lineage LIKE 'chat:%') ORDER BY id", o.taskId).slice(-500)
   const recentValidations = new Set(rows.map(r => getMemory(db, o.taskId, r.id)!).filter(m => m.kind === 'validation').slice(-RECENT_VALIDATIONS).map(m => m.id))
   for (const { id } of rows) {
@@ -38,7 +38,7 @@ export function selectMemory(db: DatabaseSync, o: { taskId: number; recipient: R
     if (m.kind === 'todo' && m.todo_state === 'done') continue // pendencia concluida nao e contexto
     const requirement = REQUIREMENTS.has(m.kind)
     const skip = (why: string) => omitted.push({ ref: `m:${m.id}`, kind: m.kind, title: m.title, why, ...(requirement ? { requirement: true } : {}) })
-    const v = validate(db, m, o.cwd)
+    const v = validate(db, m, o.cwd, seen)
     if (v.validity === 'stale') { skip(`desatualizado (arquivos de evidencia mudaram${v.changed.length ? `: ${v.changed.slice(0, 3).join(', ')}` : ''}): revalide antes de compartilhar`); continue }
     if (m.kind === 'validation' && !recentValidations.has(m.id)) { skip(`evidencia de teste mais antiga que as ${RECENT_VALIDATIONS} mais recentes`); continue }
     const suffix = [v.validity === 'unknown' ? 'validade desconhecida: sem evidencia' : '', m.conflict_with ? `CONFLITA com m:${m.conflict_with}` : ''].filter(Boolean)

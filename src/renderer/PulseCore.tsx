@@ -9,6 +9,8 @@ const N = 90, SLOT = 40_000, HOUR = N * SLOT // 90 fatias de 40 s = ultima hora
 const C = 32, R0 = 25, RMAX = 6 // marca pequena: 64 px
 export const DIRT_FULL = 600 // linhas sem commit que enchem o anel. ponytail: valor fixo; tornar ajustavel se incomodar
 
+const keep = <T,>(prev: T, next: T) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next) // igual: nada re-renderiza
+
 // Dados do nucleo: gravacoes (memoria do processo principal, avisadas por evento) e, por projeto, commits e sujeira (git, a cada 30 s).
 export function usePulse() {
   const [events, setEvents] = useState<Record<string, PulseEvent[]>>({})
@@ -16,15 +18,16 @@ export function usePulse() {
   const [, setNow] = useState(0)
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
-    const loadEvents = () => api.pulseEvents().then(setEvents, () => {})
-    const loadGit = () => api.projectsPulse().then((l: ({ game: string } & ProjPulse)[]) => setProj(Object.fromEntries(l.map(p => [p.game, p]))), () => {})
+    const loadEvents = () => api.pulseEvents().then((e: Record<string, PulseEvent[]>) => setEvents(prev => keep(prev, e)), () => {})
+    const loadGit = () => api.projectsPulse().then((l: ({ game: string } & ProjPulse)[]) => setProj(prev => keep(prev, Object.fromEntries(l.map(p => [p.game, p])))), () => {})
+    const visible = () => document.visibilityState === 'visible'
     loadEvents(); loadGit()
     const off = onChat(ev => {
       if (ev.pulse) { clearTimeout(timer); timer = setTimeout(() => { loadEvents(); loadGit() }, 400) }
       else if (ev.done) loadGit() // agente terminou: pode ter commitado
     })
-    const t1 = setInterval(() => setNow(n => n + 1), 10_000) // o relogio anda: tracos envelhecem e giram
-    const t2 = setInterval(loadGit, 30_000)
+    const t1 = setInterval(() => { if (visible()) setNow(n => n + 1) }, 10_000) // o relogio anda: tracos envelhecem e giram
+    const t2 = setInterval(() => { if (visible()) loadGit() }, 30_000) // git so com a janela visivel
     return () => { off(); clearTimeout(timer); clearInterval(t1); clearInterval(t2) }
   }, [])
   return { events, proj }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, errText, type Account } from './api'
 import { Icon } from './icons'
-import { Bar } from './Settings'
+import { Bar } from './UsageBar'
 import { useCachedRead } from './useCachedRead'
 import { usageNote, type QuotaSnapshot } from './usageText'
 

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { api, errText, onChat, type Account } from './api'
 import { Avatar, Icon, PROVIDER } from './icons'
 import { coverTitle, totalText, type TotalLike } from './usageText'
+import { useCachedRead } from './useCachedRead'
+import { sqlDate as when } from './time'
 
 // Contexto da tarefa: pedidos de aprovacao (o que vai para outro agente), memoria, uso e pacotes ja enviados.
 // A aprovacao manda so ID + hash do que foi exibido (e, se o usuario desmarcou itens, as refs mantidas); o processo principal valida e decide o resto.
@@ -15,7 +17,6 @@ type Pkg = {
 }
 // Mensagem retida ate a decisao sobre o contexto de que depende (nenhum agente foi iniciado).
 export type PendingSend = { id: number; task_id: number; package_id: number | null; text: string; sel: { provider: string; model?: string; effort?: string }; state: 'awaiting_context_approval' | 'starting' | 'sent' | 'cancelled' | 'expired'; reason: string | null; created_at: string }
-const when = (iso: string) => new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z'))
 const fmt = (n: number | null | undefined) => (n == null ? '—' : n >= 1000 ? `${(n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : String(n))
 const SOURCE = { delegation: 'para a delegação', history: 'anterior da tarefa (memória pertinente e histórico)', memory: 'memória da tarefa' } as Record<string, string>
 const who = (r: Recipient) => [PROVIDER[r.provider]?.label ?? r.provider, r.model, r.effort].filter(Boolean).join(' ')
@@ -50,10 +51,9 @@ export function ContextRequests({ pkgs, sends, accounts = [], reload }: { pkgs: 
   const [open, setOpen] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [limit, setLimit] = useState(10)
+  const limit = useCachedRead<{ approvalTimeoutMin: number }>('getContextLimits', () => api.getContextLimits()).data?.approvalTimeoutMin ?? 10
   const [drop, setDrop] = useState<Set<string>>(new Set()) // itens desmarcados: nao vao (o backend cria um pacote novo so com os marcados)
   const primary = useRef<HTMLButtonElement>(null)
-  useEffect(() => { api.getContextLimits().then((l: any) => setLimit(l.approvalTimeoutMin), () => {}) }, [])
   const pending = pkgs.filter(p => p.state === 'pending')
   const p = pending[pending.length - 1] // o mais antigo primeiro: e o que expira antes
   const send = p ? sends.find(s => s.package_id === p.id && s.state === 'awaiting_context_approval') : undefined

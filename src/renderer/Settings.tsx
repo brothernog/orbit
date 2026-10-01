@@ -5,30 +5,14 @@ import { PermissionRules } from './PermissionRules'
 import { BackupSettings } from './BackupSettings'
 import { Automations } from './Automations'
 import { Handover } from './Handover'
-import { effortLabel, modelName } from './Chat'
+import { CONN_STATE as STATE, effortLabel, modelName } from './labels'
+import { Bar } from './UsageBar'
 import { Dropdown } from './Dropdown'
 import { Icon, PROVIDER } from './icons'
-import { compact, resetText, totalText, usageNote, type QuotaSnapshot, type UsageWindow } from './usageText'
+import { compact, totalText, usageNote, type QuotaSnapshot } from './usageText'
 import { invalidateRead } from './readCache'
 import { useCachedRead } from './useCachedRead'
 
-type Window_ = UsageWindow
-
-// Uma linha por limite, como no Claude Desktop: nome, renovacao e % na mesma linha; barra embaixo. Tambem usada no medidor do chat.
-export function Bar({ label, w }: { label: string; w: Window_ }) {
-  if (!w) return null
-  const pct = Math.round(w.utilization)
-  return (
-    <div className="usage">
-      <div className="usage-row"><b>{label}</b><small>{resetText(w.resets_at)}</small><span>{pct}%</span></div>
-      <div className="bar" role="progressbar" aria-label={label} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-        <div className={pct > 80 ? 'hot' : ''} style={{ width: `${Math.min(pct, 100)}%` }} />
-      </div>
-    </div>
-  )
-}
-
-export const STATE = { connected: 'conectado', disconnected: 'desconectado', unknown: 'não verificado', connecting: 'conectando…', error: 'erro' }
 const LOGIN_CMD: Record<string, string> = { codex: 'codex login', opencode: 'opencode auth login', gemini: 'gemini (escolha o método de login na primeira execução)' }
 const CATEGORY_HINT: Record<string, string> = {
   auth: 'falha de autenticação: refaça o login desse provedor',
@@ -286,12 +270,14 @@ function NotifySettings() {
 function HiddenFolders({ onChange }: { onChange: () => void }) {
   const read = useCachedRead<string[]>('listHidden', () => api.listHidden())
   const list = read.data
+  const [err, setErr] = useState('')
   if (!list) return <small>{read.error ? errText(read.error) : 'Carregando pastas…'}</small>
   if (!list.length) return <small>Nenhuma pasta removida.</small>
   return (
     <ul className="hidden-list">
       {list.map(p => <li key={p}><span className="mono-sm" title={p}>{p}</span>
-        <button className="set-sm" onClick={() => api.unhideGame(p).then(() => { void read.reload().catch(() => {}); onChange() })}>Restaurar</button></li>)}
+        <button className="set-sm" onClick={() => api.unhideGame(p).then(() => { setErr(''); void read.reload().catch(() => {}); onChange() }, (e: any) => setErr(errText(e)))}>Restaurar</button></li>)}
+      {err && <li><small className="err" role="alert">{err}</small></li>}
     </ul>
   )
 }
@@ -342,7 +328,7 @@ function Tabs({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
 export function Settings({ accounts, reload, providers, refreshProviders, onGamesChange }: {
   accounts: Account[]; reload: () => void; providers: Provider[] | null; refreshProviders: () => void; onGamesChange: () => void
 }) {
-  const [newName, setNewName] = useState('')
+  const [newName, setNewName] = useState(''), [addErr, setAddErr] = useState('')
   const [tab, setTab] = useState<Tab>('contas')
   useEffect(() => { // acompanha logins em andamento
     if (!accounts.some(a => a.login?.state === 'connecting')) return
@@ -359,10 +345,11 @@ export function Settings({ accounts, reload, providers, refreshProviders, onGame
         {tab === 'contas' && <>
           <Card title="Contas Claude">
             {accounts.map(a => <AccountRow key={a.id} a={a} reload={reload} />)}
-            <form className="inline add-account" onSubmit={e => { e.preventDefault(); if (newName.trim()) api.addAccount(newName.trim()).then(() => { setNewName(''); reload() }) }}>
+            <form className="inline add-account" onSubmit={e => { e.preventDefault(); if (newName.trim()) api.addAccount(newName.trim()).then(() => { setNewName(''); setAddErr(''); reload() }, (x: any) => setAddErr(errText(x))) }}>
               <input aria-label="Nome da nova conta" placeholder="Nome da nova conta" value={newName} onChange={e => setNewName(e.target.value)} />
               <button disabled={!newName.trim()}><Icon n="plus" size={14} /> Adicionar conta</button>
             </form>
+            {addErr && <small className="err" role="alert">{addErr}</small>}
           </Card>
           {accounts.length > 1 && <Card title="Automações"><Automations /></Card>}
           {accounts.length > 1 && <Card title="Quando a conta atingir o limite"><Handover /></Card>}

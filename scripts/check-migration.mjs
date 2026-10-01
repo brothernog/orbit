@@ -14,6 +14,8 @@ const { openDb, MIGRATIONS } = await import(pathToFileURL(path.join(here, '../sr
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-migcheck-'))
 const copy = path.join(tmp, 'dashboard.db')
 fs.copyFileSync(src, copy)
+// Banco em WAL (app aberto ou fechado sem checkpoint): commits recentes ficam no -wal; sem ele a copia sairia defasada.
+if (fs.existsSync(src + '-wal')) fs.copyFileSync(src + '-wal', copy + '-wal')
 const count = (db, t) => { try { return db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n } catch { return null } }
 const before = new DatabaseSync(copy, { readOnly: true })
 const b = { version: before.prepare('PRAGMA user_version').get().user_version, messages: count(before, 'messages'), pins: count(before, 'pins'), accounts: count(before, 'accounts'), chats: count(before, 'chats') }

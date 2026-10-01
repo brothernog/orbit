@@ -7,7 +7,7 @@ import { authorizedPackages, type Grant } from './consent.ts'
 import { lookupTestEvidence, recordTestEvidence } from './evidence.ts'
 import { inScope } from './guard.ts'
 import type { ContextLimits } from './limits.ts'
-import { addMemory, fileEvidence, getMemory, KINDS, normalize, TODO_STATES, validate, type MemoryRow } from './memory.ts'
+import { addMemory, fileEvidence, getMemory, KINDS, normalize, TODO_STATES, validate, type EvidenceReads, type MemoryRow } from './memory.ts'
 import { loadSkill, READ_SKILL_TOOL_NAME, skillTool } from './skills.ts'
 import type { EngineId } from './engines.ts'
 import type { ToolDef, ToolResult } from './mcp.ts'
@@ -111,9 +111,10 @@ const VALIDITY_PT: Record<string, string> = { valid: 'valido', stale: 'DESATUALI
 function readContext(db: DatabaseSync, lim: ContextLimits, c: ToolCtx, a: any): string {
   const mult = a.expand === true ? 3 : 1
   const chars = lim.queryChars * mult
+  const seen: EvidenceReads = new Map()
   const audit = (r: Readable) => {
     if (!r.live) return r.source === 'package' ? 'snapshot aprovado' : ''
-    const v = validate(db, r.live, c.cwd)
+    const v = validate(db, r.live, c.cwd, seen)
     return `${VALIDITY_PT[v.validity]}${v.changed.length ? ` (mudou: ${v.changed.slice(0, 3).join(', ')})` : ''}`
   }
   if (a.artifactId !== undefined) {
@@ -164,7 +165,8 @@ function recordMemory(db: DatabaseSync, c: ToolCtx, a: any): string {
   return `Registrado m:${r.id} (revisao ${r.revision})${r.deduped ? ' — ja existia, nada duplicado' : ''}${r.conflictWith ? ` — CONFLITA com m:${r.conflictWith}: nada foi sobrescrito` : ''}. Privado a esta linhagem ate o usuario aprovar compartilhar.`
 }
 
-export function callTaskTool(db: DatabaseSync, lim: ContextLimits, c: ToolCtx, name: string, a: any): ToolResult {
+// find_in_workspace e assincrona (varredura fora do caminho sincrono do processo principal); as demais respondem na hora.
+export function callTaskTool(db: DatabaseSync, lim: ContextLimits, c: ToolCtx, name: string, a: any): ToolResult | Promise<ToolResult> {
   try {
     const args = a && typeof a === 'object' && !Array.isArray(a) ? a : {}
     if (c.auth.taskId !== c.taskId) return { text: 'Identidade de execucao nao pertence a esta tarefa.', isError: true } // defesa: nunca cruza tarefas
@@ -173,7 +175,7 @@ export function callTaskTool(db: DatabaseSync, lim: ContextLimits, c: ToolCtx, n
       case READ_CONTEXT_TOOL.name: return { text: readContext(db, lim, c, args), isError: false }
       case RECORD_MEMORY_TOOL.name: return { text: recordMemory(db, c, args), isError: false }
       case READ_SKILL_TOOL_NAME: return { text: loadSkill(c.auth.authId, c.role, args, c.engines), isError: false }
-      case FIND_TOOL.name: if (c.role !== 'child') return { text: 'Ferramenta indisponivel neste papel.', isError: true }; return { text: findInWorkspace(ws, args), isError: false }
+      case FIND_TOOL.name: if (c.role !== 'child') return { text: 'Ferramenta indisponivel neste papel.', isError: true }; return findInWorkspace(ws, args).then(text => ({ text, isError: false }), (e: any) => ({ text: `Erro: ${String(e?.message ?? e).slice(0, 500)}`, isError: true }))
       case READ_RANGE_TOOL.name: if (c.role !== 'child') return { text: 'Ferramenta indisponivel neste papel.', isError: true }; return { text: readFileRange(ws, args, { maxChars: lim.queryChars }), isError: false }
       case TEST_EVIDENCE_TOOL.name: {
         if (c.role !== 'child') return { text: 'Ferramenta indisponivel neste papel.', isError: true }

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { AGENTS, api, errText, onChat, type Account, type Catalog, type Metric, type Msg, type Provider, type Sel, type Task } from './api'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { AGENTS, api, errText, type Account, type Catalog, type Metric, type Msg, type Provider, type Sel, type Task } from './api'
 import { cap, Dropdown, type Opt } from './Dropdown'
 import { Avatar, Icon, PROVIDER } from './icons'
 import { Markdown } from './Markdown'
@@ -7,7 +7,8 @@ import { Confirm, ContextMenu, type MenuItem } from './Nav'
 import { PermissionPrompt } from './PermissionPrompt'
 import { QuestionPrompt, SuggestionChips } from './AgentAsks'
 import { ContextRequests, TaskInspector, UnsentMessages, usePackages } from './TaskContext'
-import { Bar, STATE } from './Settings'
+import { CONN_STATE, effortLabel, modelName } from './labels'
+import { Bar } from './UsageBar'
 import { shrink, Thumbs, type TodoDraft } from './Todo'
 import { Workflow } from './Workflow'
 import { Checkpoints } from './Checkpoints'
@@ -16,6 +17,8 @@ import { imageRefs, stripMarks } from './msgImages'
 import { loadRead } from './readCache'
 import { useCachedRead } from './useCachedRead'
 import { usageNote, type QuotaSnapshot } from './usageText'
+import { useTaskChat } from './useTaskChat'
+import { agoText } from './time'
 
 const parseSel = (s: string | null | undefined): Sel | null => {
   try { const v = JSON.parse(s ?? 'null'); return v && typeof v.provider === 'string' ? v : null } catch { return null }
@@ -55,10 +58,6 @@ const label = (m: Msg, accounts: Account[]) => {
 }
 
 const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : String(n))
-const ago = (iso: string) => {
-  const s = (Date.now() - new Date(iso.replace(' ', 'T') + 'Z').getTime()) / 1000
-  return s < 90 ? 'agora' : s < 5400 ? `há ${Math.round(s / 60)} min` : s < 129600 ? `há ${Math.round(s / 3600)} h` : `há ${Math.round(s / 86400)} d`
-}
 const NO_CONTEXT: Record<string, string> = {
   codex: 'o codex exec não informa o contexto e o arquivo da sessão não trouxe a medida',
   gemini: 'o Gemini CLI não informa contexto ocupado nem janela',
@@ -94,7 +93,7 @@ function ContextRing({ m, sel }: { m: Metric | null; sel: Sel }) {
               {(m.consumed_in != null || m.consumed_out != null) && <span>
                 Consumo {m.scope === 'thread' ? 'acumulado' : 'da última execução'}: {[m.consumed_in != null && `entrada ${fmt(m.consumed_in)}`, m.consumed_out != null && `saída ${fmt(m.consumed_out)}`].filter(Boolean).join(', ')}
               </span>}
-              <small>Fonte: {m.source ?? 'desconhecida'}, {ago(m.at)}{stale ? `. Medida do modelo ${m.model ?? 'padrão'}; atualiza na próxima execução.` : ''}</small>
+              <small>Fonte: {m.source ?? 'desconhecida'}, {agoText(m.at)}{stale ? `. Medida do modelo ${m.model ?? 'padrão'}; atualiza na próxima execução.` : ''}</small>
             </>}
       </span>
     </span>
@@ -138,11 +137,7 @@ function LimitRing({ u, provider }: { u: Usage | null; provider: string }) {
   )
 }
 
-export const EFFORT: Record<string, string> = { none: 'Nenhum', minimal: 'Mínimo', low: 'Baixo', medium: 'Médio', high: 'Alto', xhigh: 'Extra alto', max: 'Máximo' }
-export const effortLabel = (f: string) => EFFORT[f] ?? cap(f)
-// Rotulo do modelo: o nome do catalogo quando existe; senao o id, sem o prefixo do provedor (ele vira o grupo).
-// Id completo do Claude vira nome legivel ("claude-sonnet-5-5" = "Sonnet 5.5"); o resto so ganha maiuscula.
-export const modelName = (id: string) => { const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?$/.exec(id); return m ? `${cap(m[1])} ${m[2]}${m[3] ? `.${m[3]}` : ''}` : cap(id) }
+// Rotulo do modelo no seletor: o nome do catalogo quando existe; senao o id, sem o prefixo do provedor (ele vira o grupo).
 const modelLabel = (m: { id: string; label?: string }) => cap(m.label ?? (m.id.includes('/') ? m.id.slice(m.id.indexOf('/') + 1) : m.id))
 
 function ModelPicker({ cat, sel, disabled, onChange }: { cat: Catalog | null; sel: Sel; disabled: boolean; onChange: (s: Sel) => void }) {
@@ -171,19 +166,17 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed, 
   onOpenDraft?: (game: string, taskId: number, draft: TodoDraft) => void // sugestao do agente: abre a tarefa nova com a ordem no compositor
 }) {
   const [sel, setSelState] = useState<Sel>(() => parseSel(task.sel) ?? { provider: 'claude', accountId: accounts[0]?.id })
-  const [hist, setHist] = useState<{ running: boolean; awaitingContext?: boolean; messages: Msg[]; task: Task; metric: Metric | null } | null>(null)
-  const [live, setLive] = useState('')
   const [liveMetric, setLiveMetric] = useState<{ occupied: number; capacity: number | null; estimated: boolean; source?: string } | null>(null)
   const [stepId, setStepId] = useState<number | undefined>()
   const [text, setText] = useState('')
   const [images, setImages] = useState<string[]>([]) // data: URLs ja reduzidas; viram arquivo so no envio
+  const [sending, setSending] = useState(false) // sendTask pendente: segundo Ctrl+Enter nao reenvia
   const [view, setView] = useState<string | null>(null) // imagem ampliada
   const file = useRef<HTMLInputElement>(null)
   const [err, setErr] = useState('')
   const [atEnd, setAtEnd] = useState(true)
   const msgs = useRef<HTMLDivElement>(null)
   const stick = useRef(true) // so acompanha o fim se o usuario nao estiver lendo mensagens antigas
-  const req = useRef(0) // descarta respostas antigas (troca rapida de tarefa/provedor)
   const known = useRef<{ task: number; ids: Set<number> } | null>(null) // mensagens ja na tela ao abrir: so as novas entram com animacao
   const cat = useCatalog(sel.provider)
   const pkgs = usePackages(task.id)
@@ -207,35 +200,20 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed, 
     api.setTaskSel(task.id, next).catch(e => { setSelState(prev); setErr(errText(e)) })
   }
 
-  const load = () => {
-    const n = ++req.current
-    return api.taskChat(task.id, sel).then(h => {
-      if (n !== req.current) return
-      if (known.current?.task !== task.id) known.current = { task: task.id, ids: new Set(h.messages.map((m: Msg) => m.id)) }
-      setHist(h)
-      setLive(h.live || (h.running ? '…' : '')) // volta a mostrar o streaming de uma execucao ativa
-      // Sem escolha gravada: sugere o provedor/conta da ultima resposta desta tarefa.
-      if (!h.sel) {
-        const last = [...h.messages].reverse().find((m: Msg) => m.role === 'agent' && m.provider)
-        if (last && last.provider !== sel.provider) setSelState({ provider: last.provider!, accountId: last.account_id ?? undefined })
-      }
-    }, e => setErr(errText(e)))
-  }
+  const { hist, live, load, send: sendChat } = useTaskChat(task.id, {
+    sel: () => sel, msgs, stick, onError: setErr,
+    // Sem escolha gravada: sugere o provedor/conta da ultima resposta desta tarefa.
+    onLoaded: h => {
+      if (known.current?.task !== task.id) known.current = { task: task.id, ids: new Set(h.messages.map(m => m.id)) }
+      if (h.sel) return
+      const last = [...h.messages].reverse().find(m => m.role === 'agent' && m.provider)
+      if (last && last.provider !== sel.provider) setSelState({ provider: last.provider!, accountId: last.account_id ?? undefined })
+    },
+    onMetric: setLiveMetric,
+    onDone: loaded => { loaded.then(() => setLiveMetric(null)); onChange() }, // sem piscar vazio no meio
+    onStart: onChange, // execucao iniciada por fora desta tela (ex.: outra janela): sincroniza a lista de tarefas
+  })
   useEffect(() => { setErr(''); setLiveMetric(null); load() }, [task.id, sel.provider, sel.accountId])
-  useEffect(() => onChat(ev => {
-    if (ev.taskId !== task.id) return
-    if (ev.refresh) return void load() // delegacao iniciou/terminou: mensagem de sistema nova
-    if (ev.metric) return void setLiveMetric(ev.metric)
-    if (ev.done) { load().then(() => setLiveMetric(null)); onChange(); return } // load() limpa o streaming junto com a mensagem final: sem piscar vazio no meio
-    if (typeof ev.text !== 'string') return // pedidos de permissao/contexto tambem trazem taskId, mas nao sao texto: nao apagam o streaming
-    setLive(ev.text)
-    // Execucao iniciada por fora desta tela (ex.: outra janela): sincroniza o estado "executando" e a lista de tarefas.
-    setHist(h => { if (h && !h.running) { onChange(); return { ...h, running: true } } return h })
-  }), [task.id, sel.provider, sel.accountId])
-  useEffect(() => {
-    const m = msgs.current
-    if (m && stick.current) m.scrollTop = m.scrollHeight
-  }, [hist, live])
   // A area das mensagens encolhe (janela menor, painel de etapas aberto, cartao de contexto): quem estava no fim continua vendo o fim.
   useEffect(() => {
     const m = msgs.current
@@ -255,16 +233,21 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed, 
 
   const awaiting = !!hist?.awaitingContext || pkgs.sends.some(s => s.state === 'awaiting_context_approval')
   const send = () => {
-    if ((!text.trim() && !images.length) || running || awaiting) return
-    setErr('')
+    if ((!text.trim() && !images.length) || running || awaiting || sending) return
+    setErr(''); setSending(true)
+    const sent = text, sentImages = images
     // Havendo contexto anterior a decidir, a mensagem fica RETIDA (nenhum agente inicia): o cartao acima do compositor pede a decisao.
-    api.sendTask(task.id, sel, text.trim(), images, stepId).then(() => { setText(''); setImages([]); setStepId(undefined); stick.current = true; pkgs.load(); load(); onChange() }, e => setErr(errText(e)))
+    // So sai do compositor o que foi enviado: texto e imagens acrescentados durante o envio ficam.
+    sendChat(sent.trim(), sentImages, stepId).then(() => {
+      setText(t => (t.startsWith(sent) ? t.slice(sent.length).trimStart() : t)); setImages(i => i.filter(x => !sentImages.includes(x)))
+      setStepId(undefined); stick.current = true; pkgs.load(); onChange()
+    }, e => setErr(errText(e))).finally(() => setSending(false))
   }
   // 1568 px: o maior lado que o Claude usa sem reduzir de novo; screenshot continua legivel. Cada imagem custa ~1.500 tokens por chamada.
   const attach = (files: Blob[]) => Promise.all(files.map(f => shrink(f, 1568))).then(out => setImages(i => [...i, ...out].slice(0, 6)), () => setErr('Não foi possível ler a imagem.'))
   const act = (f: Promise<any>) => f.then(() => { load(); onChange() }, e => setErr(errText(e)))
   const t = hist?.task ?? task
-  const connLabel = missing ? 'não instalado' : STATE[conn as keyof typeof STATE] ?? conn
+  const connLabel = missing ? 'não instalado' : CONN_STATE[conn as keyof typeof CONN_STATE] ?? conn
 
   return (
     <section className="chat" aria-label="Conversa da tarefa">
@@ -292,14 +275,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed, 
             <Avatar provider={sel.provider} />
             <p>Escreva abaixo para começar. O histórico fica na tarefa, mesmo se você trocar de provedor.</p>
           </div>}
-          {hist?.messages.map(m => (
-            <div key={m.id} className={`msg ${m.role} ${m.status ?? ''} ${m.role !== 'agent' && known.current && !known.current.ids.has(m.id) ? 'enter-rise' : ''}`}>
-              {m.role === 'agent' && <div className="who">{m.provider && <Avatar provider={m.provider} size="sm" />}<span>{label(m, accounts)}</span>
-                {m.status === 'failed' && <span className="flag">falhou</span>}{m.status === 'cancelled' && <span className="flag">interrompida</span>}</div>}
-              {m.role === 'agent' ? <Markdown text={m.text} /> : stripMarks(m.text) && <p>{stripMarks(m.text)}</p>}
-              <MsgImages taskId={task.id} text={m.text} marksOnly={m.role !== 'agent'} onOpen={setView} />
-            </div>
-          ))}
+          {hist && <Thread messages={hist.messages} known={known.current?.ids ?? null} accounts={accounts} taskId={task.id} onOpen={setView} />}
           {running && <div className="msg agent streaming enter-rise">
             <div className="who"><Avatar provider={sel.provider} size="sm" live /><span>{PROVIDER[sel.provider]?.label ?? sel.provider} trabalhando</span></div>
             {live && live !== '…' && <Markdown text={live} />}
@@ -346,7 +322,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed, 
             {/* Enviar e Parar ocupam o mesmo lugar: o botao e o mesmo elemento, so o icone troca (com entrada curta) */}
             {running
               ? <button type="button" className="send stop" aria-label="Parar" title="Parar" onClick={() => api.stopTask(task.id).then(load)}><Icon key="stop" n="stop" size={16} /></button>
-              : <button type="submit" className="send" aria-label="Enviar" title={awaiting ? 'Há uma mensagem retida aguardando a sua decisão sobre contexto' : 'Enviar (Ctrl+Enter)'} disabled={!!missing || (!text.trim() && !images.length) || awaiting}><Icon key="send" n="send" size={18} /></button>}
+              : <button type="submit" className="send" aria-label="Enviar" title={awaiting ? 'Há uma mensagem retida aguardando a sua decisão sobre contexto' : 'Enviar (Ctrl+Enter)'} disabled={!!missing || (!text.trim() && !images.length) || awaiting || sending}><Icon key="send" n="send" size={18} /></button>}
           </div>
         </form>
         {view && <div className="lightbox" role="dialog" aria-label="Imagem" tabIndex={-1} ref={el => el?.focus()} onClick={() => setView(null)} onKeyDown={e => { if (e.key === 'Escape') setView(null) }}><img src={view} alt="" /></div>}
@@ -359,10 +335,29 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed, 
   )
 }
 
+// Historico: memoizado para que digitar no compositor e cada trecho do streaming nao reprocessem todas as mensagens antigas.
+// Nao usa name()/apelidos de projeto; se passar a usar, precisa de uma prop que mude com eles.
+// `known`: ids ja na tela ao abrir a tarefa; as mensagens do usuario que chegam depois entram com animacao.
+const Thread = memo(function Thread({ messages, known, accounts, taskId, onOpen }: { messages: Msg[]; known: Set<number> | null; accounts: Account[]; taskId: number; onOpen: (src: string) => void }) {
+  return <>{messages.map(m => <MsgRow key={m.id} m={m} rise={m.role !== 'agent' && !!known && !known.has(m.id)} accounts={accounts} taskId={taskId} onOpen={onOpen} />)}</>
+})
+
+const MsgRow = memo(function MsgRow({ m, rise, accounts, taskId, onOpen }: { m: Msg; rise: boolean; accounts: Account[]; taskId: number; onOpen: (src: string) => void }) {
+  const plain = useMemo(() => (m.role === 'agent' ? '' : stripMarks(m.text)), [m.role, m.text])
+  return (
+    <div className={`msg ${m.role} ${m.status ?? ''} ${rise ? 'enter-rise' : ''}`}>
+      {m.role === 'agent' && <div className="who">{m.provider && <Avatar provider={m.provider} size="sm" />}<span>{label(m, accounts)}</span>
+        {m.status === 'failed' && <span className="flag">falhou</span>}{m.status === 'cancelled' && <span className="flag">interrompida</span>}</div>}
+      {m.role === 'agent' ? <Markdown text={m.text} /> : plain && <p>{plain}</p>}
+      <MsgImages taskId={taskId} text={m.text} marksOnly={m.role !== 'agent'} onOpen={onOpen} />
+    </div>
+  )
+})
+
 // Miniaturas das imagens citadas na mensagem. O processo principal so devolve imagens do projeto da tarefa ou dos anexos dela;
 // o resto (caminho inexistente, fora das pastas, internet) simplesmente nao aparece.
 function MsgImages({ taskId, text, marksOnly, onOpen }: { taskId: number; text: string; marksOnly?: boolean; onOpen: (src: string) => void }) {
-  const refs = imageRefs(text, marksOnly).join('|') // chave estavel para o efeito ('|' nao aparece em caminho)
+  const refs = useMemo(() => imageRefs(text, marksOnly).join('|'), [text, marksOnly]) // chave estavel para o efeito ('|' nao aparece em caminho)
   const [srcs, setSrcs] = useState<string[]>([])
   useEffect(() => {
     let live = true

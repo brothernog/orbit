@@ -155,17 +155,25 @@ async function build(provider: string, env?: NodeJS.ProcessEnv): Promise<Catalog
     note: 'A CLI nao lista modelos: informe o id (ex.: o que aparece na documentacao do Gemini CLI). Esforco/raciocinio nao e exposto porque nenhuma configuracao esta comprovada nesta versao.' }
 }
 
-export async function getCatalog(provider: string, env?: NodeJS.ProcessEnv, force = false): Promise<Catalog> {
+// Consultas simultaneas do mesmo provedor (varias telas, envio) compartilham a CLI em andamento, inclusive as forcadas.
+const pending = new Map<string, Promise<Catalog>>()
+export function getCatalog(provider: string, env?: NodeJS.ProcessEnv, force = false): Promise<Catalog> {
   const c = cache.get(provider)
-  if (!force && c && Date.now() - c.at < (c.cat.error ? TTL_ERR : TTL)) return c.cat
-  let cat: Catalog
-  try {
-    cat = await build(provider, env)
-  } catch (e: any) {
-    cat = { provider, at: now(), source: provider === 'gemini' ? 'manual' : 'native', models: [], efforts: [], allowCustomModel: false, error: sanitize(String(e?.message ?? e)).slice(0, 300) }
-  }
-  cache.set(provider, { at: Date.now(), cat })
-  return cat
+  if (!force && c && Date.now() - c.at < (c.cat.error ? TTL_ERR : TTL)) return Promise.resolve(c.cat)
+  const running = pending.get(provider)
+  if (running) return running
+  const p = (async () => {
+    let cat: Catalog
+    try {
+      cat = await build(provider, env)
+    } catch (e: any) {
+      cat = { provider, at: now(), source: provider === 'gemini' ? 'manual' : 'native', models: [], efforts: [], allowCustomModel: false, error: sanitize(String(e?.message ?? e)).slice(0, 300) }
+    }
+    cache.set(provider, { at: Date.now(), cat })
+    return cat
+  })().finally(() => pending.delete(provider))
+  pending.set(provider, p)
+  return p
 }
 
 // Valida modelo/esforco escolhidos contra o catalogo. Devolve a mensagem de erro ou null. Nunca troca o pedido do usuario.

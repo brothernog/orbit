@@ -33,7 +33,6 @@ input:focus, textarea:focus, select:focus { border-color: #7cc4ff66; }
 .center > main:not(.settings), .center > section, .center > .empty { animation: rise .35s var(--ease) both; }
 
 /* Modais */
-.modal-back { background: #04060acc; backdrop-filter: blur(8px) saturate(120%); }
 .modal { background: #12161ff5; border-color: var(--line); box-shadow: 0 40px 90px -20px #000, 0 0 0 1px #ffffff08 inset; }
 /* Modal de grupo: previa grande da pasta, depois nome, sugestoes e cor */
 .modal.group-dlg { --g: #7cc4ff; width: min(440px, 100%); padding: 0; gap: 0; overflow: hidden; }

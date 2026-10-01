@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, errText, name, onChat } from './api'
 import { Icon, PROVIDER } from './icons'
+import { expireRead, loadRead } from './readCache'
+import { useCachedRead } from './useCachedRead'
 import './permission.css'
 
 type Sug = { pattern: string; label: string; risk: 'low' | 'broad' | 'destructive'; reason: string }
@@ -9,12 +11,29 @@ export type PermissionReq = {
   cwd: string | null; state: string; risk: string | null; suggestions?: Sug[]
 }
 
+// Uma so consulta para todas as instancias (pop-up global + cartao do chat): o evento recarrega na hora (descartando uma consulta
+// anterior ainda em voo, que pode nao ter o pedido novo) e a rede de seguranca de 4 s so roda com a janela visivel.
+const KEY = 'listPermissionRequests'
+const loadReqs = (fresh = false) => { if (fresh) expireRead(KEY); loadRead<PermissionReq[]>(KEY, () => api.listPermissionRequests()).catch(() => {}) }
+let watchers = 0, unwatch = () => {}
+function watchRequests() {
+  if (watchers++ === 0) {
+    const visible = () => { if (document.visibilityState === 'visible') loadReqs() }
+    const off = onChat(ev => { if (ev?.permissionRequest || ev?.permissionResolved) loadReqs(true) })
+    const t = setInterval(visible, 4000)
+    document.addEventListener('visibilitychange', visible)
+    unwatch = () => { off(); clearInterval(t); document.removeEventListener('visibilitychange', visible) }
+  }
+  return () => { if (--watchers === 0) unwatch() }
+}
+
 // Pop-up de permissao dos agentes (equivalente ao dos apps Claude Code/Codex): aparece quando o Claude pede para executar algo que nao
 // esta liberado por regra. Componente isolado: usa so `api` (IPC listPermissionRequests/resolvePermissionRequest) e o evento do chat.
 // Encaixe: montar UMA vez, perto da raiz de App.tsx (ex.: ao lado do <main>), como <PermissionPrompt />. Nao exige props.
 // inline: cartao acima do composer do chat, so com os pedidos da tarefa aberta. Global: modal para os pedidos das outras tarefas.
 export function PermissionPrompt({ taskId, inline }: { taskId?: number; inline?: boolean } = {}) {
-  const [reqs, setReqs] = useState<PermissionReq[]>([])
+  const all = useCachedRead<PermissionReq[]>(KEY, () => api.listPermissionRequests()).data
+  const reqs = useMemo(() => (all ?? []).filter(r => r.state === 'pending' && (inline ? r.task_id === taskId : taskId == null || r.task_id !== taskId)), [all, taskId, inline])
   const [always, setAlways] = useState(false)
   const [pick, setPick] = useState(0)
   const [project, setProject] = useState(false)
@@ -23,13 +42,7 @@ export function PermissionPrompt({ taskId, inline }: { taskId?: number; inline?:
   const [busy, setBusy] = useState(false)
   const box = useRef<HTMLDivElement>(null)
 
-  const load = () => api.listPermissionRequests().then((l: PermissionReq[]) => setReqs(l.filter(r => r.state === 'pending' && (inline ? r.task_id === taskId : taskId == null || r.task_id !== taskId))), () => {})
-  useEffect(() => {
-    load()
-    const off = onChat(ev => { if (ev?.permissionRequest || ev?.permissionResolved) load() })
-    const t = setInterval(load, 4000) // rede de seguranca se algum evento se perder
-    return () => { off(); clearInterval(t) }
-  }, [taskId, inline])
+  useEffect(watchRequests, [])
 
   const r = reqs[0]
   useEffect(() => { setAlways(false); setPick(0); setProject(false); setAck(false); setErr('') }, [r?.id])
@@ -45,7 +58,7 @@ export function PermissionPrompt({ taskId, inline }: { taskId?: number; inline?:
   const answer = (decision: 'allow_once' | 'allow_always' | 'deny') => {
     setBusy(true); setErr('')
     api.resolvePermissionRequest(r.id, decision, { pattern: chosen?.pattern, project, acknowledged: ack })
-      .then(() => load(), (e: any) => setErr(errText(e)))
+      .then(() => loadReqs(true), (e: any) => setErr(errText(e)))
       .finally(() => setBusy(false))
   }
   const key = (e: React.KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); answer('deny') } } // Esc nega: o caminho seguro

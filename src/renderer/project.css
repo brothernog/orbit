@@ -33,7 +33,6 @@
 .pt-tokens { font-size: 12px; color: var(--faint); text-align: right; font-variant-numeric: tabular-nums; }
 
 /* Local de trabalho: tronco com as worktrees como ramos */
-.git-card { padding: 14px 16px 10px; border-radius: var(--r-lg); background: var(--side-bg); border: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 10px; }
 .gc-head { display: flex; align-items: center; gap: 8px; color: var(--muted); }
 .gc-head b { color: var(--text); font-size: 14px; flex: 1; }
 .gc-foot { display: flex; justify-content: flex-end; }
@@ -66,7 +65,7 @@
 .fs-u { color: var(--muted); background: var(--raised); }
 
 /* Modais: limpeza e resumo */
-.modal-back { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; background: #05080dcc; backdrop-filter: blur(6px); animation: fade .2s; }
+.modal-back { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; background: #04060acc; backdrop-filter: blur(8px) saturate(120%); animation: fade .2s; }
 .modal { width: min(560px, 100%); max-height: 100%; overflow: auto; display: flex; flex-direction: column; gap: 16px; padding: 20px 22px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 40px 80px -20px #000; animation: pop .22s var(--ease); }
 .modal > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .modal > header h2 { font-size: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,27 +1,27 @@
-import { commandOutput, commandRun, createCommandService, listCommandRuns, projectCommands, reconcileCommands, saveCommands } from './commands.ts'
+import { createCommandService, listCommandRuns, projectCommands, reconcileCommands, saveCommands } from './commands.ts'
 import { createCheckpoint as takeCheckpoint, listCheckpoints, previewRewind, rewindCheckpoint } from './checkpoints.ts'
 import { addStep, activeStep, beginStep, bindStep, failStep, listSteps, reconcileSteps, reviewStep } from './workflows.ts'
 import { todoBoard, saveTodo, todoTask } from './planning.ts'
 import { createChatService } from './chatService.ts'
 import { createAutomations } from './automations.ts'
 import { createHandover, normalizeHandover } from './handover.ts'
+import { returnReads } from './settingsReads.ts'
+import { createDoc, editDoc } from './docs.ts'
 import { createAccountUsageService } from './accountUsage.ts'
 import { createJarvisService } from './jarvisService.ts'
 import { createLinkedInService } from './linkedinService.ts'
-import { createProductionService } from './production.ts'
-import { createPlaytestService } from './playtests.ts'
+import { createProductionIpc } from './productionIpc.ts'
 import { applyPendingRestore, createBackup, inspectBackup, stageRestore } from './backups.ts'
 import { backupGate } from './backupGate.ts'
 import { createWorktreeService } from './worktrees.ts'
 import { resetWorkspace, unlinkWorktree } from './worktreeTasks.ts'
-import { godotDiagnostics, godotOrganizer, godotProbe, godotProject } from './godot.ts'
+import { engineHandlers } from './engineIpc.ts'
 import { callEngineTool, engineOf, grantedEngines, grantedTools, liveGrants } from './engineMcp.ts'
-import { ENGINE_LABELS, engineGrants, engineOrganizer, engineProjectAt, type EngineGrants } from './engines.ts'
-import { engineCommandError, engineRecipe, flowEngine, isEngineCommand, prepareEngine, validatePreparedEngine } from './engineFlow.ts'
+import { engineGrants, type EngineGrants } from './engines.ts'
+import { engineCommandError, validatePreparedEngine } from './engineFlow.ts'
 import { setBlenderScriptRoots } from './blender.ts'
-import { prepareGodot, validatePreparedGodot, godotCommandError, godotBuildFile } from './godotFlow.ts'
+import { validatePreparedGodot, godotCommandError } from './godotFlow.ts'
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron'
-import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -33,25 +33,26 @@ import { codexContextFromRollout, codexLimits, findRollout } from './codexSessio
 import { projectIconData } from './projectIcon.ts'
 import { changedFiles, dirtOf, fileDiff, recentCommits, stopWatching, watchDir } from './fileWatch.ts'
 import { createPulse } from './pulse.ts'
-import { branchView, commitAll, createBranch, issueCreate, issueList, prCreate, prView, pull, push, remoteAhead } from './gitOps.ts'
-import { openDb } from './db.ts'
-import { asAllowedPath, asInt, asStr, cleanGroups, commitParts, commitPaths, fail, inside, pickGames, safeJoin, samePath } from './guard.ts'
-import { cancelLogin, claudeEnv, claudeStatus, hostlessEnv, logEvent, loginShellPath, loginState, mergePath, openTerminal, probeProvider, providerAuth, startLogin, type LogEntry } from './providers.ts'
+import { createNoticeInfo } from './noticeInfo.ts'
+import { createAccounts } from './accounts.ts'
+import { branchHandlers } from './branchIpc.ts'
+import { checkpointDb, openDb } from './db.ts'
+import { asAllowedPath, asInt, asStr, cleanGroups, fail, inside, pickGames, safeJoin, samePath } from './guard.ts'
+import { cancelLogin, claudeStatus, hostlessEnv, logEvent, loginShellPath, loginState, mergePath, openTerminal, probeProvider, providerAuth, startLogin, type LogEntry } from './providers.ts'
 import { parseAliases, validateAliases } from './agents.ts'
 import { delegateTool, DEFAULT_SETTINGS, mcpWire, normalizeSettings, reconcileDelegations, runDelegation, TOOL_NAME, WorkspaceGuard, type Deps, type McpWire, type ParentCtx } from './delegation.ts'
-import { ApprovalWaiters, approveSubset, deliveryCounts, getPackage, listPackages, resolvePackage, revokePackage, type Decision } from './consent.ts'
-import { awaitingSend, listSends, reconcileSends, reconcileStarting, recoverSend } from './sends.ts'
-import { listArtifacts, readArtifact } from './artifacts.ts'
+import { ApprovalWaiters, type Decision } from './consent.ts'
+import { awaitingSend, reconcileSends, reconcileStarting } from './sends.ts'
 import { normalizeLimits } from './limits.ts'
 import { inUse, moons, planetLayout, planetUsage } from './planet.ts'
 import { copyIntoWorktree, copyList, copyNote, copySuggestions, saveCopyList } from './worktreeSetup.ts'
-import { normalizeNotify, noticeFor, providerLabel, runChanges, type Notice, type NoticeInfo, type NotifyPrefs } from './notify.ts'
-import { attachImages, readImage } from './attachments.ts'
+import { normalizeNotify, noticeFor, type Notice, type NotifyPrefs } from './notify.ts'
+import { attachImages } from './attachments.ts'
+import { contextHandlers } from './contextIpc.ts'
 import { taskBriefs } from './briefs.ts'
 
-import { searchMemory, validate } from './memory.ts'
 import { newToken, startMcpServer, type ToolDef } from './mcp.ts'
-import { addRule, answerText, assessRule, listRules, nativePolicy, normalizePermissionSettings, PERMISSION_TOOL, PERMISSION_TOOL_NAME, PermissionBroker, removeRule, type Decision as PermDecision } from './permissions.ts'
+import { answerText, listRules, nativePolicy, normalizePermissionSettings, PERMISSION_TOOL, PERMISSION_TOOL_NAME, PermissionBroker } from './permissions.ts'
 
 import { runChat } from './runner.ts'
 import { callTaskTool, childToolset, toolsFor, type ToolCtx } from './taskContext.ts'
@@ -59,7 +60,8 @@ import { ASK_TOOL_NAME, QuestionBroker } from './questions.ts'
 import { dismissSuggestion, listSuggestions, startSuggestion, suggestTask, SUGGEST_TOOL_NAME } from './suggestions.ts'
 import { delegationReport, taskUsage } from './usage.ts'
 import { finishRun, reconcileRuns } from './runs.ts'
-import { projectInfo } from './projectInfo.ts'
+import { projectInfo, run as gitRun } from './projectInfo.ts'
+import { claudeProjects } from './claudeProjects.ts'
 import { dropReceipts } from './workspaceTools.ts'
 import { dropSkillSession, READ_SKILL_TOOL_NAME, setSkillRoots, skillTool } from './skills.ts'
 import { markPublished, readDesk } from './linkedin.ts'
@@ -113,10 +115,7 @@ const IGNORED = new Set(['node_modules', '.git', '.worktrees', 'out', 'dist', 'b
 
 function listGames(): string[] {
   const docs = app.getPath('documents').toLowerCase()
-  let projects: string[] = []
-  try {
-    projects = Object.keys(JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8')).projects ?? {})
-  } catch {}
+  const projects = claudeProjects(path.join(os.homedir(), '.claude.json'))
   const extra: string[] = JSON.parse(getSetting('extraGames') ?? '[]')
   const hidden: string[] = JSON.parse(getSetting('hiddenGames') ?? '[]')
   return pickGames({ docs, projects, extra, hidden, appPath: app.getAppPath(), isDir: p => fs.existsSync(p) && fs.statSync(p).isDirectory() })
@@ -135,50 +134,39 @@ function listDocs(root: string, dir = root, depth = 0, out: string[] = []): stri
   return out
 }
 
-const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+// Assincrono, com timeout e sem janela no Windows: nada de Git sincrono na thread principal.
+const git = async (cwd: string, ...args: string[]) => (await gitRun(cwd, args)).trim()
 
 // Worktree so quando o usuario pede isolamento (nunca e requisito para conversar ou ler arquivos).
 // `prefix`+`id` mantem os nomes antigos dos pins (pin-<id>-...) e usam task-<id>-... para tarefas novas.
-function createWorktree(game: string, prefix: 'pin' | 'task', id: number, title: string) {
-  try { git(game, 'rev-parse', '--is-inside-work-tree') } catch {
+async function createWorktree(game: string, prefix: 'pin' | 'task', id: number, title: string) {
+  try { await git(game, 'rev-parse', '--is-inside-work-tree') } catch {
     throw new Error('A pasta do projeto nao e um repositorio git: nao da para isolar em worktree. Conversar e ler arquivos continua funcionando.')
   }
   const slug = title.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
   const wt = path.join(game, '.worktrees', `${prefix}-${id}-${slug}`)
   const branch = `${prefix}/${id}-${slug}`
   // Mantem .worktrees/ fora do git do jogo sem mexer no .gitignore dele.
-  const exclude = path.join(path.resolve(game, git(game, 'rev-parse', '--git-common-dir')), 'info', 'exclude')
+  const exclude = path.join(path.resolve(game, await git(game, 'rev-parse', '--git-common-dir')), 'info', 'exclude')
   fs.mkdirSync(path.dirname(exclude), { recursive: true })
   const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : ''
   if (!cur.split(/\r?\n/).includes('.worktrees/')) fs.appendFileSync(exclude, `${cur.endsWith('\n') || !cur ? '' : '\n'}.worktrees/\n`)
   safeJoin(game, path.relative(game, wt))
   if (fs.existsSync(wt)) {
-    if (!samePath(git(wt, 'rev-parse', '--show-toplevel'), wt)
-      || !samePath(path.resolve(wt, git(wt, 'rev-parse', '--git-common-dir')), path.resolve(game, git(game, 'rev-parse', '--git-common-dir')))
-      || git(wt, 'symbolic-ref', '--short', 'HEAD') !== branch
-      || !git(game, 'worktree', 'list', '--porcelain', '-z').split('\0').some(line => line.startsWith('worktree ') && samePath(line.slice(9), wt))) fail('A pasta de isolamento já existe e não corresponde à worktree da tarefa.')
+    if (!samePath(await git(wt, 'rev-parse', '--show-toplevel'), wt)
+      || !samePath(path.resolve(wt, await git(wt, 'rev-parse', '--git-common-dir')), path.resolve(game, await git(game, 'rev-parse', '--git-common-dir')))
+      || await git(wt, 'symbolic-ref', '--short', 'HEAD') !== branch
+      || !(await git(game, 'worktree', 'list', '--porcelain', '-z')).split('\0').some(line => line.startsWith('worktree ') && samePath(line.slice(9), wt))) fail('A pasta de isolamento já existe e não corresponde à worktree da tarefa.')
     return { wt, branch, setup: null }
   }
-  git(game, 'worktree', 'add', wt, '-b', branch)
-  return { wt, branch, setup: copyNote(copyIntoWorktree(game, wt, copyList(db, game))) } // .env, cache .godot/...: so o que o usuario listou
+  await gitRun(game, ['worktree', 'add', wt, '-b', branch], { timeout: 300_000 }) // checkout de projeto grande
+  return { wt, branch, setup: copyNote(await copyIntoWorktree(game, wt, copyList(db, game))) } // .env, cache .godot/...: so o que o usuario listou
 }
 
-const accountRow = (id?: number | null) => (id ? (db.prepare('SELECT * FROM accounts WHERE id=?').get(id) as any) : null)
-// Pasta de perfil efetiva; contas que apontam para a mesma pasta compartilham (e sobrescrevem) o mesmo login.
-const dirKey = (a: any) => path.resolve(a.config_dir ?? path.join(os.homedir(), '.claude')).toLowerCase()
-const accountEnv = (accountId?: number | null) => claudeEnv(accountRow(accountId)?.config_dir ?? null).env
+const { accountRow, dirKey, accountEnv, listAccounts, fetchUsage } = createAccounts(db)
 const diagLog = path.join(app.getPath('userData'), 'diagnostics.log')
 const attachRoot = path.join(app.getPath('userData'), 'attachments') // imagens coladas no chat, por tarefa (fora do projeto)
 const logFor = (provider: string, profile?: string) => (e: Partial<LogEntry>) => logEvent(diagLog, { provider, profile, ...e })
-
-function listAccounts() {
-  const rows = db.prepare('SELECT * FROM accounts ORDER BY id').all() as any[]
-  return rows.map(a => ({
-    ...a,
-    collision: rows.some(o => o.id !== a.id && dirKey(o) === dirKey(a)),
-    login: loginState(dirKey(a)) ?? null
-  }))
-}
 
 // Provedores: instalacao, versao, capacidades e login. Consultas gratuitas, sem inferencia.
 async function diagnose() {
@@ -209,7 +197,6 @@ const pulse = createPulse({
   onEvent: game => emit({ pulse: game }),
 })
 const asTask = (v: unknown) => getTask(db, asInt(v, 'tarefa')) ?? fail('Tarefa inexistente.')
-const asKeep = (v: unknown): string[] | undefined => (v == null ? undefined : Array.isArray(v) && v.length <= 100 && v.every(x => typeof x === 'string' && x.length <= 200) ? (v as string[]) : fail('Selecao de itens invalida.'))
 // Execucao exige projeto listado; tarefas legadas sem projeto so permitem ler o historico.
 const taskGame = (t: { game: string }) => (t.game ? asGame(t.game) : fail('Tarefa legada sem projeto: so o historico esta disponivel.'))
 
@@ -234,24 +221,24 @@ async function checkSel(s: Sel) {
 }
 
 // Pasta onde o agente roda: worktree da tarefa (se ela foi isolada) ou a pasta do projeto.
-function taskCwd(t: { game: string; worktree: string | null }) {
+async function taskCwd(t: { game: string; worktree: string | null }) {
   const game = taskGame(t)
-  if (!t.worktree) { worktrees.assertAvailable(game); return game }
+  if (!t.worktree) { await worktrees.assertAvailable(game); return game }
   if (!fs.existsSync(t.worktree)) fail('Worktree da tarefa ausente. Revise seu vínculo antes de executar novamente.')
   const real = fs.realpathSync(t.worktree)
   if (!inside(path.join(fs.realpathSync(game), '.worktrees'), real)) fail('Worktree da tarefa fora de .worktrees do projeto.')
-  worktrees.assertAvailable(t.worktree)
+  await worktrees.assertAvailable(t.worktree)
   return t.worktree
 }
 
 // Isolamento explicito. Sessoes nativas dependem da pasta de execucao, entao as da tarefa recomecam
 // (o historico vai como contexto na proxima mensagem).
-function isolateTask(taskId: number) {
+async function isolateTask(taskId: number) {
   const t = asTask(taskId)
   const game = taskGame(t)
-  worktrees.assertAvailable(game)
-  if (t.worktree) { taskCwd(t); return t }
-  const { wt, branch, setup } = createWorktree(game, t.pin_id ? 'pin' : 'task', t.pin_id ?? t.id, t.title)
+  await worktrees.assertAvailable(game)
+  if (t.worktree) { await taskCwd(t); return t }
+  const { wt, branch, setup } = await createWorktree(game, t.pin_id ? 'pin' : 'task', t.pin_id ?? t.id, t.title)
   db.exec('BEGIN')
   let packages: number[]
   try {
@@ -267,11 +254,11 @@ function isolateTask(taskId: number) {
   return getTask(db, t.id)
 }
 
-function launchTask(taskId: number, sel: Sel, resume: boolean, isolate: boolean) {
+async function launchTask(taskId: number, sel: Sel, resume: boolean, isolate: boolean) {
   let t = asTask(taskId)
-  if (isolate) t = isolateTask(t.id)
+  if (isolate) t = await isolateTask(t.id)
   const a = AGENTS[sel.provider]
-  const cwd = taskCwd(t)
+  const cwd = await taskCwd(t)
   const sid = resume ? sessionOf(db, t.id, sel.provider, profileOf(sel.provider, sel.accountId)) : undefined
   const pin = t.pin_id ? (db.prepare('SELECT * FROM pins WHERE id=?').get(t.pin_id) as any) : null
   const prompt = pin ? `Resolva este problema do jogo. ${pin.title}. ${pin.body ?? ''}` : ''
@@ -303,37 +290,7 @@ const emit = (ev: object) => { send(ev); try { attend(ev) } catch {} } // aviso 
 // Avisos de atencao (notify.ts). Com a Orbita em foco: cartao dentro do app. Fora de foco: janela propria de aviso no canto da tela
 // (mesmo visual do app, sem roubar o foco) e a barra de tarefas pisca. Ao voltar para o app, o que ficou pendente vira cartao la dentro.
 const notifyPrefs = () => normalizeNotify(JSON.parse(getSetting('notifications') ?? 'null'))
-type GitStat = { path: string; status: string; added: number | null; removed: number | null }
-const snapFiles = (cwd: string): Promise<GitStat[] | null> => changedFiles(cwd).then(r => (r.repo ? r.files : null), () => null)
-const baselines = new Map<number, { cwd: string; files: Promise<GitStat[] | null> }>() // runId -> estado do Git no inicio
-function runStart(_taskId: number, runId: number, cwd: string) {
-  baselines.set(runId, { cwd, files: snapFiles(cwd) })
-  if (baselines.size > 40) baselines.delete(baselines.keys().next().value!)
-}
-async function noticeInfo(ev: any): Promise<NoticeInfo> {
-  const t = typeof ev?.taskId === 'number' ? getTask(db, ev.taskId) : null
-  if (!t) return { task: null }
-  const info: NoticeInfo = { task: { title: t.title, game: t.game, project: projectNames()[t.game] ?? path.basename(t.game) } }
-  if (ev.done && ev.runId) {
-    info.step = (db.prepare('SELECT title FROM task_steps WHERE run_id=?').get(ev.runId) as any)?.title ?? null
-    const b = baselines.get(ev.runId)
-    baselines.delete(ev.runId)
-    if (b) { const [before, after] = await Promise.all([b.files, snapFiles(b.cwd)]); info.changes = before && after ? runChanges(before, after) : null }
-  }
-  if (ev.permissionRequest) {
-    const perm = db.prepare('SELECT provider, summary FROM permission_requests WHERE id=?').get(ev.permissionRequest) as any
-    info.permission = perm && { provider: perm.provider, summary: perm.summary ?? '' }
-  }
-  if (ev.questionRequest) {
-    const q = questions.get(ev.questionRequest)
-    info.question = q && { provider: q.provider, summary: q.questions.map(x => x.question).join(' ') }
-  }
-  if (ev.contextRequest) {
-    const pkg = getPackage(db, ev.contextRequest)
-    info.context = pkg && { items: pkg.items.length, recipient: `${providerLabel(pkg.recipient.provider)}${pkg.recipient.model ? ` ${pkg.recipient.model}` : ''}` }
-  }
-  return info
-}
+const { runStart, noticeInfo } = createNoticeInfo(db, projectNames, id => questions.get(id)) // questions e criado abaixo; so lido nos eventos
 
 // Janela do planeta (sempre por cima, fora da barra de tarefas; comeca no canto inferior direito e o usuario arrasta para onde
 // quiser): o planeta de uso fica visivel e se expande para virar o aviso quando ha algo com a Orbita fora de foco (ver Planet.tsx).
@@ -531,8 +488,9 @@ const getMcp = () => (mcpServer ??= startMcpServer<McpCtx>({
   }
 }))
 
-const commands = createCommandService(db, guard, cwd => { worktrees.assertAvailable(cwd); return [...active.values()].some(r => sameDir(r.workspace,cwd)) || (db.prepare("SELECT 1 FROM delegations WHERE status='running' AND workspace=?").get(cwd) != null) }, emit, {
-  beforeSpawn: (taskId, game, cwd, command) => { if (!samePath(taskCwd(asTask(taskId)), cwd)) fail('A pasta da tarefa mudou. Prepare o comando novamente.'); validatePreparedGodot(db, game, cwd, command); validatePreparedEngine(db, game, cwd, command) },
+// A checagem Git (assertAvailable) do destino roda em beforeSpawn, via taskCwd, antes da trava e de novo antes do spawn.
+const commands = createCommandService(db, guard, cwd => [...active.values()].some(r => sameDir(r.workspace,cwd)) || (db.prepare("SELECT 1 FROM delegations WHERE status='running' AND workspace=?").get(cwd) != null), emit, {
+  beforeSpawn: async (taskId, game, cwd, command) => { if (!samePath(await taskCwd(asTask(taskId)), cwd)) fail('A pasta da tarefa mudou. Prepare o comando novamente.'); validatePreparedGodot(db, game, cwd, command); validatePreparedEngine(db, game, cwd, command) },
   resultError: (command, output, truncated, cwd) => godotCommandError(command, output, truncated) ?? engineCommandError(command, output, truncated, cwd)
 })
 
@@ -558,6 +516,8 @@ app.on('before-quit', () => {
   mcpServer?.then(m => m.close()).catch(() => {})
   pulse.stop(); stopWatching()
 })
+// Depois das gravacoes de before-quit: esvazia o -wal para o .db ficar completo com o app fechado (copias cruas, restauracao).
+app.on('will-quit', () => { try { checkpointDb(db) } catch {} })
 
 // Snapshot persistido primeiro; refresh opcional compartilhado entre chat, limites e configuracoes.
 const accountUsageService = createAccountUsageService({
@@ -594,26 +554,6 @@ const invalidateAccountUsage = (account: any) => {
   for (const acc of listAccounts()) if (dirKey(acc) === dirKey(account)) accountUsageService.invalidate(acc.id)
 }
 
-// Endpoint nao documentado usado pelo /usage do Claude Code; nao prova o estado do login.
-async function fetchUsage(accountId: number, signal: AbortSignal) {
-  const acc = accountRow(accountId) ?? fail('Conta inexistente.')
-  const dir = acc.config_dir ?? path.join(os.homedir(), '.claude')
-  const file = path.join(dir, '.credentials.json')
-  if (!fs.existsSync(file)) throw new Error('Sem credencial local para consultar uso (recurso opcional; o chat nao depende dele).')
-  let token: unknown
-  try { token = JSON.parse(fs.readFileSync(file, 'utf8')).claudeAiOauth?.accessToken } catch { throw Error('Credencial local invalida para consultar uso.') }
-  if (typeof token !== 'string' || !token) throw Error('Sem credencial local para consultar uso (recurso opcional; o chat nao depende dele).')
-  const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
-    headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' }, signal
-  })
-  // Endpoint nao documentado e opcional: recusa aqui NAO prova que o login falhou (veja o estado da conta).
-  if (res.status === 401) throw new Error('Consulta de uso recusada (401). O estado do login e verificado a parte.')
-  if (res.status === 429) throw new Error('Muitas consultas de uso. Tente de novo em alguns minutos.')
-  if (!res.ok) throw new Error(`Falha ao ler uso (${res.status}).`)
-  const j = await res.json()
-  return { fiveHour: j.five_hour ?? null, sevenDay: j.seven_day ?? null }
-}
-
 const { liStatus, liConnect, liPost, cancelConnect } = createLinkedInService({ getSetting, setSetting, safeStorage, openExternal: url => shell.openExternal(url), linkedinDir })
 
 const PIN_STATUS = ['aberto', 'andamento', 'feito']
@@ -626,44 +566,15 @@ const { askJarvis, jarvisSettings, stopJarvis } = createJarvisService({
 
 async function decideSend(id: number, hash: string, decision: Decision, keep?: string[]) {
   const step = db.prepare("SELECT id FROM task_steps WHERE send_id=? AND state='awaiting_context'").get(id) as { id: number } | undefined
+  const taskId = (db.prepare('SELECT task_id FROM pending_sends WHERE id=?').get(id) as { task_id: number } | undefined)?.task_id // etapas da tarefa recarregam so com evento dela
   try {
     const result = await decideChatSend(id, hash, decision, keep)
     if (step && 'runId' in result && result.runId) bindStep(db, step.id, { status: 'started', runId: result.runId })
     return result
-  } finally { reconcileSteps(db); emit({ refresh: true }) }
+  } finally { reconcileSteps(db); emit({ taskId, refresh: true }) }
 }
 
-const production = createProductionService(db, path.join(app.getPath('userData'), 'production'))
-const playtests = createPlaytestService(db, path.join(app.getPath('userData'), 'production'))
-function registerProjectBuild(game: string, raw: any) {
-  const run = typeof raw?.commandId === 'number' ? db.prepare('SELECT task_id,name FROM command_runs WHERE id=?').get(raw.commandId) as { task_id: number | null; name: string } | undefined : undefined
-  const validateSource = run?.name.startsWith('Godot · ') ? () => {
-    if (!run.task_id) fail('A tarefa de origem deste build não está disponível.')
-    const task = asTask(run.task_id), cwd = taskCwd(task)
-    if (!samePath(task.game, game)) fail('Build de outro projeto.')
-    const file = godotBuildFile(db, task.id, raw.commandId, cwd)
-    if (!samePath(safeJoin(cwd, file), safeJoin(cwd, asStr(raw?.path, 'arquivo', 2000)))) fail('Registre o executável completo produzido pela exportação Godot.')
-  } : undefined
-  return production.registerBuild(game, raw, validateSource)
-}
-async function productionChange(game: unknown, change: (g: string) => unknown) {
-  const g = asGame(game), result = await change(g)
-  emit({ productionChanged: true, game: g }); return result
-}
 
-// Pasta de repositorio aceita: projeto listado ou worktree registrada de tarefa/problema.
-const asRepoDir = async (p: unknown) => {
-  const dirs = [...listGames(), ...(db.prepare('SELECT worktree FROM tasks WHERE worktree IS NOT NULL UNION SELECT worktree FROM pins WHERE worktree IS NOT NULL').all() as any[]).map(r => r.worktree)]
-  // Caminho real: a aba da worktree vem do git (nome longo) e o cadastro pode ter o nome curto 8.3 ou um symlink.
-  const hit = typeof p === 'string' ? dirs.find(d => samePath(d, p)) : undefined
-  if (hit) return hit
-  // Tarefas excluídas podem deixar uma worktree: o registro Git continua sendo conferido.
-  for (const game of listGames()) if (typeof p === 'string' && inside(path.join(game, '.worktrees'), p)) {
-    const source = (await worktrees.view(game)).sources.find(s => samePath(s.path, p))
-    if (source) return source.path
-  }
-  return fail('Pasta de repositório não cadastrada.')
-}
 const worktreeFolder = async (game: string, dir: unknown) => {
   const v = await worktrees.view(asGame(game)), p = asStr(dir, 'pasta', 4000)
   return [v.target, ...v.sources].find(s => samePath(s.path, p))?.path ?? fail('Worktree não registrada neste projeto.')
@@ -697,14 +608,12 @@ const manifestHash = (folder: string) => {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 }
 
-// Sonda o executável configurado e confirma que tarefa, pasta e organizador não mudaram durante a espera.
-async function engineProbeChecked(taskId: number, engine: unknown) {
-  const e = flowEngine(engine), recipe = engineRecipe(e), t = asTask(taskId), cwd = taskCwd(t)
-  const organizer = engineOrganizer(db, t.game, e) ?? fail(`Ative ${ENGINE_LABELS[e]} no organizador deste projeto.`)
-  const probe = await recipe.probe(organizer.config.executable, cwd), now = engineOrganizer(db, t.game, e)
-  if (!samePath(taskCwd(asTask(taskId)), cwd) || now?.id !== organizer.id || now.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Confira novamente.')
-  return { t, cwd, probe }
-}
+const productionIpc = createProductionIpc({
+  db, dir: path.join(app.getPath('userData'), 'production'), asGame, asTask, taskCwd, emit, backups,
+  openFile: p => dialog.showOpenDialog({ properties: ['openFile'], defaultPath: p }).then(r => (r.canceled ? null : r.filePaths[0] ?? null)),
+  saveFile: f => dialog.showSaveDialog({ title: 'Exportar cópia aprovada', defaultPath: path.join(app.getPath('downloads'), f) }).then(r => (r.canceled ? null : r.filePath || null)),
+})
+const { productionChange, registerProjectBuild } = productionIpc
 const handlers: Record<string, (...a: any[]) => any> = {
   backupInfo: () => ({ dataDir: app.getPath('userData'), lastRestore }),
   createBackup: () => backups.exclusive(async () => {
@@ -737,107 +646,10 @@ const handlers: Record<string, (...a: any[]) => any> = {
       return true
     })
   },
-  listAssets: (game: string) => production.listAssets(asGame(game)),
-  editAsset: (game: string, id: unknown, raw: unknown) => productionChange(game, g => production.editAsset(g, asInt(id, 'asset'), raw)),
-  setAssetArchived: (game: string, id: unknown, revision: unknown, archived: unknown) => productionChange(game, g => production.setAssetArchived(g, asInt(id, 'asset'), revision, archived)),
-  setAssetVersionPinned: (game: string, id: unknown, hash: unknown, pinned: unknown) => productionChange(game, g => production.setAssetVersionPinned(g, asInt(id, 'versão'), hash, pinned)),
-  previewRetention: (game: string, keep: unknown) => production.previewRetention(asGame(game), keep),
-  pruneRetention: (game: string, keep: unknown, token: unknown) => backups.exclusive(() => productionChange(game, g => production.pruneRetention(g, keep, token))),
-  captureAsset: (game: string, raw: unknown) => productionChange(game, g => production.captureAsset(g, raw)),
-  captureAssetVersion: (game: string, id: unknown, note: unknown) => productionChange(game, g => production.captureAssetVersion(g, asInt(id, 'asset'), note)),
-  reviewAssetVersion: (game: string, id: unknown, hash: unknown, decision: unknown) => productionChange(game, g => production.reviewAssetVersion(g, asInt(id, 'versão'), hash, decision)),
-  assetImage: (game: string, id: unknown) => production.readAssetImage(asGame(game), asInt(id, 'versão')),
-  listPlaytests: (game: string) => playtests.list(asGame(game)),
-  editPlaytest: (game: string, id: unknown, raw: unknown) => productionChange(game, g => playtests.edit(g, asInt(id, 'playtest'), raw)),
-  setPlaytestArchived: (game: string, id: unknown, revision: unknown, archived: unknown) => productionChange(game, g => playtests.setArchived(g, asInt(id, 'playtest'), revision, archived)),
-  addPlaytest: (game: string, raw: unknown) => productionChange(game, g => playtests.add(g, raw)),
-  setPlaytestState: (game: string, id: unknown, state: unknown) => productionChange(game, g => playtests.setState(g, asInt(id, 'playtest'), state)),
-  playtestImages: (game: string, id: unknown) => playtests.images(asGame(game), asInt(id, 'playtest')),
-  createPlaytestIssue: (game: string, id: unknown, title: unknown, instruction: unknown) => productionChange(game, g => playtests.createIssue(g, asInt(id, 'playtest'), title, instruction)),
-  listBuildCommands: (game: string) => production.listBuildCommands(asGame(game)),
-  listBuilds: (game: string) => production.listBuilds(asGame(game)),
-  editBuild: (game: string, id: unknown, raw: unknown) => productionChange(game, g => production.editBuild(g, asInt(id, 'build'), raw)),
-  setBuildArchived: (game: string, id: unknown, revision: unknown, archived: unknown) => productionChange(game, g => production.setBuildArchived(g, asInt(id, 'build'), revision, archived)),
-  registerBuild: (game: string, raw: unknown) => productionChange(game, g => registerProjectBuild(g, raw)),
-  reviewBuild: (game: string, id: unknown, hash: unknown, decision: unknown) => productionChange(game, g => production.reviewBuild(g, asInt(id, 'build'), hash, decision)),
-  selectProductionFile: async (game: string) => {
-    const g = asGame(game), r = await dialog.showOpenDialog({ properties: ['openFile'], defaultPath: g })
-    if (r.canceled || !r.filePaths[0]) return null
-    const rel = path.relative(g, r.filePaths[0]); safeJoin(g, rel); return rel
-  },
-  exportProductionFile: async (game: string, kind: unknown, id: unknown) => {
-    const g = asGame(game), n = asInt(id, 'registro')
-    const row = kind === 'asset' ? production.listAssets(g).flatMap(a => a.versions).find(v => v.id === n)
-      : kind === 'build' ? production.listBuilds(g).find(b => b.id === n) : fail('Tipo inválido.')
-    const entry = row ?? fail('Registro inexistente neste projeto.')
-    if (entry.state !== 'approved') fail('Aprove a versão antes de exportar.')
-    const r = await dialog.showSaveDialog({ title: 'Exportar cópia aprovada', defaultPath: path.join(app.getPath('downloads'), path.basename(entry.file_name)) })
-    if (r.canceled || !r.filePath) return false
-    await production.exportFile(g, kind as 'asset' | 'build', n, r.filePath); return true
-  },
+  ...productionIpc.handlers,
   projectCommands: (game: string) => projectCommands(db, asGame(game)),
-  godotState: (taskId: number, details = false) => {
-    const t = asTask(taskId), organizer = godotOrganizer(db, t.game)
-    if (!organizer) return { organizer: null, available: false, project: null }
-    const cwd = taskCwd(t)
-    try {
-      if (!fs.statSync(safeJoin(cwd, 'project.godot')).isFile()) return { organizer, available: false, project: null }
-      return { organizer, available: true, project: details === true ? godotProject(cwd) : null }
-    } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { organizer, available: false, project: null }; return { organizer, available: true, project: null, error: e instanceof Error ? e.message : String(e) } }
-  },
-  godotProbe: async (taskId: number) => {
-    const t = asTask(taskId), cwd = taskCwd(t), organizer = godotOrganizer(db, t.game) ?? fail('Ative Godot no organizador deste projeto.')
-    const result = await godotProbe(organizer.config.executable, cwd)
-    if (!samePath(taskCwd(asTask(taskId)), cwd) || godotOrganizer(db, t.game)?.id !== organizer.id || godotOrganizer(db, t.game)?.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Confira novamente.')
-    return result
-  },
-  prepareGodotCommand: async (taskId: number, action: unknown, args: unknown) => {
-    const t = asTask(taskId), cwd = taskCwd(t), organizer = godotOrganizer(db, t.game) ?? fail('Ative Godot no organizador deste projeto.')
-    const probe = await godotProbe(organizer.config.executable, cwd)
-    if (!samePath(taskCwd(asTask(taskId)), cwd) || godotOrganizer(db, t.game)?.id !== organizer.id || godotOrganizer(db, t.game)?.config.executable !== organizer.config.executable) fail('O destino/configuração mudou. Prepare novamente.')
-    const command = prepareGodot(db, t.game, cwd, action, args, probe)
-    emit({ taskId, game: t.game, commandConfigChanged: true }); return command
-  },
-  godotDiagnostics: (taskId: number, commandId: unknown) => {
-    const t = asTask(taskId), id = asInt(commandId, 'comando')
-    if (!listCommandRuns(db, t.id).some(r => r.id === id)) fail('Comando de outra tarefa ou fora do histórico disponível.')
-    const run = commandRun(db, t.id, id) ?? fail('Comando de outra tarefa ou inexistente.')
-    if (!run.name.startsWith('Godot · ')) fail('Selecione um comando Godot.')
-    return { run, ...godotDiagnostics(run.output) }
-  },
-  // Unity/Blender (engineFlow): mesmo modelo do Godot, genérico por engine.
-  engineState: async (taskId: number, engine: unknown, details = false) => {
-    const e = flowEngine(engine), t = asTask(taskId), organizer = engineOrganizer(db, t.game, e)
-    if (!organizer) return { organizer: null, available: false, details: null }
-    const cwd = taskCwd(t)
-    try {
-      if (!engineProjectAt(e, cwd)) return { organizer, available: false, details: null }
-      return { organizer, available: true, details: details === true ? await engineRecipe(e).details(cwd) : null }
-    } catch (err) { return { organizer, available: true, details: null, error: err instanceof Error ? err.message : String(err) } }
-  },
-  engineProbe: async (taskId: number, engine: unknown) => (await engineProbeChecked(taskId, engine)).probe,
-  prepareEngineCommand: async (taskId: number, engine: unknown, action: unknown, args: unknown) => {
-    const { t, cwd, probe } = await engineProbeChecked(taskId, engine)
-    const result = prepareEngine(db, t.game, cwd, engine, action, args, probe)
-    emit({ taskId, game: t.game, commandConfigChanged: true }); return result
-  },
-  engineDiagnostics: (taskId: number, engine: unknown, commandId: unknown) => {
-    const e = flowEngine(engine), t = asTask(taskId), id = asInt(commandId, 'comando')
-    if (!listCommandRuns(db, t.id).some(r => r.id === id)) fail('Comando de outra tarefa ou fora do histórico disponível.')
-    const run = commandRun(db, t.id, id) ?? fail('Comando de outra tarefa ou inexistente.')
-    if (!isEngineCommand(e, run.name)) fail('Selecione um comando desta engine.')
-    const command = { name: run.name, purpose: 'test' as const, program: run.program, args: JSON.parse(run.args) }
-    return { run, ...engineRecipe(e).diagnostics(run.output, { command, cwd: run.workspace }) }
-  },
-  registerGodotBuild: (taskId: number, commandId: unknown, raw: any) => {
-    const t = asTask(taskId), cwd = taskCwd(t), id = asInt(commandId, 'comando')
-    return productionChange(t.game, async g => {
-      const path = godotBuildFile(db, t.id, id, cwd)
-      const buildId = await registerProjectBuild(g, { title: raw?.title, version: raw?.version, notes: raw?.notes, platform: 'Windows', commandId: id, path })
-      return { id: buildId }
-    })
-  },
-  worktreeCopy: (game: string) => { const g = asGame(game); return { list: copyList(db, g), suggestions: copySuggestions(g) } },
+  ...engineHandlers({ db, asTask, taskCwd, emit, productionChange, registerProjectBuild }),
+  worktreeCopy: async (game: string) => { const g = asGame(game); return { list: copyList(db, g), suggestions: await copySuggestions(g) } },
   saveWorktreeCopy: (game: string, raw: unknown) => saveCopyList(db, asGame(game), raw),
   worktreeView: (game: string) => worktrees.view(asGame(game)),
   previewWorktreeMerge: (game: string, source: unknown) => worktrees.previewMerge(asGame(game), asStr(source, 'worktree', 4000)),
@@ -860,12 +672,12 @@ const handlers: Record<string, (...a: any[]) => any> = {
   openWorktreeTerminal: async (game: string, dir: unknown) => openTerminal(await worktreeFolder(game, dir), 'Resolver integração', process.platform === 'linux' ? ':' : '', host.env),
   saveProjectCommands: (game: string, raw: unknown) => { const g = asGame(game), c = saveCommands(db, g, raw); emit({ game: g, commandConfigChanged: true }); return c },
   listCommandRuns: (taskId: number) => listCommandRuns(db, asTask(taskId).id),
-  commandOutput: (taskId: number, id: number, offset: number = 0) => commandOutput(db, asTask(taskId).id, asInt(id, 'execução'), offset),
-  runProjectCommand: (taskId: number, name: string) => { const t = asTask(taskId); return commands.start(t.id,t.game,taskCwd(t),asStr(name,'comando',100)) },
+  commandOutput: (taskId: number, id: number, offset: number = 0) => commands.output(asTask(taskId).id, asInt(id, 'execução'), offset),
+  runProjectCommand: async (taskId: number, name: string) => { const t = asTask(taskId); return commands.start(t.id,t.game,await taskCwd(t),asStr(name,'comando',100)) },
   cancelProjectCommand: (taskId: number, id: number) => { const t = asTask(taskId), n = asInt(id,'execução'); if (!listCommandRuns(db,t.id).some(r => r.id===n)) fail('Comando de outra tarefa.'); commands.cancel(n) },
   listSteps: (taskId: number) => listSteps(db, asTask(taskId).id),
-  addStep: (taskId: number, title: unknown, instruction: unknown) => { const id = addStep(db, asTask(taskId).id, title, instruction); emit({ refresh: true }); return id },
-  reviewStep: (id: number, accept: unknown) => { if (typeof accept !== 'boolean') fail('Decisão inválida.'); reviewStep(db, asInt(id, 'etapa'), accept as boolean); emit({ refresh: true }) },
+  addStep: (taskId: number, title: unknown, instruction: unknown) => { const t = asTask(taskId), id = addStep(db, t.id, title, instruction); emit({ taskId: t.id, refresh: true }); return id },
+  reviewStep: (id: number, accept: unknown) => { if (typeof accept !== 'boolean') fail('Decisão inválida.'); const n = asInt(id, 'etapa'); reviewStep(db, n, accept as boolean); emit({ taskId: (db.prepare('SELECT task_id FROM task_steps WHERE id=?').get(n) as { task_id: number } | undefined)?.task_id, refresh: true }) }, // o painel de etapas recarrega so com eventos da propria tarefa
   todoBoard: (legacy?: unknown) => todoBoard(db, legacy),
   saveTodo: (revision: unknown, topics: unknown) => { const board = saveTodo(db, revision, topics); emit({ todoChanged: true }); return board },
   todoTask: (topicId: string, itemId: string, game: string) => {
@@ -895,10 +707,9 @@ const handlers: Record<string, (...a: any[]) => any> = {
   },
   listDocs: (game: string) => listDocs(asGame(game)),
   readDoc: (game: string, rel: string) => fs.readFileSync(safeJoin(asGame(game), asStr(rel, 'arquivo', 500)), 'utf8'),
-  writeDoc: (game: string, rel: string, text: string) => {
-    if (!/\.md$/i.test(asStr(rel, 'arquivo', 500))) fail('So arquivos .md')
-    fs.writeFileSync(safeJoin(asGame(game), rel), asStr(text, 'texto', 200_000), { flag: 'wx' })
-  },
+  writeDoc: (game: string, rel: string, text: string) => createDoc(asGame(game), asStr(rel, 'arquivo', 500), asStr(text, 'texto', 200_000)), // so cria
+  editDoc: (game: string, rel: string, seen: string, text: string) =>
+    editDoc(asGame(game), asStr(rel, 'arquivo', 500), asStr(seen, 'texto lido', 200_000), asStr(text, 'texto', 200_000)),
   listPins: (game: string) => db.prepare('SELECT * FROM pins WHERE game=? ORDER BY id DESC').all(asGame(game)),
   addPin: (game: string, title: string, body: string) =>
     db.prepare('INSERT INTO pins (game,title,body) VALUES (?,?,?)').run(asGame(game), asStr(title, 'titulo', 300).trim() || fail('titulo vazio'), asStr(body ?? '', 'detalhes', 20_000)),
@@ -1028,7 +839,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
     // Checkpoint do turno: congela o Git da pasta antes do agente mexer; best-effort (pasta sem Git ou com
     // operacao pendente so fica sem checkpoint) e nunca impede o envio.
     let turnCheckpoint: { id: number } | null = null
-    try { turnCheckpoint = await takeCheckpoint(db, taskCwd(t), t.id, {}) } catch {}
+    try { turnCheckpoint = await takeCheckpoint(db, await taskCwd(t), t.id, {}) } catch {}
     try {
       const result = await sendTask(t.id, s, input)
       if (step) bindStep(db, step, result)
@@ -1115,71 +926,13 @@ const handlers: Record<string, (...a: any[]) => any> = {
     return v
   },
   listDelegations: (taskId: number) => db.prepare('SELECT id, provider, model, effort, mode, objective, status, error, changed_files, out_of_scope, consumed, artifact_id, package_id, continuation_of, started_at, ended_at FROM delegations WHERE task_id=? ORDER BY id DESC LIMIT 50').all(asTask(taskId).id),
-  // ---- Contexto da tarefa: pedidos de aprovacao, memoria, artefatos, uso e limites. A aprovacao e validada AQUI (ID + hash do que foi exibido);
-  // o renderer nao informa escopo, destinatario nem conteudo.
-  // Cada pacote traz o estado de CONSENTIMENTO (state) e o de ENTREGA (delivery: confirmadas/enviadas sem confirmacao/falhas) separados.
-  listContextPackages: (taskId: number) => listPackages(db, asTask(taskId).id).map(p => ({ ...p, delivery: deliveryCounts(db, p.id) })),
-  // Mensagens retidas aguardando decisao (e as canceladas/expiradas ainda nao recuperadas, com o texto guardado).
-  listPendingSends: (taskId: number) => listSends(db, asTask(taskId).id),
-  decideSend: (id: number, hash: string, decision: string, keep?: unknown) => decideSend(asInt(id, 'envio'), asStr(hash, 'hash', 128), decision as Decision, asKeep(keep)),
-  recoverSend: (id: number) => recoverSend(db, asInt(id, 'envio')),
-  resolveContextPackage: (id: number, hash: string, decision: string, keep?: unknown) => {
-    const pkg = getPackage(db, asInt(id, 'pedido')) ?? fail('Pedido de contexto inexistente.')
-    if (db.prepare("SELECT 1 FROM pending_sends WHERE package_id=? AND state='awaiting_context_approval'").get(pkg.id)) fail('Este pedido pertence a uma mensagem retida: decida pelo cartao do envio (aprovar e executar, executar sem contexto ou cancelar).')
-    const subset = decision === 'approve' ? asKeep(keep) : undefined
-    const r = subset ? approveSubset(db, contextLimits(), { id: pkg.id, hash: asStr(hash, 'hash', 128), keep: subset })
-      : resolvePackage(db, { id: pkg.id, hash: asStr(hash, 'hash', 128), decision: decision as Decision })
-    waiters.resolved(pkg.id, r.pkg.state) // acorda a delegacao que espera (aprovar, continuar sem contexto ou cancelar); em parte, ela segue o subconjunto
-    emit({ taskId: pkg.task_id, contextResolved: pkg.id, state: r.pkg.state, refresh: true })
-    return { state: r.pkg.state, already: r.already }
-  },
-  // Revogar impede envios FUTUROS; o que o provedor ja recebeu nao e apagado (para continuar sem ele, use uma sessao nova).
-  revokeContextPackage: (id: number) => {
-    const pkg = getPackage(db, asInt(id, 'pacote')) ?? fail('Pacote inexistente.')
-    return revokePackage(db, pkg.id, pkg.task_id)
-  },
-  // ---- Permissoes dos agentes: pop-up (pedidos do Claude), regras "sempre permitir/negar" e politica nativa de Codex/OpenCode.
-  listPermissionRequests: (taskId?: number) => broker.list({ taskId: taskId == null ? undefined : asTask(taskId).id }),
-  resolvePermissionRequest: (id: number, decision: string, opt: any) =>
-    broker.resolve(asInt(id, 'pedido'), decision as PermDecision, { pattern: typeof opt?.pattern === 'string' ? opt.pattern.slice(0, 300) : undefined, project: opt?.project === true, acknowledged: opt?.acknowledged === true }),
-  listPermissionRules: () => listRules(db),
+  ...contextHandlers({ db, asTask, asGame, taskCwd, emit, decideSend, contextLimits, waiters, broker, permissionSettings, setSetting, attachRoot }),
   // ---- Perguntas do agente (ask_user) e sugestoes de tarefa (suggest_task). Usar a sugestao so cria a tarefa: a ordem volta ao compositor.
   listQuestions: (taskId?: number) => questions.list(taskId == null ? undefined : asTask(taskId).id),
   answerQuestion: (id: number, answers: unknown) => questions.answer(asInt(id, 'pergunta'), answers ?? null),
   listSuggestions: (taskId: number) => listSuggestions(db, asTask(taskId).id),
   dismissSuggestion: (id: number) => dismissSuggestion(db, asInt(id, 'sugestao')),
   startSuggestion: (id: number) => startSuggestion(db, asInt(id, 'sugestao')),
-  addPermissionRule: (r: any) => addRule(db, {
-    provider: asStr(r?.provider, 'agente', 30), kind: asStr(r?.kind, 'tipo', 10), pattern: asStr(r?.pattern, 'padrao', 300), decision: r?.decision,
-    project: r?.project ? asGame(r.project) : '', acknowledged: r?.acknowledged === true
-  }, Object.keys(AGENTS)),
-  removePermissionRule: (id: number) => removeRule(db, asInt(id, 'regra')),
-  assessPermissionRule: (kind: string, pattern: string) => assessRule(kind === 'tool' ? 'tool' : 'bash', asStr(pattern, 'padrao', 300)),
-  // capabilities: como cada CLI responde permissoes. claude = pop-up; codex/opencode = politica nativa (sem prompt no modo headless); gemini fora.
-  getPermissionSettings: () => ({ ...permissionSettings(), capabilities: { claude: 'prompt', codex: 'sandbox', opencode: 'auto-e-regras' } }),
-  setPermissionSettings: (raw: any) => {
-    const n = normalizePermissionSettings(raw)
-    if (n.codexSandbox === 'danger-full-access' && permissionSettings().codexSandbox !== 'danger-full-access' && raw?.acknowledged !== true)
-      fail('Codex sem sandbox executa qualquer comando sem restricao. Confirme que entende o risco para salvar.')
-    setSetting('permissions', JSON.stringify(n))
-    return n
-  },
-  taskUsage: (taskId: number) => taskUsage(db, asTask(taskId).id),
-  taskMemory: (taskId: number) => {
-    const t = asTask(taskId)
-    let cwd: string | null = null
-    try { cwd = taskCwd(t) } catch {}
-    return searchMemory(db, { taskId: t.id, limit: 500, state: undefined }).items.map(m => ({ ...m, validity: cwd ? validate(db, m, cwd).validity : 'unknown' }))
-  },
-  listTaskArtifacts: (taskId: number) => listArtifacts(db, asTask(taskId).id),
-  readTaskArtifact: (taskId: number, id: number, offset?: number) =>
-    readArtifact(db, { taskId: asTask(taskId).id, reader: '', id: asInt(id, 'artefato'), offset: Number.isSafeInteger(offset) ? offset : 0, limit: contextLimits().queryChars, asUser: true }),
-  taskImage: (taskId: number, p: string) => {
-    const t = asTask(taskId)
-    let cwd: string | null = null
-    try { cwd = taskCwd(t) } catch {}
-    return readImage(asStr(p, 'caminho', 2000), [...(cwd ? [cwd] : []), path.join(attachRoot, String(t.id))])
-  },
   getAutomations: () => automations.rules(),
   setAutomations: (raw: unknown) => automations.setRules(raw),
   getHandover: () => handoverSettings(),
@@ -1199,37 +952,24 @@ const handlers: Record<string, (...a: any[]) => any> = {
     await checkSel(s)
     saveSel(db, t.id, s)
   },
-  launchGame: (game: string, sel: any) => {
+  launchGame: async (game: string, sel: any) => {
     const s = asSel(sel)
-    worktrees.assertAvailable(asGame(game))
+    await worktrees.assertAvailable(asGame(game))
     openTerminal(asGame(game), `${s.provider} - ${path.basename(asGame(game))}`, AGENTS[s.provider].cmd, envFor(s))
   },
-  // ---- Branch da pasta (ou worktree): Git local + gh. Publicar (push/PR/issue) so por clique confirmado na interface.
-  branchView: async (dir: string) => branchView(await asRepoDir(dir)),
-  branchDiff: async (dir: string, rel: string) => fileDiff(await asRepoDir(dir), asStr(rel, 'arquivo', 1000)),
-  branchCommit: async (dir: string, msg: string, paths?: unknown, parts?: unknown) => { const d = await asRepoDir(dir); worktrees.assertAvailable(d); return commitAll(d, asStr(msg, 'mensagem', 5000).trim() || fail('Mensagem de commit vazia.'), commitPaths(paths), commitParts(parts)) },
-  branchRemoteAhead: async (dir: string) => remoteAhead(await asRepoDir(dir)),
-  branchCreate: async (dir: string, name: string) => { const d = await asRepoDir(dir); worktrees.assertAvailable(d); return createBranch(d, asStr(name, 'nome da branch', 200).trim() || fail('Nome vazio.')) },
-  branchPush: async (dir: string) => push(await asRepoDir(dir)),
-  branchPull: async (dir: string) => { const d = await asRepoDir(dir); worktrees.assertAvailable(d); return pull(d) },
-  prView: async (dir: string) => prView(await asRepoDir(dir)),
-  prCreate: async (dir: string, title: string, body: string) => prCreate(await asRepoDir(dir), asStr(title, 'titulo', 250).trim() || fail('Título vazio.'), asStr(body ?? '', 'descricao', 20000)),
-  issueList: async (dir: string) => issueList(await asRepoDir(dir)),
-  issueCreate: async (dir: string, title: string, body: string) => issueCreate(await asRepoDir(dir), asStr(title, 'titulo', 250).trim() || fail('Título vazio.'), asStr(body ?? '', 'descricao', 20000)),
-  openGithub: (u: string) => { if (/^https:\/\/github\.com\//.test(asStr(u, 'endereco', 500))) shell.openExternal(u) },
+  ...branchHandlers({ db, listGames, worktrees, openExternal: url => shell.openExternal(url) }),
   // Checkpoints do turno: a pasta da tarefa congela sozinha antes de cada mensagem; aqui o usuario cria, lista e volta.
   listCheckpoints: (taskId: number) => listCheckpoints(db, asTask(taskId).id),
   createCheckpoint: async (taskId: number) => {
-    const t = asTask(taskId), dir = taskCwd(t)
-    worktrees.assertAvailable(dir)
+    const t = asTask(taskId), dir = await taskCwd(t) // taskCwd ja confere assertAvailable(dir)
     const cp = await takeCheckpoint(db, dir, t.id, {})
     note(t.id, `Checkpoint criado (${cp.head?.slice(0, 7) ?? 'pasta limpa sem commits'}): a pasta pode voltar a este ponto.`)
     emit({ taskId: t.id, refresh: true })
     return cp
   },
-  previewCheckpointRewind: async (taskId: number, id: number) => previewRewind(db, taskCwd(asTask(taskId)), asTask(taskId).id, asInt(id, 'checkpoint')),
+  previewCheckpointRewind: async (taskId: number, id: number) => previewRewind(db, await taskCwd(asTask(taskId)), asTask(taskId).id, asInt(id, 'checkpoint')),
   rewindCheckpoint: async (taskId: number, id: number, token: string) => {
-    const t = asTask(taskId), dir = taskCwd(t)
+    const t = asTask(taskId), dir = await taskCwd(t)
     if (active.has(t.id)) fail('Pare a execução desta tarefa antes de voltar.')
     if (commands.busy(dir)) fail('Aguarde ou cancele o comando local nesta pasta antes de voltar.')
     const r = await rewindCheckpoint(db, dir, t.id, asInt(id, 'checkpoint'), asStr(token, 'prévia', 200))
@@ -1291,6 +1031,7 @@ const trusted = (e: IpcMainInvokeEvent) => {
   const url = e.senderFrame?.url ?? ''
   return rendererUrl ? url.startsWith(rendererUrl) : url.startsWith(pathToFileURL(path.dirname(rendererFile)).href)
 }
+returnReads(handlers) // setters devolvem o formato da leitura (o renderer o guarda como cache)
 for (const [name, fn] of Object.entries(handlers))
   ipcMain.handle(name, (e, ...args) => (trusted(e) ? backups.invoke(() => fn(...args)) : fail('Origem nao permitida.')))
 

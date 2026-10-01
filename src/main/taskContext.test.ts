@@ -12,6 +12,7 @@ import { DEFAULT_LIMITS, estimateTokens, normalizeLimits } from './limits.ts'
 import { addMemory, buildCheckpoint, getMemory, setTodoState } from './memory.ts'
 import { briefTokens, buildChildInput, runtimeBrief } from './prompt.ts'
 import { callTaskTool, childToolset, toolsFor, type ToolCtx } from './taskContext.ts'
+import type { ToolResult } from './mcp.ts'
 import { contextFor, createTask, stripActivity } from './tasks.ts'
 import { dropReceipts, findInWorkspace, globToRegex, listFilesUnder, readFileRange, receiptCount } from './workspaceTools.ts'
 
@@ -34,7 +35,8 @@ const grantOf = (taskId: number, r: Recipient, sessionId?: string | null): Grant
 const parent: ToolCtx = { taskId: T, lineage: PARENT, auth: grantOf(T, rcp(PARENT, { provider: 'claude', profile: '1' }), 'sess-parent'), role: 'parent', cwd: ws, scope: [], runId: 5 }
 const R: Recipient = rcp('del:7', { scope: ['src/player'] })
 const child: ToolCtx = { taskId: T, lineage: 'del:7', auth: grantOf(T, R), role: 'child', cwd: ws, scope: ['src/player'], delegationId: 7 }
-const call = (c: ToolCtx, name: string, args: any) => callTaskTool(db, DEFAULT_LIMITS, c, name, args)
+const call = (c: ToolCtx, name: string, args: any) => callTaskTool(db, DEFAULT_LIMITS, c, name, args) as ToolResult
+const find = async (c: ToolCtx, args: any) => await callTaskTool(db, DEFAULT_LIMITS, c, 'find_in_workspace', args)
 
 test('ferramentas anunciadas por papel: filho nunca recebe delegar; operacoes locais so para filho', () => {
   const names = (r: 'parent' | 'child', d?: any) => toolsFor(r, d).map(t => t.name)
@@ -192,19 +194,19 @@ test('validade aparece no indice: arquivo de evidencia alterado marca DESATUALIZ
   assert.match(call(ctx, 'read_task_context', {}).text, /DESATUALIZADO \(mudou: src\/main\.ts\)/)
 })
 
-test('operacoes locais: busca limitada com total e truncamento, escopo, binarios, node_modules e caminhos fora da area', () => {
+test('operacoes locais: busca limitada com total e truncamento, escopo, binarios, node_modules e caminhos fora da area', async () => {
   const c: ToolCtx = { ...child, scope: [] }
-  const all = call(c, 'find_in_workspace', { pattern: 'pulo' }).text
+  const all = (await find(c, { pattern: 'pulo' })).text
   assert.match(all, /^31 ocorrencia\(s\) em 2 arquivo\(s\)/) // jump.ts (30) e main.ts (1); o binario nao entra e node_modules e ignorado
   assert.ok(!/node_modules|bin\.dat/.test(all))
-  const lim = call(c, 'find_in_workspace', { pattern: 'pulo', maxResults: 5 }).text
+  const lim = (await find(c, { pattern: 'pulo', maxResults: 5 })).text
   assert.match(lim, /TRUNCADO/); assert.equal(lim.split('\n').filter(l => /:\d+:/.test(l)).length, 5)
-  assert.match(call(child, 'find_in_workspace', { pattern: 'pulo' }).text, /^30 ocorrencia\(s\) em 1 arquivo\(s\)/) // escopo src/player: main.ts fora
-  assert.match(call(c, 'find_in_workspace', { mode: 'list', glob: '**/*.md' }).text, /^1 arquivo\(s\)\ndocs\/notas\.md/)
-  assert.match(call(c, 'find_in_workspace', { pattern: 'a.c', regex: false }).text, /^0 ocorrencia/) // literal, nao regex
-  assert.match(call(c, 'find_in_workspace', { pattern: 'pu.o', regex: true }).text, /ocorrencia/)
+  assert.match((await find(child, { pattern: 'pulo' })).text, /^30 ocorrencia\(s\) em 1 arquivo\(s\)/) // escopo src/player: main.ts fora
+  assert.match((await find(c, { mode: 'list', glob: '**/*.md' })).text, /^1 arquivo\(s\)\ndocs\/notas\.md/)
+  assert.match((await find(c, { pattern: 'a.c', regex: false })).text, /^0 ocorrencia/) // literal, nao regex
+  assert.match((await find(c, { pattern: 'pu.o', regex: true })).text, /ocorrencia/)
   for (const bad of [{ path: '../fora' }, { path: 'C:/Windows' }, { pattern: '(', regex: true }, { pattern: 'x'.repeat(201) }, { pattern: 'x', path: 'nao-existe' }])
-    assert.equal(call(c, 'find_in_workspace', bad).isError, true, JSON.stringify(bad))
+    assert.equal((await find(c, bad)).isError, true, JSON.stringify(bad))
   assert.ok(globToRegex('src/**/*.ts').test('src/a/b/c.ts') && globToRegex('src/**/*.ts').test('src/c.ts') && !globToRegex('*.ts').test('src/c.ts'))
 })
 
@@ -463,18 +465,40 @@ test('read_file_range respeita queryChars sem esconder linhas ou emitir recibo p
   fs.writeFileSync(path.join(ws, 'budget.txt'), Array.from({ length: 12 }, (_, i) => 'linha ' + (i + 1) + ' ' + 'x'.repeat(90)).join('\n'))
   const c = { ...child, scope: [] }
   const limits = { ...DEFAULT_LIMITS, queryChars: 250 }
-  const first = callTaskTool(db, limits, c, 'read_file_range', { path: 'budget.txt', startLine: 1, endLine: 12 })
+  const first = callTaskTool(db, limits, c, 'read_file_range', { path: 'budget.txt', startLine: 1, endLine: 12 }) as ToolResult
   assert.equal(first.isError, false)
   const rows = first.text.split('\n').slice(1)
   assert.ok(rows.join('\n').length <= limits.queryChars)
   assert.equal(rows.length, 2)
   assert.match(first.text, /CORTADO no limite de tamanho: exibindo 1-2/)
   assert.doesNotMatch(first.text, /readToken rt_/)
-  const next = callTaskTool(db, limits, c, 'read_file_range', { path: 'budget.txt', startLine: 3, endLine: 4 })
+  const next = callTaskTool(db, limits, c, 'read_file_range', { path: 'budget.txt', startLine: 3, endLine: 4 }) as ToolResult
   assert.match(next.text, /\n3\tlinha 3/)
   assert.match(next.text, /\n4\tlinha 4/)
   assert.match(next.text, /readToken rt_/)
-  const tiny = callTaskTool(db, { ...limits, queryChars: 10 }, c, 'read_file_range', { path: 'budget.txt', startLine: 1, endLine: 1 })
+  const tiny = callTaskTool(db, { ...limits, queryChars: 10 }, c, 'read_file_range', { path: 'budget.txt', startLine: 1, endLine: 1 }) as ToolResult
   assert.match(tiny.text, /nenhuma linha coube/)
   assert.doesNotMatch(tiny.text, /readToken rt_/)
+})
+
+test('find_in_workspace: regex catastrofica nao trava o app; raiz resolvida uma vez; resultado igual ao da varredura', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-find-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(dir, `f${String(i).padStart(2, '0')}.txt`), `linha\n${'a'.repeat(40)}!\nfim ${i}\n`)
+  const real = fs.realpathSync, calls = { n: 0 }
+  t.mock.method(fs, 'realpathSync', (...a: any[]) => { calls.n++; return (real as any)(...a) })
+  const ok = await findInWorkspace({ cwd: dir }, { pattern: 'fim \\d+', regex: true, maxResults: 3 })
+  assert.match(ok, /^40 ocorrencia\(s\) em 40 arquivo\(s\); mostrando 3 \(TRUNCADO/)
+  assert.match(ok, /\nf00\.txt:3: fim 0\nf01\.txt:3: fim 1\nf02\.txt:3: fim 2$/)
+  assert.ok(calls.n <= 3, `realpathSync chamado ${calls.n} vezes para 40 arquivos`)
+  t.mock.restoreAll()
+  let ticks = 0
+  const timer = setInterval(() => ticks++, 20)
+  const started = Date.now()
+  try {
+    const slow = await findInWorkspace({ cwd: dir }, { pattern: '(a+)+$', regex: true }, { budgetMs: 400 }) // exponencial em "aaa…a!"
+    assert.match(slow, /^0 ocorrencia\(s\) em 0 arquivo\(s\)\nAVISO: busca interrompida no limite/)
+  } finally { clearInterval(timer) }
+  assert.ok(Date.now() - started < 5000); assert.ok(ticks >= 5, `event loop parado: ${ticks} ticks`)
+  assert.match(await findInWorkspace({ cwd: dir }, { mode: 'list', glob: 'f0*.txt' }), /^10 arquivo\(s\)\nf00\.txt \(\d+ bytes\)/)
 })

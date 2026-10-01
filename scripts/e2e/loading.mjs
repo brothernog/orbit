@@ -59,7 +59,7 @@ fs.writeFileSync(entry, `
     listAssets: () => [], listPlaytests: () => [], listBuilds: () => [],
     listBuildCommands: g => g===game ? [...runs.values()].flat().filter(r=>r.status==='completed'&&r.exit_code===0).map(r=>({id:r.id,name:r.name,workspace:r.workspace,task_title:'Fixture task '+r.task_id})) : [],
     taskChat: id => ({task:tasks.find(t=>t.id===id),running:false,messages:[],metric:null,sel:{provider:'codex'}}),
-    listContextPackages: () => [], listPendingSends: () => [], listSteps: () => [],
+    listContextPackages: () => [], listPendingSends: () => [], listSteps: () => [], listPermissionRequests: () => [],
     stopFiles: () => {}, taskFiles: () => ({repo:false,isolated:false,files:[]}),
     godotState: () => ({organizer:null,available:false,project:null}),
     worktreeCopy: () => ({list:[],suggestions:[]}),
@@ -186,6 +186,14 @@ try {
   check('Avisos mostra controles conhecidos durante revalidacao retida', await frames("!!document.querySelector('.deleg input[type=checkbox]') && document.querySelector('.settings').textContent.includes('Quando um agente terminar') && !document.querySelector('.settings').textContent.includes('Carregando')"))
   check('Getter de Avisos continua pendente durante o desenho', (await control()).pending.getNotifySettings > 0)
   await control('release', ['getDelegationSettings', 'getContextLimits', 'getNotifySettings'])
+  await tab('Delegação')
+  await wait("document.querySelectorAll('.deleg fieldset input').length > 0")
+  const delegOn = await ev("document.querySelector('.deleg input[type=checkbox]').checked")
+  await click('.deleg input[type=checkbox]')
+  await wait(`document.querySelector('.deleg input[type=checkbox]')?.checked === ${!delegOn}`)
+  check('Salvar Delegacao mantem a tela (setter devolve o formato da leitura)', await frames("document.querySelectorAll('.deleg fieldset input').length > 0 && !!document.querySelector('.set-head')"))
+  await click('.deleg input[type=checkbox]')
+  await wait(`document.querySelector('.deleg input[type=checkbox]')?.checked === ${delegOn}`)
 
   await tab('Contas')
   await frames("!!document.querySelector('.prov')")
@@ -306,6 +314,47 @@ try {
   await wait("window.invoke('loadingFixture','status').then(s=>s.calls.listCommandRuns.at(-1)?.[0]===2)")
   await control('release', ['commandOutput'])
   check('Trocar tarefa descarta resposta de log da tarefa anterior', await frames("![...document.querySelectorAll('.project-commands pre')].some(p=>p.textContent.includes('resposta antiga da tarefa')) && ![...document.querySelectorAll('.command-result summary')].some(s=>s.textContent.startsWith('#500 '))"))
+
+  // Renderer sem trabalho repetido: eventos filtrados por tarefa/projeto, consultas compartilhadas e nada com a janela oculta.
+  const callsOf = (state, name, pick = () => true) => (state.calls[name] ?? []).filter(pick).length
+  const settle = () => sleep(400)
+  await wait("!!document.querySelector('.composer') && !!document.querySelector('nav.chats')")
+  const steps0 = await control()
+  await emit([{ taskId: 1, game, done: true, status: 'completed' }, { refresh: true }])
+  await settle()
+  const steps1 = await control()
+  check('Etapas nao recarregam com done de outra tarefa nem refresh global', count(steps1, 'listSteps') === count(steps0, 'listSteps'))
+  await emit([{ taskId: 2, game, done: true, status: 'completed' }])
+  await settle()
+  const steps2 = await control()
+  check('Etapas recarregam uma vez com done da propria tarefa', count(steps2, 'listSteps') === count(steps1, 'listSteps') + 1)
+  check('Um done recarrega as conversas da outra pasta da gaveta uma vez so', callsOf(steps2, 'listTasks', a => a[0] === otherGame) === callsOf(steps1, 'listTasks', a => a[0] === otherGame) + 1)
+
+  await ev("Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); document.dispatchEvent(new Event('visibilitychange'))")
+  // Oculta: o polling para, entao a contagem abaixo e so do evento (pedido de permissao nunca espera o polling).
+  const perm0 = await control()
+  await emit([{ permissionRequest: true, taskId: 2 }])
+  await settle()
+  check('Pedido de permissao consulta uma vez para o pop-up global e o cartao do chat juntos', count(await control(), 'listPermissionRequests') === count(perm0, 'listPermissionRequests') + 1)
+  const hidden0 = await control()
+  await sleep(4500)
+  const hidden1 = await control()
+  check('Janela oculta nao consulta agentes ativos nem permissoes', count(hidden1, 'listActive') === count(hidden0, 'listActive') && count(hidden1, 'listPermissionRequests') === count(hidden0, 'listPermissionRequests'))
+  await ev("delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange'))")
+  await wait(`window.invoke('loadingFixture','status').then(s=>(s.counts.listActive??0)>${count(hidden1, 'listActive')})`)
+  check('Voltar a ficar visivel consulta na hora', true)
+
+  await ev(`[...document.querySelectorAll('.folder-name')].find(b=>b.dataset.path===${JSON.stringify(game)}).click()`)
+  await wait("!document.querySelector('.composer') && !!document.querySelector('.home')")
+  await settle()
+  const git0 = await control()
+  await emit([{ taskId: 9, game: otherGame, done: true, status: 'completed' }])
+  await settle()
+  const git1 = await control()
+  check('done de outro projeto nao rele o Git deste', count(git1, 'projectInfo') === count(git0, 'projectInfo'))
+  await emit([{ taskId: 1, game, done: true, status: 'completed' }])
+  await settle()
+  check('done do projeto rele o Git dele uma vez (Nova e visao geral dividem a consulta)', callsOf(await control(), 'projectInfo', a => a[0] === game) === callsOf(git1, 'projectInfo', a => a[0] === game) + 1)
 
   const allState = await control()
   check('Nenhuma CLI, rede ou login real foi chamado', !fs.existsSync(unexpectedCli) && allState.unexpected.length === 0)

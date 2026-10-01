@@ -1,11 +1,13 @@
-import { createContext, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { createContext, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { api, depth, errText, name, onChat, type Active, type Task } from './api'
-import { effortLabel, modelName } from './Chat'
+import { effortLabel, modelName } from './labels'
 
 import { Markdown } from './Markdown'
 import { Dropdown } from './Dropdown'
 import { Icon, PROVIDER } from './icons'
-import { dirtyCount, minutesSince, useProjects } from './projects'
+import { dirtyCount, useProjects } from './projects'
+import { minutesSince, same } from './time'
+import { useCachedRead } from './useCachedRead'
 import { TodoBoard, useTodo, type TodoApi, type TodoDraft } from './Todo'
 import { ProjectIcon } from './Nav'
 import { OrbitMark, usePulse } from './PulseCore'
@@ -18,9 +20,9 @@ function useNovaState() {
   const [st, setSt] = useState<{ waiting: { id: number; game: string; title: string; why: string }[]; doneToday: Record<string, number> }>({ waiting: [], doneToday: {} })
   useEffect(() => {
     let live = true
-    const load = () => api.novaState().then((s: any) => { if (live) setSt(s) }, () => {})
+    const load = () => api.novaState().then((s: any) => { if (live) setSt(prev => (JSON.stringify(prev) === JSON.stringify(s) ? prev : s)) }, () => {})
     load()
-    const t = setInterval(load, 30_000)
+    const t = setInterval(() => { if (document.visibilityState === 'visible') load() }, 30_000)
     const off = onChat((ev: any) => { if (ev?.done || ev?.permissionRequest || ev?.permissionResolved || ev?.questionRequest || ev?.questionResolved || ev?.contextRequest || ev?.contextResolved) load() })
     return () => { live = false; clearInterval(t); off() }
   }, [])
@@ -31,7 +33,6 @@ const SHOWN = 5 // o resto fica recolhido: poucas coisas na tela por vez
 
 const greeting = () => { const h = new Date().getHours(); return h < 5 ? 'Boa noite' : h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite' }
 const since = (min: number) => (min < 2 ? 'agora' : min < 90 ? `há ${min} min` : min < 2160 ? `há ${Math.round(min / 60)} h` : `há ${Math.round(min / 1440)} d`)
-const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 const ts = (iso: string) => new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z')).getTime()
 const ago = (iso: string) => since(Math.round((Date.now() - ts(iso)) / 60000))
 
@@ -49,7 +50,7 @@ function useQueue(games: string[], active: Active[], on: boolean) {
       .then(l => { if (live) setData(Object.fromEntries(l.filter(x => x !== null))) })
     load()
     const off = onChat((ev: any) => { if (ev?.done || ev?.refresh || ev?.permissionRequest || ev?.permissionResolved || ev?.contextRequest || ev?.contextResolved) { clearTimeout(timer); timer = setTimeout(load, 300) } })
-    const t = setInterval(load, 60_000)
+    const t = setInterval(() => { if (document.visibilityState === 'visible') load() }, 60_000)
     return () => { live = false; off(); clearTimeout(timer); clearInterval(t) }
   }, [key])
   if (!on) return []
@@ -82,6 +83,16 @@ export const NewInHeader = createContext(false)
 
 // Roadmap de um projeto: progresso e os proximos itens, com marcar feito (grava no .md) e mandar para a to-do.
 const LINE = /^(\s*[-*] )\[( |x)\] (.*)$/i
+function parseRoadmap(text: string | undefined) {
+  const lines = text?.split('\n') ?? []
+  let section = ''
+  const items = lines.map((l, n) => {
+    if (/^#{1,3} /.test(l)) section = l.replace(/^#+ /, '').trim()
+    const m = l.match(LINE)
+    return m ? { n, done: m[2].toLowerCase() === 'x', text: m[3].trim(), section } : null
+  }).filter(Boolean) as { n: number; done: boolean; text: string; section: string }[]
+  return { lines, items }
+}
 export function RoadmapCard({ games, initial, todo, onOpen, fixed }: { games: string[]; initial: string | null; todo: TodoApi; onOpen: (g: string) => void; fixed?: boolean }) {
   const [game, setGame] = useState<string | null>(initial)
   const [doc, setDoc] = useState<{ path: string; text: string } | null | undefined>(undefined)
@@ -89,20 +100,17 @@ export function RoadmapCard({ games, initial, todo, onOpen, fixed }: { games: st
   useEffect(() => { if (!game && initial) setGame(initial) }, [initial])
   useEffect(() => {
     if (!game) return
+    let live = true
     setDoc(undefined); setErr('')
     api.listDocs(game).then(async (d: string[]) => {
       const r = d.filter(p => name(p).toLowerCase() === 'roadmap.md').sort((a, b) => depth(a) - depth(b) || a.length - b.length)[0]
-      setDoc(r ? { path: r, text: await api.readDoc(game, r) } : null)
-    }, e => { setErr(errText(e)); setDoc(null) })
+      const found = r ? { path: r, text: await api.readDoc(game, r) as string } : null
+      if (live) setDoc(found)
+    }).catch(e => { if (live) { setErr(errText(e)); setDoc(null) } })
+    return () => { live = false }
   }, [game])
 
-  const lines = doc?.text.split('\n') ?? []
-  let section = ''
-  const items = lines.map((l, n) => {
-    if (/^#{1,3} /.test(l)) section = l.replace(/^#+ /, '').trim()
-    const m = l.match(LINE)
-    return m ? { n, done: m[2].toLowerCase() === 'x', text: m[3].trim(), section } : null
-  }).filter(Boolean) as { n: number; done: boolean; text: string; section: string }[]
+  const { lines, items } = useMemo(() => parseRoadmap(doc?.text), [doc?.text])
   const done = items.filter(i => i.done).length
   const next = items.filter(i => !i.done && i.text).slice(0, 5)
   const toggle = (n: number) => {
@@ -111,7 +119,7 @@ export function RoadmapCard({ games, initial, todo, onOpen, fixed }: { games: st
     ls[n] = ls[n].replace(LINE, (_, a, x, t) => `${a}[${x === ' ' ? 'x' : ' '}] ${t}`)
     const text = ls.join('\n')
     setDoc({ ...doc, text })
-    api.writeDoc(game, doc.path, text).catch((e: any) => { setErr(errText(e)); setDoc(doc) })
+    api.editDoc(game, doc.path, doc.text, text).catch((e: any) => { setErr(errText(e)); setDoc(doc) })
   }
 
   return (
@@ -148,6 +156,14 @@ export function RoadmapCard({ games, initial, todo, onOpen, fixed }: { games: st
   )
 }
 
+// Texto ao vivo da Nova: o estado fica aqui para que cada trecho nao re-renderize o Inicio inteiro (nucleo, to-do, roadmap).
+// Monta a cada pergunta (so aparece pensando), entao comeca vazio sem precisar limpar.
+function NovaStream() {
+  const [stream, setStream] = useState('')
+  useEffect(() => onChat(ev => { if (ev.jarvis) setStream(ev.text) }), [])
+  return stream ? <Markdown text={stream} /> : <span className="typing" aria-label="Pensando"><i /><i /><i /></span>
+}
+
 type JAction = { type: 'todo'; text: string; project?: string; topic?: string; done?: { tid: string; iid: string; topic: string } } | { type: 'open'; project: string }
 
 // Nova: topo igual em toda parte (marca, titulo, campo da Nova). Embaixo, por secao: no Inicio, a fila do que pede voce,
@@ -162,12 +178,9 @@ export function Home({ games, tag, siblings, below, active, onOpen, onAdd, lastG
   const [text, setText] = useState('')
   const [note, setNote] = useState('')
   const [thinking, setThinking] = useState(false)
-  const [stream, setStream] = useState('')
   const [asking, setAsking] = useState('')
   const [turns, setTurns] = useState<{ q: string; a: string; actions: JAction[]; error?: string }[]>([])
-  const [jcfg, setJcfg] = useState<{ model: string; effort: string } | null>(null)
-  useEffect(() => { api.getJarvisSettings().then(setJcfg, () => {}) }, [])
-  useEffect(() => onChat(ev => { if (ev.jarvis) setStream(ev.text) }), [])
+  const jcfg = useCachedRead<{ model: string; effort: string }>('getJarvisSettings', () => api.getJarvisSettings()).data // atualiza junto com Configuracoes
   const pulse = usePulse()
   const nextItem = todo.topics.flatMap(t => t.items).find(i => !i.done)
   const info = useProjects(games)
@@ -202,7 +215,7 @@ export function Home({ games, tag, siblings, below, active, onOpen, onAdd, lastG
     if (!t) return
     const pin = t.match(/^\/(fixar|todo)\s+(.+)/i)
     if (pin) { if (await todo.add(todo.topics[0].id, pin[2], [], below ? games[0] : undefined)) { setText(''); setNote(`Fixado em "${todo.topics[0].title}".`) } return }
-    setText(''); setNote(''); setStream(''); setAsking(t); setThinking(true)
+    setText(''); setNote(''); setAsking(t); setThinking(true)
     const q = t.replace(/^\/resumo\b\s*/i, 'Resuma o que foi concluído e o que falta nos projetos, em poucas linhas. ')
     const only = below ? games[0] : undefined // Nova de uma pasta: so a to-do dela vai junto
     const snapTodo = todo.topics.flatMap(tp => tp.items.filter(i => !only || (i.project && same(i.project, only))).map(i => ({ topic: tp.title, text: i.text, done: i.done, project: i.project && name(i.project), agent: i.agent })))
@@ -218,7 +231,7 @@ export function Home({ games, tag, siblings, below, active, onOpen, onAdd, lastG
         return iid ? { ...a, done: { tid: tp.id, iid, topic: tp.title } } : a
       }))
       setTurns(ts => [...ts, { q: t, a: r.text, actions, error: r.status === 'failed' ? r.error : undefined }].slice(-6))
-    }, (e: any) => setTurns(ts => [...ts, { q: t, a: '', actions: [], error: errText(e) }])).finally(() => { setThinking(false); setStream('') })
+    }, (e: any) => setTurns(ts => [...ts, { q: t, a: '', actions: [], error: errText(e) }])).finally(() => setThinking(false))
   }
   const last = turns[turns.length - 1]
   const coreGames = below ? [games[0]] : games
@@ -288,7 +301,7 @@ export function Home({ games, tag, siblings, below, active, onOpen, onAdd, lastG
             <div className={`jarvis-reply ${thinking ? 'streaming' : ''}`} aria-live="polite">
               <p className="jr-q">{thinking ? asking : last!.q}</p>
               {thinking
-                ? stream ? <Markdown text={stream} /> : <span className="typing" aria-label="Pensando"><i /><i /><i /></span>
+                ? <NovaStream />
                 : last!.error ? <p className="err">{last!.error}</p> : <Markdown text={last!.a || 'Sem resposta.'} />}
               {!thinking && last!.actions.length > 0 && <div className="jr-actions">
                 {last!.actions.map((a, i) => a.type === 'open'

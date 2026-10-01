@@ -1,10 +1,10 @@
 // Arquivos nao versionados (ex.: .env, cache .godot/) copiados da pasta do projeto para uma worktree recem-criada. Lista explicita
 // por projeto, escolhida pelo usuario; nada e copiado por padrao. Sem Electron.
 import type { DatabaseSync } from 'node:sqlite'
-import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { safeJoin } from './guard.ts'
+import { run } from './projectInfo.ts'
 
 const MAX = 20
 const key = (game: string) => 'worktreeCopy:' + path.resolve(game).toLowerCase()
@@ -33,31 +33,31 @@ export function saveCopyList(db: DatabaseSync, game: string, raw: unknown) {
 }
 
 // Sugestoes: o que o git ignora no primeiro nivel do projeto (o que a worktree NAO traz). So leitura.
-export function copySuggestions(game: string): string[] {
+export async function copySuggestions(game: string): Promise<string[]> {
   let out = ''
-  try { out = execFileSync('git', ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '--no-empty-directory'], { cwd: game, encoding: 'utf8', timeout: 10_000, maxBuffer: 8 << 20 }) } catch { return [] }
+  try { out = await run(game, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '--no-empty-directory'], { timeout: 10_000, maxBuffer: 8 << 20 }) } catch { return [] }
   const top = new Set(out.split(/\r?\n/).filter(Boolean).map(l => l.split('/')[0]))
   top.delete('.worktrees')
   return [...top].sort((a, b) => a.localeCompare(b)).slice(0, 30)
 }
 
 // Copia sem sobrescrever o que a worktree ja tem (arquivo versionado vence). Falha num item nao impede os outros.
-export function copyIntoWorktree(game: string, wt: string, list: string[]) {
+export async function copyIntoWorktree(game: string, wt: string, list: string[]) {
   const copied: string[] = [], missing: string[] = [], failed: { path: string; error: string }[] = []
   for (const rel of list) {
     try {
       const src = safeJoin(game, rel)
       if (!fs.existsSync(src)) { missing.push(rel); continue }
       const dst = path.join(wt, rel)
-      fs.mkdirSync(path.dirname(dst), { recursive: true })
-      fs.cpSync(src, dst, { recursive: true, force: false, errorOnExist: false })
+      await fs.promises.mkdir(path.dirname(dst), { recursive: true })
+      await fs.promises.cp(src, dst, { recursive: true, force: false, errorOnExist: false }) // pasta de cache (.godot) pode ser grande
       copied.push(fs.statSync(src).isDirectory() ? `${rel}/` : rel)
     } catch (e: any) { failed.push({ path: rel, error: String(e?.message ?? e).slice(0, 200) }) }
   }
   return { copied, missing, failed }
 }
 
-export function copyNote(r: ReturnType<typeof copyIntoWorktree>): string | null {
+export function copyNote(r: Awaited<ReturnType<typeof copyIntoWorktree>>): string | null {
   const lines = [
     r.copied.length ? `Copiado para a worktree: ${r.copied.join(', ')}.` : '',
     r.missing.length ? `Não encontrado na pasta do projeto: ${r.missing.join(', ')}.` : '',
