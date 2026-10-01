@@ -13,7 +13,8 @@ type UsageDeps = {
   refreshGuard?: (work: () => Promise<AccountUsage>) => Promise<AccountUsage>
   now?: () => number
 }
-const TTL = 60_000
+export const USAGE_TTL = 25_000 // abaixo do intervalo de 30 s de Configuracoes e do planeta: seenAt chega depois do pedido e nao pode pular uma rodada
+const TTL = USAGE_TTL
 const windowOf = (value: any): UsageWindow | null => value && typeof value.utilization === 'number' && Number.isFinite(value.utilization) && value.utilization >= 0
   ? { utilization: value.utilization, resets_at: typeof value.resets_at === 'string' && Number.isFinite(Date.parse(value.resets_at)) ? value.resets_at : null } : null
 export function usageSnapshot(value: any): AccountUsage | null {

@@ -44,7 +44,7 @@ import { parseAliases, validateAliases } from './agents.ts'
 import { delegateTool, DEFAULT_SETTINGS, mcpWire, normalizeSettings, reconcileDelegations, runDelegation, TOOL_NAME, WorkspaceGuard, type Deps, type McpWire, type ParentCtx } from './delegation.ts'
 import { ApprovalWaiters, type Decision } from './consent.ts'
 import { awaitingSend, reconcileSends, reconcileStarting } from './sends.ts'
-import { normalizeLimits } from './limits.ts'
+import { effectiveLimits, normalizeLimits } from './limits.ts'
 import { inUse, moons, planetLayout, planetUsage } from './planet.ts'
 import { copyIntoWorktree, copyList, copyNote, copySuggestions, saveCopyList } from './worktreeSetup.ts'
 import { normalizeNotify, noticeFor, type Notice, type NotifyPrefs } from './notify.ts'
@@ -374,19 +374,16 @@ function attend(ev: any) {
 // Uso das contas em uso, uma entrada por conta (o planeta alterna entre elas). O endpoint do Claude recusa excesso: consulta
 // a rede no maximo a cada 10 min; entre uma e outra usa o ultimo valor visto (que o chat tambem atualiza). Codex vem das
 // sessoes locais, sem rede.
-let planetFetched = 0
 async function usageForPlanet() {
   const list = inUse(db)
   const claude = list.flatMap(u => (u.provider === 'claude' && accountRow(u.accountId) ? [u.accountId] : []))
-  if (claude.length && Date.now() - planetFetched > 10 * 60_000) {
-    planetFetched = Date.now()
-    await Promise.allSettled(claude.map(id => accountUsage(id)))
-  }
+  await Promise.allSettled(claude.map(id => accountUsage(id))) // o servico so consulta de novo depois de USAGE_TTL; a resposta aparece no proximo ciclo de 30 s
   const cached = (id: number) => accountUsageService.snapshot(id)
+  const many = (db.prepare('SELECT COUNT(*) n FROM accounts').get() as any).n > 1 // com uma conta so, o nome dela nao diz nada
   return list.flatMap(u => {
     if (u.provider === 'codex') return [{ key: 'codex', ...planetUsage('Codex', codexLimits()) }]
     const name = accountRow(u.accountId)?.name
-    return name ? [{ key: `claude:${u.accountId}`, ...planetUsage(`Claude, ${name}`, cached(u.accountId)) }] : []
+    return name ? [{ key: `claude:${u.accountId}`, ...planetUsage(many ? `Claude, ${name}` : 'Claude', cached(u.accountId)) }] : []
   })
 }
 
@@ -420,7 +417,8 @@ db.prepare('DELETE FROM permission_requests WHERE id NOT IN (SELECT id FROM perm
 const nativeFor = (provider: string) => nativePolicy(provider, permissionSettings(), listRules(db, provider))
 const mcpDir = () => path.join(app.getPath('userData'), 'mcp')
 const delegationSettings = () => normalizeSettings(JSON.parse(getSetting('delegation') ?? 'null'))
-const contextLimits = () => normalizeLimits(JSON.parse(getSetting('contextLimits') ?? 'null'))
+const storedLimits = () => normalizeLimits(JSON.parse(getSetting('contextLimits') ?? 'null'))
+const contextLimits = () => effectiveLimits(storedLimits()) // Configuracoes mostra o guardado; os servicos usam o efetivo
 const summaryTitles = () => getSetting('summaryTitles') !== 'off'
 const agentAliases = () => { try { return parseAliases(JSON.parse(getSetting('agentAliases') ?? '[]')) } catch { return [] } } // agentes nomeados (Configuracoes)
 const parentTool = (p: ParentCtx): ToolCtx => ({ taskId: p.taskId, lineage: p.lineage, auth: p.auth, role: 'parent', cwd: p.cwd, scope: [], runId: p.runId })
@@ -958,7 +956,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
   setAutomations: (raw: unknown) => automations.setRules(raw),
   getHandover: () => handoverSettings(),
   setHandover: (raw: unknown) => { const n = normalizeHandover(raw); setSetting('handover', JSON.stringify(n)); return n },
-  getContextLimits: () => contextLimits(),
+  getContextLimits: () => storedLimits(),
   setContextLimits: (raw: any) => {
     const n = normalizeLimits(raw)
     setSetting('contextLimits', JSON.stringify(n))

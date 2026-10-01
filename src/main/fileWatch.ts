@@ -36,15 +36,25 @@ export function mergeChanges(status: FileChange[], numstat: ReturnType<typeof pa
   })
 }
 
-function countLines(file: string): number | null {
+// Roda no processo principal a cada leitura do painel, do pulso e dos avisos: arquivo sem mudanca (mesmo tamanho e mtime) nao e relido,
+// e a contagem usa indexOf nativo. Byte a byte, 200 arquivos novos medios travavam a janela ~250 ms por leitura.
+const lineCache = new Map<string, { size: number; mtime: number; n: number | null }>()
+export function countLines(file: string): number | null {
   try {
     const s = fs.statSync(file)
     if (!s.isFile() || s.size > 1 << 20) return null
+    const hit = lineCache.get(file)
+    if (hit && hit.size === s.size && hit.mtime === s.mtimeMs) return hit.n
     const b = fs.readFileSync(file)
-    if (b.includes(0)) return null // binario
-    let n = 0
-    for (const c of b) if (c === 10) n++
-    return n + (b.length && b[b.length - 1] !== 10 ? 1 : 0)
+    let n: number | null = null
+    if (!b.includes(0)) { // com byte 0: binario
+      n = 0
+      for (let i = b.indexOf(10); i >= 0; i = b.indexOf(10, i + 1)) n++
+      if (b.length && b[b.length - 1] !== 10) n++
+    }
+    if (lineCache.size > 5000) lineCache.clear() // limpa tudo de uma vez; trocar por LRU se varios projetos grandes alternarem
+    lineCache.set(file, { size: s.size, mtime: s.mtimeMs, n })
+    return n
   } catch { return null }
 }
 

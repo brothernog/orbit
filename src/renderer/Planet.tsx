@@ -230,7 +230,7 @@ function Orb({ a, count, at, loading, drag, moons }: { a?: Acc; count: number; a
         <Moons list={moons} layer="front" />
         {a && <g key={a.key} className="pl-label">
           {pct != null && <text className="pl-pct" x="66" y="70" textAnchor="middle">{Math.round(pct)}%</text>}
-          <text className="pl-who" x="66" y={pct != null ? 84 : 70} textAnchor="middle">{a.source.replace(/^Claude, /, '').slice(0, 12)}</text>
+          {(count > 1 || pct == null) && <text className="pl-who" x="66" y={pct != null ? 84 : 70} textAnchor="middle">{a.source.replace(/^Claude, /, '').slice(0, 12)}</text>}
         </g>}
         {count > 1 && <g className="pl-dots">
           {Array.from({ length: count }, (_, i) => <circle key={i} className={i === at ? 'on' : ''} cx={66 + (i - (count - 1) / 2) * 8} cy="124" r="2" />)}

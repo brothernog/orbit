@@ -12,7 +12,7 @@ const NOW = "strftime('%Y-%m-%d %H:%M:%f','now')"
 
 // ---- Configuracoes (Configuracoes > Permissoes)
 export type PermissionSettings = {
-  prompt: boolean // Claude: perguntar pelo pop-up (falso = comportamento antigo: o que exigiria permissao e negado)
+  prompt: boolean // Claude: perguntar pelo pop-up (falso = comportamento antigo: o que exigiria permissao e negado); sempre falso com claudeAuto
   timeoutMin: number // espera pela resposta; sem resposta = negado
   codexSandbox: 'workspace-write' | 'danger-full-access' // "sempre permitir" do Codex: sem sandbox (exige ciencia do risco)
   codexNetwork: boolean // rede dentro da sandbox workspace-write
@@ -24,7 +24,7 @@ export function normalizePermissionSettings(raw: any): PermissionSettings {
   const d = DEFAULT_PERMISSION_SETTINGS
   const t = Number(raw?.timeoutMin)
   return {
-    prompt: raw?.prompt === undefined ? d.prompt : raw.prompt === true,
+    prompt: raw?.claudeAuto === true ? false : raw?.prompt === undefined ? d.prompt : raw.prompt === true, // pop-up e automatico se excluem: um modo so para o Claude
     timeoutMin: Number.isFinite(t) ? Math.min(60, Math.max(1, Math.round(t))) : d.timeoutMin,
     codexSandbox: raw?.codexSandbox === 'danger-full-access' ? 'danger-full-access' : 'workspace-write',
     codexNetwork: raw?.codexNetwork === true, opencodeAuto: raw?.opencodeAuto === true, claudeAuto: raw?.claudeAuto === true

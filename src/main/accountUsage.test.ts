@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createAccountUsageService, type AccountUsage } from './accountUsage.ts'
+import { createAccountUsageService, USAGE_TTL, type AccountUsage } from './accountUsage.ts'
 
 const usage: AccountUsage = { fiveHour: { utilization: 48, resets_at: '2026-10-01T00:00:00Z' }, sevenDay: null }
 const deferred = () => {
@@ -56,11 +56,11 @@ test('sem cache a primeira consulta e compartilhada, sem preencher campos descon
   assert.equal(f.service.snapshot(2), null)
 })
 
-test('TTL de 60 segundos usa timestamp persistido e cada conta tem sua propria consulta', async () => {
+test('TTL usa timestamp persistido e cada conta tem sua propria consulta', async () => {
   const f = fixture()
   f.stored.set(1, { identity: 'profile-a', usage: { ...usage, seenAt: f.seenAt() } })
   await f.service.get(1)
-  f.advance(59_999); await f.service.get(1)
+  f.advance(USAGE_TTL - 1); await f.service.get(1)
   assert.equal(f.requests.length, 0)
   f.advance(1); await f.service.get(1)
   const second = f.service.get(2)

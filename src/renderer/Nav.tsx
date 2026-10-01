@@ -114,7 +114,7 @@ export function GroupDialog({ edit, count, onSave, onClose }: { edit?: Group; co
         <div className="gd-body">
           <h2>{edit ? 'Editar organizador' : 'Novo organizador'}</h2>
           <p>{edit ? 'Organização e ferramentas disponíveis para os projetos deste organizador.' : `Junta pastas de lugares diferentes num ícone; cada uma mantém as próprias conversas e terminais.${count ? ` ${count === 1 ? 'Esta pasta entra' : `As ${count} pastas entram`} nele.` : ''}`}</p>
-          <input aria-label="Nome do organizador" autoFocus maxLength={40} placeholder="Ex.: Case Opened, Trabalho, Pessoais" value={v} onChange={e => setV(e.target.value)} />
+          <input aria-label="Nome do organizador" autoFocus maxLength={40} placeholder="Ex.: Meu Jogo, Trabalho, Pessoais" value={v} onChange={e => setV(e.target.value)} />
           {!edit && <div className="gd-sugg">{SUGGESTED.map(([n, c]) => (
             <button type="button" key={n} className={v === n ? 'on' : ''} style={{ '--g': c } as CSSProperties} onClick={() => { setV(n); setColor(c) }}>{n}</button>
           ))}</div>}

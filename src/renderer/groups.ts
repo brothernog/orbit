@@ -25,7 +25,7 @@ export const newGroup = (groups: Group[], name: string, color: string, games: st
   return games.reduce((acc, p) => moveTo(acc, p, g.id), [...groups, g])
 }
 
-// Sigla do workspace no trilho: iniciais de ate duas palavras ("Case Opened" -> CO), ou as duas primeiras letras.
+// Sigla do workspace no trilho: iniciais de ate duas palavras ("Meu Jogo" -> MJ), ou as duas primeiras letras.
 export const initials = (n: string) => {
   const w = n.trim().split(/[\s_-]+/).filter(Boolean)
   return (w.length > 1 ? w[0][0] + w[1][0] : (w[0] ?? '?').slice(0, 2)).toUpperCase()

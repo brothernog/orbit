@@ -29,6 +29,11 @@ function AccountRow({ a, reload }: { a: Account; reload: () => void }) {
   const usageRead = useCachedRead<QuotaSnapshot | null>(connecting ? null : `accountUsage:${a.id}`, () => api.accountUsage(a.id), 30_000)
   const statusRead = useCachedRead<Auth>(connecting ? null : `accountStatus:${a.id}`, () => api.accountStatus(a.id), 60_000)
   const usage = usageRead.data, status = statusRead.data
+  useEffect(() => { // a cada 30 s: o processo principal consulta de novo e o evento accountUsage atualiza a barra
+    if (connecting) return
+    const t = setInterval(() => { usageRead.reload().catch(() => {}) }, 30_000)
+    return () => clearInterval(t)
+  }, [connecting, usageRead.reload])
   const state = connecting ? 'connecting' : a.login?.state === 'error' ? 'error' : status?.state ?? 'unknown'
   const run = (f: () => Promise<any>) => {
     invalidateRead(`accountStatus:${a.id}`); invalidateRead(`accountUsage:${a.id}`)
@@ -185,16 +190,26 @@ const LEVELS = [
     v: { packageChars: 12000, packageItems: 16, itemChars: 4000, conclusionChars: 6000, queryChars: 12000, queryResults: 20, maxToolsPerMessage: 400 } },
 ]
 const levelOf = (l: Record<string, number>) => LEVELS.findIndex(x => Object.entries(x.v).every(([k, v]) => l[k] === v))
+// Desligado por padrao: sem pausa por ferramentas e contexto no teto (effectiveLimits em src/main/limits.ts); o nivel guardado volta ao religar.
 function Limits() {
-  const read = useCachedRead<Record<string, number>>('getContextLimits', () => api.getContextLimits())
+  const read = useCachedRead<Record<string, number> & { enabled: boolean }>('getContextLimits', () => api.getContextLimits())
   const l = read.data
   const [writeErr, setErr] = useState('')
   const err = writeErr || (read.error ? errText(read.error) : '')
   if (!l) return <small>{err || 'Carregando…'}</small>
-  const put = (patch: Record<string, number>) => api.setContextLimits({ ...l, ...patch }).then(read.set, e => setErr(errText(e)))
+  const put = (patch: Record<string, number | boolean>) => api.setContextLimits({ ...l, ...patch }).then(read.set, e => setErr(errText(e)))
   const lv = levelOf(l)
+  const toggle = <label className="switch"><input type="checkbox" role="switch" checked={l.enabled} onChange={e => put({ enabled: e.target.checked })} /><span>Limitar o gasto dos agentes</span></label>
+  if (!l.enabled) return (
+    <div className="limits">
+      {toggle}
+      <small>Desligado: sem pausa por número de ferramentas e contexto entre agentes no tamanho máximo.</small>
+      {err && <small className="err" role="alert">{err}</small>}
+    </div>
+  )
   return (
     <div className="limits">
+      {toggle}
       <div className={lv < 0 ? 'lvl custom' : 'lvl'}>
         <input type="range" min={0} max={2} step={1} value={lv < 0 ? 1 : lv} aria-label="Nível de contexto" aria-valuetext={lv < 0 ? 'Personalizado' : LEVELS[lv].name}
           onChange={e => put(LEVELS[+e.target.value].v)} />

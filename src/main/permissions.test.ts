@@ -178,6 +178,7 @@ test('formato de resposta para o Claude, configuracoes e ferramenta MCP com --pe
   assert.equal(answerText({ behavior: 'deny', message: 'nao' }), '{"behavior":"deny","message":"nao"}')
   assert.deepEqual(normalizePermissionSettings(null), DEFAULT_PERMISSION_SETTINGS)
   assert.deepEqual(normalizePermissionSettings({ prompt: 'sim', timeoutMin: 999, codexSandbox: 'x', codexNetwork: 1, opencodeAuto: true }), { prompt: false, timeoutMin: 60, codexSandbox: 'workspace-write', codexNetwork: false, opencodeAuto: true, claudeAuto: false })
+  assert.equal(normalizePermissionSettings({ prompt: true, claudeAuto: true }).prompt, false) // um modo so: automatico desliga o pop-up
   assert.equal(normalizePermissionSettings({ codexSandbox: 'danger-full-access' }).codexSandbox, 'danger-full-access')
   const o = { url: 'http://127.0.0.1:1/mcp', token: 'abcdef0123456789abcdef', timeoutSec: 900, dir: path.join(tmp, 'mcp'), tools: ['read_task_context'] }
   const on = mcpWire('claude', { ...o, permission: true })!
