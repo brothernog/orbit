@@ -1,11 +1,42 @@
-.workflow { flex-shrink: 0; margin: 0 20px; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
-.workflow > summary { cursor: pointer; padding: 10px 0; color: var(--muted); }
-.workflow > summary span { margin-left: 8px; font-variant-numeric: tabular-nums; }
-.workflow-body { max-height: min(260px, 30vh); overflow-y: auto; padding-bottom: 12px; }
+/* Faixa de ferramentas da tarefa (etapas, comandos, engine): uma linha de chips acima do compositor.
+   Cada <details> ocupa a largura toda (subgrid) e sobrepoe os outros; so o chip (summary) e o painel recebem clique.
+   O chip fica sempre na sua coluna; o painel aberto ocupa a segunda linha, embaixo da faixa. Um aberto por vez (name=task-tools). */
+.task-tools { display: grid; grid-template-columns: repeat(5, max-content) minmax(0, 1fr); column-gap: 6px; margin: 0 0 8px; }
+.task-tools:empty { display: none; }
+.task-tools > details { grid-row: 1; grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; pointer-events: none; }
+.task-tools > details > summary { grid-row: 1; pointer-events: auto; }
+.task-tools > details:nth-child(1) > summary { grid-column: 1; }
+.task-tools > details:nth-child(2) > summary { grid-column: 2; }
+.task-tools > details:nth-child(3) > summary { grid-column: 3; }
+.task-tools > details:nth-child(4) > summary { grid-column: 4; }
+.task-tools > details:nth-child(5) > summary { grid-column: 5; }
+.task-tools > details::details-content { grid-row: 2; grid-column: 1 / -1; min-width: 0; pointer-events: auto; }
+.workflow { flex-shrink: 0; min-width: 0; font-size: 12.5px; }
+.workflow > summary {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; cursor: pointer; list-style: none;
+  border: 1px solid var(--line-soft); border-radius: 14px; background: var(--surface); color: var(--muted); white-space: nowrap;
+  transition: background-color var(--dur-1), color var(--dur-1), border-color var(--dur-1);
+}
+.workflow > summary::-webkit-details-marker { display: none; }
+.workflow > summary:hover { color: var(--text); border-color: var(--line); }
+.workflow > summary span { color: var(--faint); font-variant-numeric: tabular-nums; }
+.workflow > summary .att { margin-left: -4px; }
+.task-tools > .workflow[open] > summary, .workflow[open] > summary { color: var(--text); background: var(--raised); border-color: var(--line); }
+.workflow-body {
+  max-height: min(300px, 34vh); overflow-y: auto; margin-top: 6px; padding: 12px;
+  background: var(--side-bg); border: 1px solid var(--line-soft); border-radius: var(--r);
+}
+.workflow-body > :first-child { margin-top: 0; }
 .workflow ol { padding: 0; list-style: none; margin: 0; display: grid; gap: 8px; }
 .workflow li { padding: 10px 12px; background: var(--surface); border-radius: var(--r-sm); }
 .workflow li > div { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
-.workflow li summary { cursor: pointer; margin: 6px 0; color: var(--muted); }
+/* Etapa: titulo e estado a esquerda, a acao (preparar/aceitar) a direita, na mesma altura */
+.workflow ol > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: center; padding: 8px 12px; }
+.workflow ol > li > :not(div, details) { grid-column: 2; grid-row: 1 / span 2; margin: 0; }
+.workflow ol > li > .err { grid-column: 1 / -1; grid-row: auto; }
+.workflow ol > li > div { justify-content: flex-start; }
+.workflow ol > li > div span { font-size: 12px; }
+.workflow li summary { cursor: pointer; margin: 2px 0 0; color: var(--faint); width: max-content; }
 .step-state { color: var(--muted); } .step-state.accepted { color: var(--ok); } .step-state.failed { color: var(--hot); } .step-state.review { color: var(--limit); }
 .step-instruction { white-space: pre-wrap; overflow-wrap: anywhere; }
 .step-actions { display: flex; gap: 8px; margin-top: 8px; }

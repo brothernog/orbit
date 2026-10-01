@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api, errText } from './api'
+import { Icon } from './icons'
 import { useCachedRead } from './useCachedRead'
 import './backup.css'
 
@@ -52,23 +53,27 @@ export function BackupSettings() {
   return <div className="backup-settings" aria-busy={!!busy}>
     <section>
       <h2>Backup dos dados</h2>
-      <p className="backup-lede">Guarde o banco, os anexos das conversas, os snapshots de assets e builds, as screenshots dos playtests e o perfil, rascunhos e vídeos do LinkedIn em uma pasta local.</p>
-      <p className="backup-exclusions">Credenciais das CLIs e do LinkedIn ficam fora do backup. Arquivos dos jogos e worktrees precisam de uma cópia própria.</p>
+      <p className="set-sub">Copia os dados do app para uma pasta local.</p>
+      <details className="backup-what">
+        <summary>O que entra no backup</summary>
+        <p>O banco, os anexos das conversas, os snapshots de assets e builds, as screenshots dos playtests e o perfil, rascunhos e vídeos do LinkedIn.</p>
+        <p className="backup-exclusions">Ficam fora: credenciais das CLIs e do LinkedIn. Arquivos dos jogos e worktrees precisam de uma cópia própria.</p>
+      </details>
       {info && <p className="backup-current"><span>Dados nesta instalação</span><span className="backup-path">{info.dataDir}</span></p>}
       <div className="backup-actions"><button type="button" className="primary" disabled={!!busy} onClick={create}>Criar backup…</button></div>
-      {created && <div className="backup-result"><p className="backup-success" role="status">Backup criado.</p><BackupSummary value={created} /></div>}
+      {created && <div className="backup-result"><p className="backup-success" role="status"><Icon n="check" size={15} />Backup criado.</p><BackupSummary value={created} /></div>}
     </section>
-    <section>
+    <section className="backup-restore">
       <h2>Restaurar um backup</h2>
-      <p className="backup-lede">Selecione a pasta do backup para verificar o conteúdo antes de restaurar.</p>
+      <p className="set-sub">Substitui os dados atuais. Você confere o conteúdo antes.</p>
       <div className="backup-actions"><button type="button" disabled={!!busy} onClick={select}>Selecionar backup…</button></div>
       {selected && <div className="backup-result">
         <h3>Backup selecionado</h3>
         <BackupSummary value={selected} />
-        <p className="backup-warning">A restauração substitui os dados atuais do aplicativo e reinicia a Órbita. Uma cópia de segurança dos dados atuais será guardada antes da troca. As conversas começarão sessões de IA novas. Depois, reconecte o LinkedIn.</p>
-        <div className="backup-actions"><button type="button" className="backup-restore-btn" disabled={!!busy} onClick={restore}>Restaurar e reiniciar</button></div>
+        <p className="backup-warning"><Icon n="alert" size={15} /><span>A restauração substitui os dados atuais do aplicativo e reinicia a Órbita. Uma cópia de segurança dos dados atuais será guardada antes da troca. As conversas começarão sessões de IA novas. Depois, reconecte o LinkedIn.</span></p>
+        <div className="backup-actions"><button type="button" className="primary danger backup-restore-btn" disabled={!!busy} onClick={restore}>Restaurar e reiniciar</button></div>
       </div>}
-      {info?.lastRestore && <div className="backup-result">
+      {info?.lastRestore && <div className="backup-result backup-last">
         <p>Última restauração: {new Date(info.lastRestore.restoredAt).toLocaleString('pt-BR')}</p>
         <small>Cópia de segurança anterior</small>
         <p className="backup-path">{info.lastRestore.safetyPath}</p>

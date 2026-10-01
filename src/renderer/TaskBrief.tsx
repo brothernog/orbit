@@ -2,7 +2,7 @@
 // O resumo vem do que ja esta gravado (taskBriefs no processo principal): nenhuma chamada a modelo.
 import { useEffect, useRef, useState } from 'react'
 import { api, name, onChat, type Active, type Task } from './api'
-import { Avatar, Icon, PROVIDER } from './icons'
+import { Icon, PROVIDER } from './icons'
 import './taskcol.css'
 
 export type Brief = { id: number; last: 'completed' | 'failed' | 'cancelled' | null; awaiting: boolean; permission: string | null; goal: string | null; result: string | null; next: string | null }
@@ -75,10 +75,10 @@ export function AlsoRunning({ active, game, onOpen }: { active: Active[]; game: 
     <div className="also-running">
       <div className="chats-group">Também rodando</div>
       {others.map(a => (
-        <button key={`${a.kind}${a.id}`} className="task also" onClick={() => onOpen(a)} title={`${name(a.game)}: ${a.title}`}>
-          <Avatar provider={a.provider} live size="sm" />
-          <span className="task-text"><span className="task-title">{name(a.game)} · {a.title}</span>
-            <span className="task-sub">{PROVIDER[a.provider]?.label ?? a.provider} · {since(Date.now() - a.startedAt)}</span></span>
+        <button key={`${a.kind}${a.id}`} className="task also a-working" onClick={() => onOpen(a)} title={`${name(a.game)}: ${a.title}`}>
+          <span className="att" data-att="working" aria-hidden="true" />
+          <span className="task-text"><span className="task-line"><span className="task-title">{a.title}</span><span className="task-when">{since(Date.now() - a.startedAt)}</span></span>
+            <span className="task-sub working">{name(a.game)} · {PROVIDER[a.provider]?.label ?? a.provider}</span></span>
         </button>
       ))}
     </div>

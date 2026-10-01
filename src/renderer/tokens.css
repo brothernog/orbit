@@ -1,0 +1,72 @@
+/* Fundacao do redesenho: movimento, espacos, primitivos compartilhados e o ponto de atencao.
+   A paleta continua em styles.css (:root) e nao muda. Todas as telas usam estes tokens em vez de numeros soltos. */
+:root {
+  /* Movimento: rapido e com saida suave. Nada de ease-in em entrada; teclado nao anima navegacao. */
+  --dur-1: 100ms;  /* hover, pressionar, cor */
+  --dur-2: 160ms;  /* popovers, menus, dicas, linhas entrando */
+  --dur-3: 240ms;  /* paineis laterais, gaveta, cartoes */
+  --dur-4: 320ms;  /* troca de tela (view transition) */
+  --ease-out: cubic-bezier(.23, 1, .32, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  /* mola leve (um pequeno passo alem e volta) para elementos que "pousam": indicador ativo, badges */
+  --ease-spring: linear(0, .22 8%, .6 18%, .9 30%, 1.04 42%, 1.06 50%, 1.02 64%, .995 80%, 1);
+  /* Espacos em passos de 4 */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px;
+  /* Cores de estado (derivadas da paleta existente) */
+  --st-wait: var(--limit); --st-error: var(--hot); --st-unseen: var(--accent); --st-working: var(--accent); --st-done: var(--ok);
+  interpolate-size: allow-keywords; /* details/alturas "auto" animam */
+}
+
+/* Ponto de atencao: um slot fixo de 16px, mesma forma em toda tela. data-att = wait|error|unseen|working|idle|done */
+.att { flex: none; position: relative; display: inline-grid; place-items: center; width: 16px; height: 16px; }
+.att::before { content: ''; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--faint); transition: background-color var(--dur-2), border-color var(--dur-2), transform var(--dur-2) var(--ease-spring); }
+.att[data-att=idle]::before { border-color: var(--faint); }
+.att[data-att=done]::before { border-color: var(--st-done); background: var(--st-done); transform: scale(.85); }
+.att[data-att=unseen]::before { border-color: var(--st-unseen); background: var(--st-unseen); box-shadow: 0 0 8px -1px var(--st-unseen); }
+.att[data-att=wait]::before { border-color: var(--st-wait); background: var(--st-wait); box-shadow: 0 0 10px -1px var(--st-wait); }
+.att[data-att=error]::before { border-radius: 2px; transform: rotate(45deg); border-color: var(--st-error); background: var(--st-error); }
+.att[data-att=working]::before { border-color: color-mix(in srgb, var(--st-working) 35%, transparent); }
+.att[data-att=working]::after { /* o motivo da Orbita: um arco girando em volta do ponto */
+  content: ''; position: absolute; inset: 1px; border-radius: 50%;
+  border: 1.5px solid transparent; border-top-color: var(--st-working); border-right-color: var(--st-working);
+  animation: orbit 1.1s linear infinite;
+}
+.att[data-att=wait]::after { content: ''; position: absolute; inset: 2px; border-radius: 50%; border: 1px solid var(--st-wait); animation: att-ping 2s var(--ease-out) infinite; }
+@keyframes att-ping { from { transform: scale(.6); opacity: .9; } 70%, to { transform: scale(1.5); opacity: 0; } }
+
+/* Contador de "precisa de voce": so numero quando pede acao. */
+.att-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--st-wait); color: #1a1204; font: 700 11px/1 'Segoe UI', sans-serif; font-variant-numeric: tabular-nums; animation: pop-in var(--dur-2) var(--ease-spring); }
+
+/* Entradas reutilizaveis */
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes drop-in { from { opacity: 0; transform: translateY(-6px); } }
+@keyframes pop-in { from { opacity: 0; transform: scale(.94); } }
+@keyframes slide-in-left { from { opacity: 0; transform: translateX(-14px); } }
+@keyframes slide-in-right { from { opacity: 0; transform: translateX(18px); } }
+@keyframes shimmer { from { background-position: -200% 0; } to { background-position: 200% 0; } }
+.enter-rise { animation: rise-in var(--dur-3) var(--ease-out) both; }
+.enter-pop { animation: pop-in var(--dur-2) var(--ease-out) both; }
+/* Lista escalonada: defina --i no item (0,1,2...) */
+.stagger > * { animation: rise-in var(--dur-3) var(--ease-out) both; animation-delay: calc(min(var(--i, 0), 8) * 28ms); }
+/* Esqueleto de carregamento no lugar de spinners em listas */
+.skel { border-radius: var(--r-sm); background: linear-gradient(90deg, var(--surface) 25%, var(--raised) 50%, var(--surface) 75%) 0 0 / 200% 100%; animation: shimmer 1.4s linear infinite; }
+
+/* <details> com abertura animada (Chromium 131+) */
+details::details-content { block-size: 0; overflow: clip; transition: block-size var(--dur-3) var(--ease-out), content-visibility var(--dur-3) allow-discrete; }
+details[open]::details-content { block-size: auto; }
+
+/* Troca de tela (App.transition): o centro cruza em fade + leve subida */
+::view-transition-old(root) { animation: fade-out var(--dur-2) var(--ease-out) both; }
+::view-transition-new(root) { animation: rise-in var(--dur-4) var(--ease-out) both; }
+@keyframes fade-out { to { opacity: 0; } }
+
+/* Retrato de pressionar: botoes respondem ao clique (nao ao teclado) */
+button:active:not(:disabled) { transform: scale(.97); }
+button { transition: border-color var(--dur-1), background-color var(--dur-1), color var(--dur-1), transform var(--dur-1) var(--ease-out), box-shadow var(--dur-2); }
+
+/* Movimento reduzido: so opacidade. (styles.css ja zera animacoes com !important; aqui garantimos o details sem salto estranho) */
+@media (prefers-reduced-motion: reduce) {
+  details::details-content { transition: none; }
+  button:active:not(:disabled) { transform: none; }
+}

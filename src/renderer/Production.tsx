@@ -279,7 +279,7 @@ export function Production({ game, onOpenTask, onErr }: { game: string; onOpenTa
   const openTask = (id: number) => { try { onOpenTask(id) } catch (e) { onErr(errText(e)) } }
   const tools = { game, busy, action, preview: setImages }
   return <section className="production" aria-label="Produção do jogo" aria-busy={busy}>
-    <header className="production-head"><div><span className="production-eyebrow">Do arquivo ao playtest</span><h2>Produção</h2></div><span className="production-meta">{busy ? 'Salvando…' : 'Revisão e registro locais'}</span></header>
+    <header className="production-head"><div><h2>Produção</h2></div><span className="production-meta">{busy ? 'Salvando…' : 'Revisão e registro locais'}</span></header>
     <nav className="production-nav" aria-label="Área de produção">{(['assets', 'playtests', 'builds'] as const).map(value => <button key={value} aria-pressed={tab === value} onClick={() => setTab(value)}>{value === 'assets' ? 'Assets' : value === 'playtests' ? 'Playtests' : 'Builds'}{records && <span>{records[value].length}</span>}</button>)}</nav>
     {error && <p className="err production-error" role="alert">{error}<button disabled={busy} onClick={() => action(load)}>Tentar novamente</button></p>}
     {!records ? <p className="production-empty" role="status">Carregando produção…</p> : <><div hidden={tab !== 'assets'}><Assets {...tools} assets={records.assets} /></div><div hidden={tab !== 'playtests'}><Playtests {...tools} playtests={records.playtests} builds={records.builds} onOpenTask={openTask} /></div><div hidden={tab !== 'builds'}><Builds {...tools} builds={records.builds} commands={records.commands} onOpenTask={openTask} /></div></>}

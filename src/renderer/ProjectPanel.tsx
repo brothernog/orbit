@@ -59,16 +59,19 @@ export function ProjectPanel({ game, accounts, onOpenTask, onClose }: { game: st
   const total = done + (roadmap?.text.match(/^\s*[-*] \[ \]/gm)?.length ?? 0)
   const list = (s: string) => pins.filter(p => p.status === s)
   const pinList = (l: Pin[]) => <ul>{l.map(p => <PinItem key={p.id} pin={p} accounts={accounts} reload={load} onOpenTask={onOpenTask} fail={setErr} />)}</ul>
-  const tabs: [Tab, string][] = [['roadmap', 'Roadmap'], ['problemas', `Problemas (${list('aberto').length + list('andamento').length})`], ['docs', `Documentos (${docs.length})`]]
+  // Contagem vira um selo discreto e so aparece quando ha algo (sem "(0)")
+  const tabs: [Tab, string, number][] = [['roadmap', 'Roadmap', 0], ['problemas', 'Problemas', list('aberto').length + list('andamento').length], ['docs', 'Documentos', docs.length]]
 
   return (
     <aside className="panel" aria-label="Painel do projeto">
       <header>
-        <div role="tablist" aria-label="Visões do projeto">
-          {tabs.map(([id, text]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => { setTab(id); setOpen(null) }}>{text}</button>)}
-        </div>
-        <button className="icon" aria-label="Recolher painel" title="Recolher painel" onClick={onClose}><Icon n="close" /></button>
+        <h2 className="panel-title" title={game}>{name(game)}</h2>
+        <button className="icon" aria-label="Recolher painel" title="Recolher painel" onClick={onClose}><Icon n="close" size={16} /></button>
       </header>
+      {/* Abas numa linha propria: o topo da coluna divide espaco com os botoes da janela */}
+      <div role="tablist" className="panel-tabs" aria-label="Visões do projeto">
+        {tabs.map(([id, text, n]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => { setTab(id); setOpen(null) }}>{text}{n > 0 && <span className="tab-n">{n}</span>}</button>)}
+      </div>
       <div className="body">
         {err && <small className="err" role="alert">{err}</small>}
         {tab === 'roadmap' && (roadmap

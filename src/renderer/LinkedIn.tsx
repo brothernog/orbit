@@ -68,7 +68,7 @@ function Connect({ auth, onAuth, onErr }: { auth: Auth; onAuth: (a: Auth) => voi
         <li><button type="button" className="link" onClick={() => api.openUrl('https://www.linkedin.com/developers/apps/new')}>Crie um app</button> no portal de desenvolvedor (pede uma página de empresa; pode ser uma sua, simples).</li>
         <li>Em Products, ative <b>Share on LinkedIn</b> e <b>Sign In with LinkedIn using OpenID Connect</b>. A liberação é imediata.</li>
         <li>Em Auth, adicione este endereço de retorno:
-          <span className="li-redirect"><code>{auth.redirect}</code><button type="button" className="icon sm" aria-label="Copiar endereço" onClick={() => navigator.clipboard.writeText(auth.redirect)}><Icon n="files" size={13} /></button></span></li>
+          <span className="li-redirect"><code>{auth.redirect}</code><button type="button" className="icon sm" aria-label="Copiar endereço" title="Copiar endereço" onClick={() => navigator.clipboard.writeText(auth.redirect)}><Icon n="files" size={13} /></button></span></li>
         <li>Cole o Client ID e o Client Secret do app:</li>
       </ol>
       <input aria-label="Client ID" placeholder="Client ID" value={id} onChange={e => setId(e.target.value)} autoComplete="off" />
