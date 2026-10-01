@@ -16,5 +16,11 @@ export function imageRefs(text: string, marksOnly = false): string[] {
   return [...new Set(out)].slice(0, 12)
 }
 
-// Texto do usuario sem as linhas de marcador (a miniatura as substitui).
-export const stripMarks = (text: string) => text.replace(MARK, '').replace(/\n+$/, '').trim()
+// Arquivos que o agente enviou (send_user_file): marcador na nota de sistema. O processo principal valida o caminho.
+const FILE = /\[arquivo enviado: ([^\]\r\n]+)\]/g
+export const fileRefs = (text: string) => [...new Set([...text.matchAll(FILE)].map(m => m[1].trim()))]
+// Legenda do agente na nota (sharedFiles.ts escreve "↳ Arquivo enviado pelo agente: <legenda>"); sem legenda, vazio.
+export const sentCaption = (plain: string) => plain.replace(/^↳ Arquivo enviado pelo agente:?\s*/, '').trim()
+
+// Texto sem as linhas de marcador (a miniatura e o cartao do arquivo as substituem).
+export const stripMarks = (text: string) => text.replace(MARK, '').replace(FILE, '').replace(/\n+$/, '').trim()

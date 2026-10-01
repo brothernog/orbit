@@ -10,7 +10,9 @@ html.planet-root #root { height: 100vh; }
 
 /* Abrir: um disco da cor do planeta, do mesmo tamanho dele, cresce ate o formato do cartao e a cor se dissolve revelando o aviso.
    Fechar: o inverso, e o planeta reaparece no lugar do disco. CLOSE em Planet.tsx acompanha a duracao do fechar. */
-.corner .nw { position: absolute; right: 0; bottom: 0; width: 100%; box-sizing: border-box;
+/* Largura fixa = NOTICE_W (index.ts): o cartao e medido com a janela ainda do tamanho do planeta; com 100% ele quebrava o texto
+   palavra por palavra e a janela crescia com essa altura. */
+.corner .nw { position: absolute; right: 0; bottom: 0; width: 420px; box-sizing: border-box;
   clip-path: circle(44px at var(--ox) var(--oy)); opacity: 0;
   transition: clip-path .38s cubic-bezier(.65, 0, .35, 1) .1s, opacity .12s ease .4s; }
 .corner.left .nw { right: auto; left: 0; }

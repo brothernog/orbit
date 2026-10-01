@@ -2,12 +2,15 @@
 import type { DatabaseSync } from 'node:sqlite'
 export type StepState = 'pending' | 'starting' | 'awaiting_context' | 'running' | 'review' | 'accepted' | 'failed' | 'cancelled'
 export type Step = { id: number; task_id: number; position: number; title: string; instruction: string; state: StepState; run_id: number | null; send_id: number | null; error: string | null }
+// Lista da interface: agente que executou (ou executa) a etapa e quantos filhos ele chamou nessa execucao.
+export type StepRow = Step & { provider: string | null; model: string | null; children: number }
 const ACTIVE = ['starting', 'awaiting_context', 'running']
 export const getStep = (db: DatabaseSync, id: number) => db.prepare('SELECT * FROM task_steps WHERE id=?').get(id) as Step | undefined
 export const activeStep = (db: DatabaseSync, taskId: number) => db.prepare("SELECT * FROM task_steps WHERE task_id=? AND state IN ('starting','awaiting_context','running')").get(taskId) as Step | undefined
-export function listSteps(db: DatabaseSync, taskId: number): Step[] {
+export function listSteps(db: DatabaseSync, taskId: number): StepRow[] {
   reconcileSteps(db)
-  return db.prepare('SELECT * FROM task_steps WHERE task_id=? ORDER BY position').all(taskId) as Step[]
+  return db.prepare(`SELECT s.*, r.provider, r.model, (SELECT COUNT(*) FROM delegations d WHERE d.task_id=s.task_id AND d.parent_run_id=s.run_id) children
+    FROM task_steps s LEFT JOIN runs r ON r.id=s.run_id WHERE s.task_id=? ORDER BY s.position`).all(taskId) as StepRow[]
 }
 export function addStep(db: DatabaseSync, taskId: number, title: unknown, instruction: unknown) {
   if (typeof title !== 'string' || !title.trim() || title.length > 200 || typeof instruction !== 'string' || !instruction.trim() || instruction.length > 20000) throw Error('Preencha o título e a ordem da etapa (até 20.000 caracteres).')

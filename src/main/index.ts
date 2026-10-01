@@ -1,5 +1,6 @@
 import { createCommandService, listCommandRuns, projectCommands, reconcileCommands, saveCommands } from './commands.ts'
 import { createCheckpoint as takeCheckpoint, listCheckpoints, previewRewind, rewindCheckpoint } from './checkpoints.ts'
+import { taskAgents, type Doing } from './agentsLive.ts'
 import { addStep, activeStep, beginStep, bindStep, failStep, listSteps, reconcileSteps, reviewStep } from './workflows.ts'
 import { todoBoard, saveTodo, todoTask } from './planning.ts'
 import { createChatService } from './chatService.ts'
@@ -57,6 +58,7 @@ import { answerText, listRules, nativePolicy, normalizePermissionSettings, PERMI
 import { runChat } from './runner.ts'
 import { callTaskTool, childToolset, toolsFor, type ToolCtx } from './taskContext.ts'
 import { ASK_TOOL_NAME, QuestionBroker } from './questions.ts'
+import { canOpen, SEND_FILE_TOOL_NAME, sendUserFile, sharedInfo, sharedPath } from './sharedFiles.ts'
 import { dismissSuggestion, listSuggestions, startSuggestion, suggestTask, SUGGEST_TOOL_NAME } from './suggestions.ts'
 import { delegationReport, taskUsage } from './usage.ts'
 import { finishRun, reconcileRuns } from './runs.ts'
@@ -166,6 +168,7 @@ async function createWorktree(game: string, prefix: 'pin' | 'task', id: number, 
 const { accountRow, dirKey, accountEnv, listAccounts, fetchUsage } = createAccounts(db)
 const diagLog = path.join(app.getPath('userData'), 'diagnostics.log')
 const attachRoot = path.join(app.getPath('userData'), 'attachments') // imagens coladas no chat, por tarefa (fora do projeto)
+const sentDir = (taskId: number) => path.join(attachRoot, String(taskId), 'enviados') // copias de send_user_file
 const logFor = (provider: string, profile?: string) => (e: Partial<LogEntry>) => logEvent(diagLog, { provider, profile, ...e })
 
 // Provedores: instalacao, versao, capacidades e login. Consultas gratuitas, sem inferencia.
@@ -268,6 +271,7 @@ async function launchTask(taskId: number, sel: Sel, resume: boolean, isolate: bo
 
 // ---- Chat: cada mensagem roda a CLI em modo headless e retoma EXATAMENTE a sessao gravada para
 // (tarefa, provedor, perfil). O historico e da tarefa; trocar de provedor nao o esconde.
+const childDoing = new Map<number, Doing>() // ferramenta atual de cada filho (delegacao) rodando: dock e chat
 const active = new Map<number, { runId: number; cancel: (sync?: boolean) => void; text: string; workspace: string; provider?: string; model?: string; startedAt?: number; doing?: { tool: string; detail?: string } }>()
 let win: BrowserWindow | undefined
 app.on('second-instance', () => { if (!win || win.isDestroyed()) return; if (win.isMinimized()) win.restore(); win.focus() })
@@ -299,7 +303,7 @@ const { runStart, noticeInfo } = createNoticeInfo(db, projectNames, id => questi
 let noticeWin: BrowserWindow | undefined
 let noticeSeq = 0
 const pendingNotices: Notice[] = [] // o que a janela do planeta esta mostrando
-const NOTICE_W = 420, PLANET = 132
+const NOTICE_W = 420, PLANET = 132 // NOTICE_W = largura de .corner .nw em planet.css
 const toPopup = (ev: object) => { if (noticeWin && !noticeWin.isDestroyed()) noticeWin.webContents.send('chat', ev) }
 const planetOn = () => getSetting('planet') !== 'off'
 // Posicao do planeta (canto superior esquerdo do quadrado de 132 px). Salva fora de qualquer tela (monitor removido) volta ao canto.
@@ -439,9 +443,11 @@ const delegationDeps: Deps = {
   catalogCheck: async (provider, model, effort) => validateSelection(await getCatalog(provider, envFor({ provider }), false), model, effort),
   envFor: (provider, accountId) => envFor({ provider, accountId }),
   otherTasksActiveIn: (ws, taskId) => commands.busy(ws) || [...active].some(([id, r]) => id !== taskId && sameDir(r.workspace, ws)),
-  runChild: ({ provider, opts, cwd, env, input, session }) => {
+  runChild: ({ provider, opts, cwd, env, input, session, delegationId }) => {
     const a = AGENTS[provider]
-    return runChat({ cmd: a.cmd, args: a.chatArgs(session, opts), cwd, env, parse: a.parse, input })
+    const run = runChat({ cmd: a.cmd, args: a.chatArgs(session, opts), cwd, env, parse: a.parse, input, onTool: (tool, detail) => childDoing.set(delegationId, { tool: tool.slice(0, 80), detail }) })
+    run.result.finally(() => childDoing.delete(delegationId)).catch(() => {})
+    return run
   },
   // Filhos recebem so as ferramentas de contexto/area de trabalho do papel (nunca delegar). Gemini nao le MCP por execucao: sem consulta incremental.
   childTools: async p => {
@@ -479,6 +485,11 @@ const getMcp = () => (mcpServer ??= startMcpServer<McpCtx>({
     if (c.kind === 'parent' && name === SUGGEST_TOOL_NAME) {
       const r = suggestTask(db, { taskId: c.p.taskId, runId: c.p.runId, provider: c.p.provider }, args)
       if (!r.isError) emit({ taskId: c.p.taskId, suggestion: true })
+      return r
+    }
+    if (c.kind === 'parent' && name === SEND_FILE_TOOL_NAME) {
+      const { note: text, ...r } = sendUserFile(c.p.cwd, sentDir(c.p.taskId), args)
+      if (text) note(c.p.taskId, text)
       return r
     }
     if (c.kind === 'child' && !c.tools.some(t => t.name === name)) return { text: 'Ferramenta nao anunciada para esta execucao.', isError: true }
@@ -808,9 +819,19 @@ const handlers: Record<string, (...a: any[]) => any> = {
     const get = db.prepare('SELECT id, game, title FROM tasks WHERE id=?')
     const runs = [...active].map(([id, r]) => ({ kind: 'chat', ...(get.get(id) as any), taskId: id, provider: r.provider, model: r.model ?? null, startedAt: r.startedAt, doing: r.doing }))
     const dels = (db.prepare("SELECT d.id, d.task_id taskId, d.provider, d.model, d.objective, d.started_at, t.game, t.title FROM delegations d JOIN tasks t ON t.id=d.task_id WHERE d.status='running'").all() as any[])
-      .map(d => ({ kind: 'delegation', id: d.id, taskId: d.taskId, game: d.game, title: d.objective || d.title, provider: d.provider, model: d.model, startedAt: Date.parse(d.started_at.replace(' ', 'T') + 'Z') }))
+      .map(d => ({ kind: 'delegation', id: d.id, taskId: d.taskId, game: d.game, title: d.objective || d.title, provider: d.provider, model: d.model, startedAt: Date.parse(d.started_at.replace(' ', 'T') + 'Z'), doing: childDoing.get(d.id) }))
     return [...runs, ...dels]
   },
+  // Arquivos enviados pelo agente (send_user_file): so copias dentro da pasta de envios da tarefa. Abrir so tipos que nao executam.
+  sharedFile: (taskId: number, p: string) => sharedInfo(asStr(p, 'caminho', 2000), sentDir(asTask(taskId).id)),
+  openSharedFile: async (taskId: number, p: string, reveal: unknown) => {
+    const real = sharedPath(asStr(p, 'caminho', 2000), sentDir(asTask(taskId).id)) ?? fail('Arquivo enviado nao encontrado.')
+    if (reveal === true) return shell.showItemInFolder(real)
+    if (!canOpen(real)) fail('Este tipo de arquivo so pode ser mostrado na pasta.')
+    const e = await shell.openPath(real); if (e) fail(e)
+  },
+  // Pai em curso e filhos chamados nesta execucao (painel do chat).
+  taskAgents: (id: number) => { const t = asTask(id), r = active.get(t.id); return taskAgents(db, t.id, r, childDoing) },
   createTask: (game: string, title?: string) => createTask(db, asGame(game), title == null ? undefined : asStr(title, 'titulo', 200)),
   taskForPin: (pinId: number) => taskForPin(db, asPin(pinId)),
   renameTask: (id: number, title: string) => renameTask(db, asTask(id).id, asStr(title, 'titulo', 200)),

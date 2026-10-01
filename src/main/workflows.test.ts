@@ -16,6 +16,9 @@ test('etapas: sequenciamento, execução real observada, aceite humano, rejeiç�
   bindStep(db,a,{status:'started',runId:run})
   finishRun(db,run,{status:'completed',text:'feito',notes:[]})
   assert.equal(listSteps(db,t)[0].state,'review')
+  db.prepare("INSERT INTO delegations (task_id,parent_run_id,provider,mode,objective) VALUES (?,?,'codex','read','x'),(?,?,'codex','read','y'),(?,999,'codex','read','z')").run(t,run,t,run,t)
+  assert.deepEqual((({provider,model,children})=>({provider,model,children}))(listSteps(db,t)[0]),{provider:'fake',model:null,children:2}) // agente da etapa e filhos so da execucao dela
+  assert.equal(listSteps(db,t)[1].provider,null)
   assert.throws(() => beginStep(db,t,b),/anteriores/)
   reviewStep(db,a,false); assert.equal(getStep(db,a)?.state,'pending')
   beginStep(db,t,a)

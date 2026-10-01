@@ -6,6 +6,8 @@ import { Markdown } from './Markdown'
 import { Confirm, ContextMenu, type MenuItem } from './Nav'
 import { PermissionPrompt } from './PermissionPrompt'
 import { QuestionPrompt, SuggestionChips } from './AgentAsks'
+import { ChildAgents, parentDoing, useTaskAgents } from './LiveAgents'
+import { SharedFiles } from './SharedFiles'
 import { ContextRequests, TaskInspector, UnsentMessages, usePackages } from './TaskContext'
 import { CONN_STATE, effortLabel, modelName } from './labels'
 import { Bar } from './UsageBar'
@@ -13,7 +15,7 @@ import { shrink, Thumbs, type TodoDraft } from './Todo'
 import { Workflow } from './Workflow'
 import { Checkpoints } from './Checkpoints'
 import { ProjectCommands } from './ProjectCommands'
-import { imageRefs, stripMarks } from './msgImages'
+import { fileRefs, imageRefs, sentCaption, stripMarks } from './msgImages'
 import { loadRead } from './readCache'
 import { useCachedRead } from './useCachedRead'
 import { usageNote, type QuotaSnapshot } from './usageText'
@@ -229,6 +231,8 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed, 
   const conn = sel.provider === 'claude' ? claudeState : provider?.auth?.state ?? 'unknown'
   const missing = providers && provider && !provider.exe
   const running = hist?.running ?? false
+  const agents = useTaskAgents(task.id, running)
+  const doing = parentDoing(agents)
   const usage = useUsage(sel.accountId, claudeEnabled, hist?.metric?.at)
 
   const awaiting = !!hist?.awaitingContext || pkgs.sends.some(s => s.state === 'awaiting_context_approval')
@@ -277,8 +281,9 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed, 
           </div>}
           {hist && <Thread messages={hist.messages} known={known.current?.ids ?? null} accounts={accounts} taskId={task.id} onOpen={setView} />}
           {running && <div className="msg agent streaming enter-rise">
-            <div className="who"><Avatar provider={sel.provider} size="sm" live /><span>{PROVIDER[sel.provider]?.label ?? sel.provider} trabalhando</span></div>
+            <div className="who"><Avatar provider={sel.provider} size="sm" live /><span>{PROVIDER[sel.provider]?.label ?? sel.provider} trabalhando</span>{doing && <span className="who-doing" title={doing}>{doing}</span>}</div>
             {live && live !== '…' && <Markdown text={live} />}
+            <ChildAgents list={agents} />
             <span className="typing" aria-label="Trabalhando"><i /><i /><i /></span>
           </div>}
         </div>
@@ -344,12 +349,14 @@ const Thread = memo(function Thread({ messages, known, accounts, taskId, onOpen 
 
 const MsgRow = memo(function MsgRow({ m, rise, accounts, taskId, onOpen }: { m: Msg; rise: boolean; accounts: Account[]; taskId: number; onOpen: (src: string) => void }) {
   const plain = useMemo(() => (m.role === 'agent' ? '' : stripMarks(m.text)), [m.role, m.text])
+  const files = useMemo(() => (m.role === 'system' ? fileRefs(m.text) : []), [m.role, m.text]) // arquivo enviado pelo agente: cartao no lugar da nota
   return (
-    <div className={`msg ${m.role} ${m.status ?? ''} ${rise ? 'enter-rise' : ''}`}>
+    <div className={`msg ${m.role} ${files.length ? 'sent' : ''} ${m.status ?? ''} ${rise ? 'enter-rise' : ''}`}>
       {m.role === 'agent' && <div className="who">{m.provider && <Avatar provider={m.provider} size="sm" />}<span>{label(m, accounts)}</span>
         {m.status === 'failed' && <span className="flag">falhou</span>}{m.status === 'cancelled' && <span className="flag">interrompida</span>}</div>}
-      {m.role === 'agent' ? <Markdown text={m.text} /> : plain && <p>{plain}</p>}
+      {m.role === 'agent' ? <Markdown text={m.text} /> : !files.length && plain && <p>{plain}</p>}
       <MsgImages taskId={taskId} text={m.text} marksOnly={m.role !== 'agent'} onOpen={onOpen} />
+      {files.length > 0 && <SharedFiles taskId={taskId} refs={files} caption={sentCaption(plain)} onOpen={onOpen} />}
     </div>
   )
 })
