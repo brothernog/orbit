@@ -179,6 +179,40 @@ test('edicao: arquivos alterados listados, fora do escopo sinalizado, um escrito
   for (const x of ['src/b.gd', 'fora.txt']) fs.rmSync(path.join(ws, x))
 })
 
+test('edicoes paralelas na mesma tarefa: escopos disjuntos correm juntos, sobrepostos recusados, diff de cada um sem o do vizinho', async () => {
+  reset()
+  fs.mkdirSync(path.join(ws, 'lib'), { recursive: true })
+  const f = fake()
+  let go!: () => void
+  const gate = new Promise<void>(r => { go = r })
+  const started: string[] = []
+  f.behavior = async p => {
+    const tag = /OBJ-(\w+)/.exec(p.input)![1]
+    started.push(tag)
+    if (tag === 'src') fs.writeFileSync(path.join(ws, 'src', 'p.gd'), 'x')
+    if (tag === 'lib') fs.writeFileSync(path.join(ws, 'lib', 'p.gd'), 'x')
+    await gate
+    return ok(tag)
+  }
+  const src = call(f, ctx(), { objective: 'OBJ-src', provider: 'codex', mode: 'edit', paths: ['src'] })
+  const lib = call(f, ctx(), { objective: 'OBJ-lib', provider: 'codex', mode: 'edit', paths: ['lib'] })
+  const rd = call(f, ctx(), { objective: 'OBJ-read', provider: 'codex', mode: 'read' })
+  while (started.length < 3) await sleep(5)
+  const overlap = await call(f, ctx(), { objective: 'OBJ-x', provider: 'codex', mode: 'edit', paths: ['src/sub'] })
+  const whole = await call(f, ctx(), { objective: 'OBJ-y', provider: 'codex', mode: 'edit' })
+  assert.match(overlap.text, /escopo sobreposto \(src\)/)
+  assert.match(whole.text, /escopo sobreposto/) // sem paths = pasta inteira
+  assert.match(f.guard.acquireEdit(ws, taskId + 1, 98, false, ['outra']) ?? '', /Um escritor por area/) // outra tarefa continua barrada
+  go()
+  const [a, b, c] = await Promise.all([src, lib, rd])
+  assert.match(a.text, /Arquivos alterados: 1: src\/p\.gd/)
+  assert.doesNotMatch(a.text, /FORA DO ESCOPO/)
+  assert.match(b.text, /Arquivos alterados: 1: lib\/p\.gd/)
+  assert.doesNotMatch(c.text, /modo leitura alterou/) // a leitura nao leva a culpa das edicoes vizinhas
+  assert.equal(f.guard.blockedFor(ws, taskId + 1), null)
+  fs.rmSync(path.join(ws, 'lib'), { recursive: true }); fs.rmSync(path.join(ws, 'src', 'p.gd'))
+})
+
 test('edicao recusada se outra tarefa esta executando na mesma pasta ou se as edicoes estao desativadas', async () => {
   reset()
   const f = fake()

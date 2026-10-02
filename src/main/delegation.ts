@@ -1,5 +1,5 @@
 // Delegacao entre plataformas: um agente (pai) chama a ferramenta MCP local e o dashboard executa um agente FILHO
-// em outro provedor, dentro da area de trabalho da tarefa do pai. Um nivel apenas, um escritor por area, permissoes
+// em outro provedor, dentro da area de trabalho da tarefa do pai. Um nivel apenas, um escritor por escopo, permissoes
 // nunca ampliadas, limites e timeout configuraveis, tudo rastreavel. Contexto ja existente so segue ao filho com pacote
 // aprovado pelo usuario (consent.ts); o resultado novo do filho volta ao pai como parte da ordem. Sem dependencia de 'electron'.
 import fs from 'node:fs'
@@ -80,7 +80,7 @@ export const delegateTool = (aliases: AgentAlias[] = [], readAgent = ''): ToolDe
       model: { type: 'string', description: 'Omitido = padrao do provedor.' },
       effort: { type: 'string' },
       mode: { type: 'string', enum: ['read', 'edit'], description: 'Padrao: read.' },
-      paths: { type: 'array', items: { type: 'string' }, description: 'Escopo (caminhos relativos); alteracao fora dele e sinalizada.' },
+      paths: { type: 'array', items: { type: 'string' }, description: 'Escopo (caminhos relativos); alteracao fora dele e sinalizada. Edicoes em paralelo exigem escopos disjuntos (sem paths = pasta inteira).' },
       files: { type: 'array', maxItems: MAX_FILES, items: { type: 'object', properties: { path: { type: 'string' }, startLine: { type: 'integer' }, endLine: { type: 'integer' } }, required: ['path'] }, description: 'Trechos que voce ja localizou: o dashboard os le do disco e entrega com a ordem (o filho nao gasta passos procurando). Leitura nova, sem aprovacao.' },
       context: { type: 'string', description: 'Contexto existente a compartilhar (exige aprovacao).' },
       memoryIds: { type: 'array', items: { type: 'integer' }, description: 'IDs de read_task_context a compartilhar (exige aprovacao).' },
@@ -200,24 +200,48 @@ export function diffSnap(a: Snap, b: Snap): string[] {
   return [...out].sort()
 }
 
-// ---- Um escritor por area de trabalho
+// ---- Um escritor por escopo: outra tarefa nunca divide a pasta; na mesma tarefa, edicoes so correm juntas com escopos disjuntos
+// (sem escopo = pasta inteira). O escopo nao impede o filho de escrever fora dele: o diff de cada um ignora o escopo dos vizinhos.
+export const scopesOverlap = (a: string[], b: string[]) => !a.length || !b.length || a.some(x => b.some(y => inScope(x, [y]) || inScope(y, [x])))
+type Hold = { taskId: number; id: number; scope: string[] }
 export class WorkspaceGuard {
-  private edits = new Map<string, { taskId: number; delegationId: number }>()
+  private edits = new Map<string, Hold[]>()
+  private watchers = new Map<string, Set<number>>() // leituras em curso: anotam os escopos das edicoes que coexistiram com elas
+  private seen = new Map<number, string[][]>()
   private key = pathKey
+  private note(id: number, scope: string[]) { this.seen.get(id)?.push(scope) }
   // Mensagem de bloqueio se OUTRA tarefa tem uma delegacao de edicao ativa nesta area.
   blockedFor(ws: string, taskId: number): string | null {
-    const h = this.edits.get(this.key(ws))
-    return h && h.taskId !== taskId ? `A pasta de trabalho esta reservada por uma delegacao de edicao da tarefa #${h.taskId}. Aguarde ela terminar.` : null
+    const h = this.edits.get(this.key(ws))?.find(h => h.taskId !== taskId)
+    return h ? `A pasta de trabalho esta reservada por uma delegacao de edicao da tarefa #${h.taskId}. Aguarde ela terminar.` : null
   }
-  acquireEdit(ws: string, taskId: number, delegationId: number, othersActiveHere: boolean): string | null {
-    const h = this.edits.get(this.key(ws))
-    if (h) return `Ja existe uma delegacao de edicao ativa nesta pasta (tarefa #${h.taskId}). Um escritor por area de trabalho.`
+  acquireEdit(ws: string, taskId: number, id: number, othersActiveHere: boolean, scope: string[] = []): string | null {
+    const k = this.key(ws), hs = this.edits.get(k) ?? []
+    const other = hs.find(h => h.taskId !== taskId)
+    if (other) return `Ja existe uma delegacao de edicao ativa nesta pasta (tarefa #${other.taskId}). Um escritor por area de trabalho.`
+    const clash = hs.find(h => scopesOverlap(h.scope, scope))
+    if (clash) return `Ja existe uma edicao ativa nesta pasta com escopo sobreposto (${clash.scope.join(', ') || 'pasta inteira'}). Para editar em paralelo, use paths disjuntos.`
     if (othersActiveHere) return 'Outra tarefa esta executando nesta mesma pasta: espere ela terminar antes de delegar uma edicao.'
-    this.edits.set(this.key(ws), { taskId, delegationId })
+    this.seen.set(id, hs.map(h => h.scope))
+    for (const h of hs) this.note(h.id, scope)
+    for (const w of this.watchers.get(k) ?? []) this.note(w, scope)
+    this.edits.set(k, [...hs, { taskId, id, scope }])
     return null
   }
-  release(ws: string, delegationId: number) {
-    if (this.edits.get(this.key(ws))?.delegationId === delegationId) this.edits.delete(this.key(ws))
+  // Leitura: so passa a anotar as edicoes vizinhas (nunca bloqueia).
+  watch(ws: string, id: number) {
+    const k = this.key(ws)
+    this.seen.set(id, (this.edits.get(k) ?? []).map(h => h.scope))
+    this.watchers.set(k, (this.watchers.get(k) ?? new Set()).add(id))
+  }
+  // Libera e devolve os escopos das edicoes que coexistiram com esta (o diff dela nao e atribuivel a esses arquivos).
+  release(ws: string, id: number): string[][] {
+    const k = this.key(ws), rest = (this.edits.get(k) ?? []).filter(h => h.id !== id)
+    if (rest.length) this.edits.set(k, rest); else this.edits.delete(k)
+    this.watchers.get(k)?.delete(id)
+    const seen = this.seen.get(id) ?? []
+    this.seen.delete(id)
+    return seen
   }
 }
 
@@ -366,9 +390,9 @@ export async function runDelegation(d: Deps, ctx: ParentCtx, raw: unknown, signa
   }
 
   if (a.mode === 'edit') {
-    const lock = d.guard.acquireEdit(ctx.cwd, ctx.taskId, id, d.otherTasksActiveIn(ctx.cwd, ctx.taskId))
+    const lock = d.guard.acquireEdit(ctx.cwd, ctx.taskId, id, d.otherTasksActiveIn(ctx.cwd, ctx.taskId), scope)
     if (lock) { fail('failed', 'permission', lock); return err(lock) }
-  }
+  } else d.guard.watch(ctx.cwd, id)
   const target = `${a.agent ? `${a.agent} = ` : ''}${a.provider}${a.model ? `/${a.model}` : ''}${a.effort ? ` (${a.effort})` : ''}`
   d.note(ctx.taskId, `↳ Delegacao #${id}${a.continuationOf ? ` (continuacao da #${a.continuationOf})` : ''} para ${target} em modo ${a.mode === 'read' ? 'somente leitura' : 'edicao'}${scope.length ? ` · escopo: ${scope.join(', ')}` : ''}${a.files.length ? ` · trechos anexados: ${a.files.map(f => f.path).join(', ')}` : ''}: “${clip(a.objective, 200)}”`)
 
@@ -400,17 +424,16 @@ export async function runDelegation(d: Deps, ctx: ParentCtx, raw: unknown, signa
   const onAbort = () => child.cancel() // o pai desistiu da chamada
   signal.addEventListener('abort', onAbort)
   if (signal.aborted) onAbort() // desistiu durante a preparacao (instantaneo, ferramentas)
-  let r: ChatResult | undefined
+  let r: ChatResult | undefined, after: Snap | null = null, peers: string[][] = []
   try { r = await child.result } finally {
     clearTimeout(timer); signal.removeEventListener('abort', onAbort); ctx.children.delete(child)
     // Recibos/skills so sobrevivem se a sessao nativa e comprovadamente a mesma: sessao nova = a informada; continuacao = a informada IGUAL a retomada.
     wire?.cleanup(!!r && (sid ? r.session === sid : !!r.session))
-    if (a.mode === 'edit') d.guard.release(ctx.cwd, id)
+    // O que mudou na pasta (e se o modo leitura foi respeitado), fotografado ANTES de liberar: uma edicao vizinha que comece depois nao entra.
+    try { after = await snapshot(ctx.cwd) } finally { peers = d.guard.release(ctx.cwd, id) }
   }
-
-  // O que mudou na pasta (e se o modo leitura foi realmente respeitado).
-  const after = await snapshot(ctx.cwd)
-  const changed = before && after ? diffSnap(before, after) : null
+  // Arquivos no escopo de uma edicao vizinha (mesma tarefa, em paralelo) sao dela, salvo se tambem estao no escopo deste filho.
+  const changed = before && after ? diffSnap(before, after).filter(f => (scope.length && inScope(f, scope)) || !peers.some(p => inScope(f, p))) : null
   const outOfScope = changed && scope.length ? changed.filter(f => !inScope(f, scope)) : []
   const violation = a.mode === 'read' && !!changed?.length
   const status = timedOut ? 'failed' : r.status
