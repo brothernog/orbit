@@ -114,7 +114,7 @@ function references(db: DatabaseSync, source: string, entries: FileEntry[]) {
     if (!files.has(rel.toLowerCase())) fail('O backup está incompleto: anexo referenciado ausente.')
   }
   for (const table of ['messages', 'pending_sends']) for (const { text } of db.prepare(`SELECT text FROM ${table}`).iterate() as Iterable<{ text: string }>) {
-    for (const m of text.matchAll(/\[imagem anexada: ([^\]\r\n]+)\]/g)) if (within(path.join(source, 'attachments'), m[1].trim())) requireFile(m[1].trim(), 'attachments')
+    for (const m of text.matchAll(/\[(?:imagem anexada|arquivo enviado): ([^\]\r\n]+)\]/g)) if (within(path.join(source, 'attachments'), m[1].trim())) requireFile(m[1].trim(), 'attachments')
   }
   for (const { images } of db.prepare('SELECT images FROM project_playtests').iterate() as Iterable<{ images: string }>) {
     let imageFiles: unknown; try { imageFiles = JSON.parse(images) } catch { fail('Referência de screenshot inválida.') }
@@ -220,7 +220,7 @@ function rebase(db: DatabaseSync, oldDir: string, newDir: string) {
   db.exec('BEGIN')
   try {
     for (const table of ['messages', 'pending_sends']) for (const r of db.prepare(`SELECT id,text FROM ${table}`).iterate() as Iterable<{ id: number; text: string }>) {
-      const text = r.text.replace(/\[imagem anexada: ([^\]\r\n]+)\]/g, (all, p) => { const moved = move(p.trim(), 'attachments'); return moved === p.trim() ? all : `[imagem anexada: ${moved}]` })
+      const text = r.text.replace(/\[(imagem anexada|arquivo enviado): ([^\]\r\n]+)\]/g, (all, kind, p) => { const moved = move(p.trim(), 'attachments'); return moved === p.trim() ? all : `[${kind}: ${moved}]` })
       if (text !== r.text) db.prepare(`UPDATE ${table} SET text=? WHERE id=?`).run(text, r.id)
     }
     for (const r of db.prepare('SELECT id,images FROM project_playtests').iterate() as Iterable<{ id: number; images: string }>) db.prepare('UPDATE project_playtests SET images=? WHERE id=?').run(JSON.stringify((JSON.parse(r.images) as string[]).map(p => move(p, 'production/playtests'))), r.id)

@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { changedFiles, fileDiff, ignored, mergeChanges, parseNumstat, stopWatching, watchDir } from './fileWatch.ts'
+import { changedFiles, countLines, fileDiff, ignored, mergeChanges, parseNumstat, stopWatching, watchDir } from './fileWatch.ts'
 
 test('numstat: contagens, binario sem numero inventado e renomeio fica com o nome novo', () => {
   const m = parseNumstat('12\t3\tsrc/a.ts\n-\t-\tart/logo.png\n4\t0\tsrc/{old => new}/b.ts\n1\t1\tx.ts => y.ts\n')
@@ -62,4 +62,15 @@ test('lista de arquivos: corta em 200 antes de contar linhas; so os arquivos exi
   assert.deepEqual(list.slice(0, 3).map(f => [f.path, f.lastWrite]), [['novo0999.gd', 50], ['novo0500.gd', 40], ['novo0000.gd', null]])
   assert.deepEqual(read.sort(), list.map(f => f.path).sort())
   assert.ok(list.every(f => f.added === 3 && f.removed === 0))
+})
+
+test('contagem de linhas: final sem quebra, binario null e cache refeito quando o arquivo muda', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'gpd-lines-')), f = path.join(d, 'a.txt')
+  try {
+    fs.writeFileSync(f, 'a\nb\nc'); assert.equal(countLines(f), 3)
+    assert.equal(countLines(f), 3) // do cache
+    fs.writeFileSync(f, 'a\nb\nc\nd\n'); assert.equal(countLines(f), 4) // tamanho mudou: rele
+    fs.writeFileSync(f, ''); assert.equal(countLines(f), 0)
+    fs.writeFileSync(f, Buffer.from([65, 0, 10])); assert.equal(countLines(f), null)
+  } finally { fs.rmSync(d, { recursive: true, force: true }) }
 })

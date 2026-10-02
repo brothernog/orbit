@@ -13,7 +13,7 @@ test('grupos: projeto fica em um grupo so, mover abre o destino, null tira do gr
 })
 
 test('sigla do workspace', () => {
-  assert.equal(initials('Case Opened'), 'CO')
+  assert.equal(initials('Meu Jogo'), 'MJ')
   assert.equal(initials('trace'), 'TR')
   assert.equal(initials('fx-webhook'), 'FW')
 })

@@ -34,7 +34,7 @@
 .typing i:nth-child(2) { animation-delay: .15s; }
 .typing i:nth-child(3) { animation-delay: .3s; }
 @keyframes blink { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
-.md + .typing { display: none; } /* com texto chegando, o trilho e o avatar ja dizem que esta trabalhando */
+.md ~ .typing { display: none; } /* com texto chegando, o trilho e o avatar ja dizem que esta trabalhando */
 .jump {
   position: absolute; left: 50%; bottom: 172px; transform: translateX(-50%); z-index: 3;
   width: 34px; height: 34px; padding: 0; display: grid; place-items: center; border-radius: 50%;
@@ -267,3 +267,57 @@
   .thread, .chat-head, .dock-composer { padding-left: 12px; padding-right: 12px; }
   .dock-count { display: none; }
 }
+
+/* Linha "trabalhando": o que o pai faz agora, uma linha so, depois do nome */
+.who-doing { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); }
+.who-doing::before { content: '·'; margin-right: 8px; }
+
+/* Delegacoes desta resposta (LiveAgents.tsx): ativas a vista, terminadas recolhidas numa linha */
+.live-agents { margin: 10px 0 4px; padding: 8px 6px 6px; max-width: 560px; border: 1px solid var(--line-soft); border-radius: var(--r); background: var(--side-bg); animation: la-in var(--dur-3) var(--ease-out) both; }
+.live-agents header { display: flex; align-items: baseline; justify-content: space-between; padding: 0 8px 6px; font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
+.live-agents header b { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--accent); }
+.live-agents ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.la-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; column-gap: 10px; align-items: center; padding: 6px 8px; border-radius: var(--r-sm); line-height: 1.35; animation: la-in var(--dur-2) var(--ease-out) both; }
+.la-row:hover { background: var(--surface); }
+.la-body { display: grid; min-width: 0; }
+.la-title { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.la-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.la-time { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.la-wait { padding: 1px 8px; border-radius: 999px; font-size: 11.5px; color: var(--limit); background: color-mix(in srgb, var(--limit) 12%, transparent); }
+.la-end { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; }
+.s-completed .la-end { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.s-failed .la-end { color: var(--hot); background: color-mix(in srgb, var(--hot) 12%, transparent); }
+.s-cancelled .la-end { color: var(--faint); background: var(--surface); }
+.la-row.s-awaiting_context_approval .la-sub { color: var(--limit); }
+.la-done .la-row:not(:hover) .la-title { color: var(--muted); } /* terminadas recuam: o foco fica no que roda */
+.la-done summary { display: flex; align-items: center; gap: 6px; width: max-content; margin: 2px 2px 0; padding: 4px 6px; border-radius: var(--r-sm); font-size: 12px; color: var(--muted); cursor: pointer; list-style: none; }
+.la-done summary::-webkit-details-marker { display: none; }
+.la-done summary:hover { color: var(--text); background: var(--surface); }
+.la-done summary svg { transition: transform var(--dur-2) var(--ease-out); }
+.la-done[open] summary svg { transform: rotate(90deg); }
+.la-done summary span + span::before { content: '·'; margin-right: 6px; color: var(--faint); }
+.la-done summary .bad { color: var(--hot); }
+.live-agents ul + .la-done { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line-soft); }
+@keyframes la-in { from { opacity: 0; transform: translateY(4px); } }
+
+/* Arquivo enviado pelo agente (SharedFiles.tsx): no fluxo da resposta, nao como nota centralizada */
+.msg.system.sent + .msg.agent { margin-top: 0; } /* arquivo no meio da resposta: mesmo turno */
+.msg.system.sent { align-self: stretch; max-width: none; padding: 0 0 0 16px; text-align: left; color: var(--text); background: none; border: 0; border-radius: 0; font-size: 14px; }
+.sent-files { display: grid; gap: 8px; justify-items: start; }
+.sent-caption { margin: 0; color: var(--muted); }
+.sent-card { width: min(420px, 100%); overflow: hidden; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); transition: border-color var(--dur-1); animation: la-in var(--dur-3) var(--ease-out) both; }
+.sent-card:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+.sent-card.gone { border-style: dashed; background: none; }
+.sent-preview { display: grid; place-items: center; width: 100%; max-height: 260px; padding: 0; border: 0; border-bottom: 1px solid var(--line-soft); border-radius: 0; background: var(--bg); cursor: zoom-in; overflow: hidden; }
+.sent-preview:hover:not(:disabled) { background: var(--bg); }
+.sent-preview img { display: block; max-width: 100%; max-height: 260px; object-fit: contain; transition: transform var(--dur-3) var(--ease-out); }
+.sent-preview:hover img { transform: scale(1.015); }
+.sent-row { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 10px; }
+.sent-type { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--r-sm); font: 600 10.5px/1 ui-monospace, 'Cascadia Code', Consolas, monospace; letter-spacing: .03em; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.gone .sent-type { color: var(--faint); background: var(--raised); }
+.sent-name { display: grid; flex: 1; min-width: 0; line-height: 1.35; }
+.sent-name b { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sent-name small { font-size: 12px; color: var(--muted); }
+.sent-row .icon { flex: none; color: var(--muted); }
+.sent-row .icon:hover:not(:disabled) { color: var(--text); }
+.sent-err { margin: 0; font-size: 12.5px; color: var(--hot); }

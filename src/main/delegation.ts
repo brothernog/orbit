@@ -246,7 +246,7 @@ export type Deps = {
   nativePolicy?: (provider: string) => { opts: Partial<ChatOpts>; permission?: object } // "sempre permitir" nativo por CLI (permissions.ts)
   waiters: ApprovalWaiters
   catalogCheck: (provider: string, model?: string, effort?: string) => Promise<string | null>
-  runChild: (p: { provider: string; opts: ChatOpts; cwd: string; env: NodeJS.ProcessEnv; input: string; session?: string }) => Child
+  runChild: (p: { provider: string; opts: ChatOpts; cwd: string; env: NodeJS.ProcessEnv; input: string; session?: string; delegationId: number }) => Child
   childTools?: (p: { taskId: number; lineage: string; auth: Grant; delegationId: number; provider: string; mode: 'read' | 'edit'; cwd: string; scope: string[]; engines?: EngineGrants }) => Promise<ChildWire | null>
   envFor: (provider: string, accountId?: number) => NodeJS.ProcessEnv
   otherTasksActiveIn: (workspace: string, taskId: number) => boolean
@@ -393,7 +393,7 @@ export async function runDelegation(d: Deps, ctx: ParentCtx, raw: unknown, signa
   })
   const deliveries = deliver.map(x => ({ x, id: recordDelivery(d.db, x.pkg, sid ?? '', x.items) }))
 
-  const child = d.runChild({ provider: a.provider, opts, cwd: ctx.cwd, env, input, session: sid })
+  const child = d.runChild({ provider: a.provider, opts, cwd: ctx.cwd, env, input, session: sid, delegationId: id })
   ctx.children.add(child)
   let timedOut = false
   const timer = setTimeout(() => { timedOut = true; child.cancel() }, s.timeoutMin * 60_000)

@@ -13,6 +13,7 @@ import type { EngineId } from './engines.ts'
 import type { ToolDef, ToolResult } from './mcp.ts'
 import { ASK_TOOL } from './questions.ts'
 import { SUGGEST_TOOL } from './suggestions.ts'
+import { SEND_FILE_TOOL } from './sharedFiles.ts'
 import { findInWorkspace, readFileRange } from './workspaceTools.ts'
 
 export type ToolCtx = {
@@ -65,11 +66,11 @@ export const TEST_EVIDENCE_TOOL: ToolDef = {
   }, ['action', 'command'])
 }
 // Ferramentas anunciadas por papel. Pai: consulta/registro de contexto, perguntar ao usuario e sugerir tarefa (mais delegar, acrescentado
-// pelo chamador; ask_user/suggest_task sao atendidas em index.ts). Filho responde ao pai: nunca pergunta nem sugere ao usuario.
+// pelo chamador; ask_user/suggest_task/send_user_file sao atendidas em index.ts). Filho responde ao pai: nunca pergunta nem sugere ao usuario.
 // Filho: alem disso, operacoes locais. Nunca delegar_to_agent para filho (a recursao tambem e barrada no backend).
 // read_task_skill: instrucoes detalhadas sob demanda, com a lista do que o PAPEL pode consultar (pai: delegacao e memoria; filho: so memoria).
 export const toolsFor = (role: 'parent' | 'child', delegate?: ToolDef, engines: readonly EngineId[] = []): ToolDef[] =>
-  role === 'parent' ? [...(delegate ? [delegate] : []), READ_CONTEXT_TOOL, RECORD_MEMORY_TOOL, skillTool('parent', engines), ASK_TOOL, SUGGEST_TOOL] : [READ_CONTEXT_TOOL, RECORD_MEMORY_TOOL, FIND_TOOL, READ_RANGE_TOOL, TEST_EVIDENCE_TOOL, skillTool('child', engines)]
+  role === 'parent' ? [...(delegate ? [delegate] : []), READ_CONTEXT_TOOL, RECORD_MEMORY_TOOL, skillTool('parent', engines), ASK_TOOL, SUGGEST_TOOL, SEND_FILE_TOOL] : [READ_CONTEXT_TOOL, RECORD_MEMORY_TOOL, FIND_TOOL, READ_RANGE_TOOL, TEST_EVIDENCE_TOOL, skillTool('child', engines)]
 
 // Ferramentas do filho por provedor e modo, sem pagar duas vezes pela mesma capacidade. O Claude ja tem busca nativa (Grep/Glob, ripgrep):
 // find_in_workspace seria so schema repetido. Em LEITURA o Read nativo sai (read_file_range cobre, com escopo validado e readToken); com ESCOPO,

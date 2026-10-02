@@ -3,6 +3,7 @@ import { expireRead, invalidateRead, setRead } from './readCache.ts'
 import { SETTINGS_READS } from '../main/settingsReads.ts'
 import type { Catalog, ModelOpt } from '../main/catalog.ts'
 import type { SendResult } from '../main/chatService.ts'
+import type { TaskAgent } from '../main/agentsLive.ts'
 import type { StoredMetric, Task as StoredTask, TaskSel } from '../main/tasks.ts'
 export type { Catalog, ModelOpt, SendResult }
 
@@ -18,6 +19,7 @@ type Api = {
   listGames(): Promise<string[]>
   listAccounts(): Promise<Account[]>
   listActive(): Promise<Active[]>
+  taskAgents(id: number): Promise<TaskAgent[]>
   listTasks(game: string, o: { search?: string; archived?: boolean }): Promise<Task[]>
   createTask(game: string, title?: string): Promise<number>
   taskChat(id: number, sel: Sel): Promise<TaskChat>

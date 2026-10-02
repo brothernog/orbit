@@ -11,6 +11,18 @@ type Recent = { id: number; provider: string; summary: string; state: string; cr
 const STATE_PT: Record<string, string> = { allowed_once: 'permitido uma vez', allowed_always: 'sempre permitido', allowed_rule: 'permitido por regra', denied: 'negado', denied_rule: 'negado por regra', expired: 'expirou (negado)', pending: 'pendente' }
 const AGENT_OPTS = ['claude', 'opencode'] // regras: o Claude as aplica no pop-up; o OpenCode as recebe como permissoes. O Codex so tem politica de sandbox.
 
+// Um modo por agente (radio): combinacoes que a CLI nao distingue nao aparecem como duas caixas marcadas.
+const CLAUDE_MODES: [string, string, Partial<Settings>][] = [
+  ['prompt', 'Perguntar em pop-up', { prompt: true, claudeAuto: false }],
+  ['auto', 'Automático: o Claude aprova sozinho o que for seguro', { prompt: false, claudeAuto: true }],
+  ['deny', 'Negar o que não tiver regra', { prompt: false, claudeAuto: false }],
+]
+const CODEX_MODES: [string, string, Partial<Settings>][] = [
+  ['sandbox', 'Sandbox: só a pasta do projeto, sem rede', { codexSandbox: 'workspace-write', codexNetwork: false }],
+  ['net', 'Sandbox com rede', { codexSandbox: 'workspace-write', codexNetwork: true }],
+  ['full', 'Sem sandbox (permitir tudo)', {}],
+]
+
 // Secao "Permissoes" das Configuracoes: "Sempre permitir" por agente. Claude pergunta pelo pop-up (<PermissionPrompt />); Codex e OpenCode
 // nao tem prompt no modo headless, entao a escolha vira politica nativa (sandbox/rede, --auto). Componente isolado (so `api`).
 // Encaixe: <PermissionRules /> em uma secao/aba de Settings.tsx.
@@ -47,6 +59,8 @@ export function PermissionRules() {
     setErr('')
     api.addPermissionRule({ ...form, acknowledged: ack }).then(() => { setForm(f => ({ ...f, pattern: '' })); setAssess(null); load() }, (e: any) => setErr(errText(e)))
   }
+  const claudeMode = s.claudeAuto ? 'auto' : s.prompt ? 'prompt' : 'deny'
+  const codexMode = fullAck || s.codexSandbox === 'danger-full-access' ? 'full' : s.codexNetwork ? 'net' : 'sandbox'
   const needAck = !!assess && assess.risk !== 'low' && form.decision === 'allow'
   const refused = !!assess && assess.risk === 'destructive' && form.kind === 'bash' && (form.pattern.trim() === '*' || form.pattern.trim().endsWith(' *')) && form.decision === 'allow'
 
@@ -56,17 +70,16 @@ export function PermissionRules() {
         <h2>Por agente</h2>
         <div className="pr-agent">
           <b>{PROVIDER.claude.label}</b>
-          <div>
-            <label className="check"><input type="checkbox" checked={s.prompt} onChange={e => save({ prompt: e.target.checked })} /> Perguntar em pop-up (senão, nega)</label>
-            <label className="check"><input type="checkbox" checked={s.claudeAuto} onChange={e => save({ claudeAuto: e.target.checked })} /> Automático: o Claude aprova sozinho o que for seguro</label>
+          <div role="radiogroup" aria-label={`Permissões do ${PROVIDER.claude.label}`}>
+            {CLAUDE_MODES.map(([v, label, patch]) => <label key={v} className="check"><input type="radio" name="pr-claude" checked={claudeMode === v} onChange={() => save(patch)} /> {label}</label>)}
             {s.prompt && <label className="pr-inline">Responder em até <input type="number" min={1} max={60} value={s.timeoutMin} onChange={e => save({ timeoutMin: +e.target.value })} /> min</label>}
           </div>
         </div>
         <div className="pr-agent">
           <b>{PROVIDER.codex.label}</b>
-          <div>
-            <label className="check"><input type="checkbox" checked={s.codexNetwork} disabled={s.codexSandbox !== 'workspace-write'} onChange={e => save({ codexNetwork: e.target.checked })} /> Rede dentro da sandbox</label>
-            <label className="check"><input type="checkbox" checked={s.codexSandbox === 'danger-full-access'} onChange={e => (e.target.checked ? setFullAck(true) : save({ codexSandbox: 'workspace-write' }))} /> Sem sandbox (permitir tudo)</label>
+          <div role="radiogroup" aria-label={`Permissões do ${PROVIDER.codex.label}`}>
+            {CODEX_MODES.map(([v, label, patch]) => <label key={v} className="check"><input type="radio" name="pr-codex" checked={codexMode === v}
+              onChange={() => { if (v === 'full') setFullAck(true); else { setFullAck(false); save(patch) } }} /> {label}</label>)}
             {(fullAck || s.codexSandbox === 'danger-full-access') && (
               <p className="pp-warn" role="alert">
                 <Icon n="alert" size={16} /> Sem sandbox o Codex executa <b>qualquer comando</b>, em qualquer pasta.{' '}
@@ -77,8 +90,9 @@ export function PermissionRules() {
         </div>
         <div className="pr-agent">
           <b>{PROVIDER.opencode.label}</b>
-          <div>
-            <label className="check"><input type="checkbox" checked={s.opencodeAuto} onChange={e => save({ opencodeAuto: e.target.checked })} /> Aprovar tudo que não for negado por regra</label>
+          <div role="radiogroup" aria-label={`Permissões do ${PROVIDER.opencode.label}`}>
+            <label className="check"><input type="radio" name="pr-opencode" checked={!s.opencodeAuto} onChange={() => save({ opencodeAuto: false })} /> Negar o que não tiver regra</label>
+            <label className="check"><input type="radio" name="pr-opencode" checked={s.opencodeAuto} onChange={() => save({ opencodeAuto: true })} /> Aprovar tudo que não for negado por regra</label>
           </div>
         </div>
       </section>

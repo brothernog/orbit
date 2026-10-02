@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { memo, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { api, errText, onChat, type Task } from './api'
 import { Icon } from './icons'
 
@@ -17,6 +17,9 @@ const diffLines = (d: string, all: boolean) => d.split('\n').flatMap((l, i) => {
   if (!all && l[0] === ' ') return []
   return [<span key={i} className={l[0] === '+' ? 'p' : l[0] === '-' ? 'm' : ''}>{l}{'\n'}</span>]
 })
+
+// Cada gravacao (de qualquer agente na pasta) re-renderiza o painel; o diff aberto so refaz quando o texto muda.
+const Diff = memo(({ t, all }: { t: string; all: boolean }) => <pre className="fp-diff">{diffLines(t, all)}</pre>)
 
 // Sismografo: cada traco e uma rodada de gravacoes; a altura e quantas linhas mudaram (escala log), vermelho quando mais saiu que entrou.
 function Seismo({ ticks, n = 48 }: { ticks: Tick[]; n?: number }) {
@@ -127,7 +130,7 @@ export function FilesPanel({ task, provider, onClose }: { task: Task; provider?:
                             <button className={`icon sm ${all ? 'on' : ''}`} aria-pressed={all} aria-label="Ver o arquivo inteiro" title={all ? 'Ver só o alterado' : 'Ver o arquivo inteiro'} onClick={() => toggleFull(f.path)}><Icon n="eye" size={15} /></button>
                           </div>
                           {t == null ? <span className="loader sm" aria-label="Carregando diff" />
-                            : <pre className="fp-diff">{diffLines(t, all)}</pre>}
+                            : <Diff t={t} all={all} />}
                         </>}
                       </li>
                     )
