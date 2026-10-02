@@ -3,7 +3,7 @@
 export const SETTINGS_READS: Record<string, string> = {
   setContextLimits: 'getContextLimits', setNotifySettings: 'getNotifySettings', setJarvisSettings: 'getJarvisSettings',
   setDelegationSettings: 'getDelegationSettings', setPermissionSettings: 'getPermissionSettings',
-  setAgentAliases: 'getAgentAliases', setSummaryTitles: 'summaryTitles', setAutomations: 'getAutomations', setHandover: 'getHandover'
+  setAgentAliases: 'getAgentAliases', setSummaryTitles: 'summaryTitles', setTurnCheckpoints: 'turnCheckpoints', setAutomations: 'getAutomations', setHandover: 'getHandover'
 }
 
 type Handlers = Record<string, (...a: any[]) => any>

@@ -1,6 +1,11 @@
 /* Perguntas do agente e tarefas sugeridas (AgentAsks.tsx). O cartao da pergunta reaproveita .pp/.pp-inline (permission.css). */
 .pp-inline .qp { border-color: var(--accent); }
 .qp h2 svg { color: var(--accent); }
+.qp-body { display: flex; flex-direction: column; gap: 10px; }
+.qp-fold { margin-left: auto; }
+.pp-count + .qp-fold { margin-left: 0; }
+.qp h2 .qp-fold svg { color: var(--muted); transform: rotate(90deg); transition: transform var(--dur-1) var(--ease-out); }
+.qp h2 .qp-fold.folded svg { transform: rotate(-90deg); }
 .qp-q { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
 .qp-q legend { padding: 0; margin-bottom: 4px; color: var(--text); line-height: 1.45; }
 .qp-q legend small { color: var(--muted); }

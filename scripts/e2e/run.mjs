@@ -778,7 +778,7 @@ try {
   check('etapas: preparar no chat preenche ordem, ainda sem inferência', await ev("document.querySelector('.composer textarea')?.value==='Investigar o pulo'") && argvLog().length===beforePlan)
   await wtUI("!!document.querySelector('.composer button[aria-label=Enviar]:not(:disabled)')", 'envio da etapa habilitado')
   await ev("document.querySelector('.composer button[aria-label=Enviar]:not(:disabled)').click()")
-  // O IPC faz checkpoint antes do spawn; running=false durante essa preparação não significa conclusão.
+  // O IPC pode fazer checkpoint antes do spawn (se ligado); running=false durante essa preparação não significa conclusão.
   let firstStep
   for(let i=0;i<100;i++){firstStep=(await inv(ev,'listSteps',productionId)).value.find(s=>s.id===stepA);if(['review','failed','cancelled','awaiting_context'].includes(firstStep?.state))break;await sleep(200)}
   check('etapas: execução concluída exige revisão humana', firstStep?.state==='review', JSON.stringify(firstStep))
@@ -787,6 +787,7 @@ try {
     throw Error('A etapa não chegou à revisão: '+JSON.stringify({step:firstStep,chat:failedStepChat.ok?{running:failedStepChat.value.running,awaitingContext:failedStepChat.value.awaitingContext,messages:failedStepChat.value.messages.slice(-2)}:failedStepChat.error})+' · '+await ev("[...document.querySelectorAll('.chat [role=alert],.chat .err')].map(e=>e.textContent).join(' | ')"))
   }
   await waitDone(ev,productionId)
+  check('checkpoint de turno: desligado por padrão, envio não grava commit', (await inv(ev,'turnCheckpoints')).value===false && (await inv(ev,'listCheckpoints',productionId)).value.length===0)
   await wtUI("!![...document.querySelectorAll('.workflow button')].find(b=>b.textContent==='Aceitar etapa'&&!b.disabled)", 'aceite da etapa disponível')
   await ev("[...document.querySelectorAll('.workflow button')].find(b=>b.textContent==='Aceitar etapa'&&!b.disabled).click()")
   for(let i=0;i<50&&(await inv(ev,'listSteps',productionId)).value[0].state!=='accepted';i++)await sleep(100)

@@ -420,6 +420,7 @@ const delegationSettings = () => normalizeSettings(JSON.parse(getSetting('delega
 const storedLimits = () => normalizeLimits(JSON.parse(getSetting('contextLimits') ?? 'null'))
 const contextLimits = () => effectiveLimits(storedLimits()) // Configuracoes mostra o guardado; os servicos usam o efetivo
 const summaryTitles = () => getSetting('summaryTitles') !== 'off'
+const turnCheckpoints = () => getSetting('turnCheckpoints') === 'on' // padrao desligado: o checkpoint grava commit na branch atual
 const agentAliases = () => { try { return parseAliases(JSON.parse(getSetting('agentAliases') ?? '[]')) } catch { return [] } } // agentes nomeados (Configuracoes)
 const parentTool = (p: ParentCtx): ToolCtx => ({ taskId: p.taskId, lineage: p.lineage, auth: p.auth, role: 'parent', cwd: p.cwd, scope: [], runId: p.runId })
 // Engines (Godot/Unity/Blender) concedidas pelo organizador: revalidadas a cada anúncio e consulta.
@@ -855,10 +856,10 @@ const handlers: Record<string, (...a: any[]) => any> = {
     const step = stepId == null ? null : asInt(stepId, 'etapa')
     if (activeStep(db, t.id)) fail('Aguarde ou cancele a etapa atual antes de enviar outra mensagem.')
     if (step) { if (active.has(t.id)) fail('O agente ainda está respondendo.'); beginStep(db, t.id, step) }
-    // Checkpoint do turno: congela o Git da pasta antes do agente mexer; best-effort (pasta sem Git ou com
-    // operacao pendente so fica sem checkpoint) e nunca impede o envio.
+    // Checkpoint do turno (opcional, Configuracoes): congela o Git da pasta antes do agente mexer; best-effort (pasta sem Git
+    // ou com operacao pendente so fica sem checkpoint) e nunca impede o envio.
     let turnCheckpoint: { id: number } | null = null
-    try { turnCheckpoint = await takeCheckpoint(db, await taskCwd(t), t.id, {}) } catch {}
+    if (turnCheckpoints()) try { turnCheckpoint = await takeCheckpoint(db, await taskCwd(t), t.id, {}) } catch {}
     try {
       const result = await sendTask(t.id, s, input)
       if (step) bindStep(db, step, result)
@@ -906,6 +907,8 @@ const handlers: Record<string, (...a: any[]) => any> = {
   planetState,
   summaryTitles,
   setSummaryTitles: (on: unknown) => { setSetting('summaryTitles', on === false ? 'off' : 'on'); return summaryTitles() },
+  turnCheckpoints,
+  setTurnCheckpoints: (on: unknown) => { setSetting('turnCheckpoints', on === true ? 'on' : 'off'); return turnCheckpoints() },
   setPlanet: (on: unknown) => { setSetting('planet', on === false ? 'off' : 'on'); fitNotices(0); toPopup({ planet: planetState() }); return planetState() },
   // Arrastar: a janela segue o ponteiro; ao soltar, a posicao vai para dentro da tela mais proxima e fica salva.
   planetDrag: (x: unknown, y: unknown) => {

@@ -1,4 +1,4 @@
-// Checkpoints do turno: a pasta da tarefa congela sozinha antes de cada mensagem ao agente;
+// Checkpoints do turno: com o commit automatico ligado (Configuracoes > Agentes) a pasta congela antes de cada mensagem;
 // aqui o usuario cria um ponto manual e volta a qualquer ponto (reset --hard + clean -fd,
 // com previa e confirmacao). Arquivos ignorados (.env, .godot/) nunca entram nem saem.
 import { useEffect, useState } from 'react'
@@ -41,7 +41,7 @@ export function Checkpoints({ taskId, onClose }: { taskId: number; onClose: () =
         {!list
           ? <span className="loader" aria-label="Lendo checkpoints" />
           : list.length === 0
-            ? <p className="muted">Nenhum checkpoint ainda. Envie uma mensagem ou crie um agora.</p>
+            ? <p className="muted">Nenhum checkpoint ainda. Crie um agora ou ligue o commit automático em Configurações › Agentes.</p>
             : <ul className="br-commits">
               {list.map(c => (
                 <li key={c.id}><code>{short(c.head)}</code><span>Checkpoint #{c.id}{c.run_id ? ` · execução ${c.run_id}` : ''}{c.committed ? '' : ' · sem mudanças'}</span><small>{when(c.created_at)}</small>
