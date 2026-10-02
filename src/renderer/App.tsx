@@ -249,7 +249,7 @@ export default function App() {
     loadGames(); loadAccounts(); loadAliases()
     loadRead<Provider[]>('diagnose', () => api.diagnose(), 600_000).then(setProviders, () => setProviders([]))
     // So metadados locais; catalogos/CLIs e consulta de quotas continuam sob demanda.
-    for (const read of ['getContextLimits', 'getNotifySettings', 'getJarvisSettings', 'getDelegationSettings', 'getPermissionSettings', 'getAgentAliases', 'summaryTitles', 'backupInfo'])
+    for (const read of ['getContextLimits', 'getNotifySettings', 'getJarvisSettings', 'getDelegationSettings', 'getPermissionSettings', 'getAgentAliases', 'summaryTitles', 'turnCheckpoints', 'backupInfo'])
       loadRead(read, () => api[read]()).catch(() => {})
   }, [])
   // Atalhos que dependem da pasta aberta: Ctrl+N nova tarefa, Ctrl+B mostra/oculta a gaveta, F2 renomeia a conversa aberta.
