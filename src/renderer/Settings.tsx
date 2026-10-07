@@ -245,6 +245,21 @@ function SummaryTitles() {
   )
 }
 
+// Checkpoint de turno (src/main/checkpoints.ts): antes de cada mensagem grava as mudancas pendentes num commit na branch atual.
+function TurnCheckpoints() {
+  const read = useCachedRead<boolean>('turnCheckpoints', () => api.turnCheckpoints())
+  const on = read.data
+  const [writeErr, setErr] = useState('')
+  const err = writeErr || (read.error ? errText(read.error) : '')
+  if (on === undefined) return <small>{err || 'Carregando…'}</small>
+  return (
+    <div className="deleg">
+      <label className="check" title="Antes de cada mensagem, as mudanças não salvas viram um commit “orbita-checkpoint:” na branch atual, para poder voltar atrás."><input type="checkbox" checked={on} onChange={e => api.setTurnCheckpoints(e.target.checked).then(read.set, x => setErr(errText(x)))} /> Commit automático antes de cada mensagem</label>
+      {err && <small className="err" role="alert">{err}</small>}
+    </div>
+  )
+}
+
 const TABS = [['contas', 'Contas'], ['agentes', 'Agentes'], ['permissoes', 'Permissões'], ['delegacao', 'Delegação'], ['avisos', 'Avisos'], ['dados', 'Dados']] as const
 
 // Avisos de atencao (src/main/notify.ts). Com o app em foco: cartao dentro dele; fora de foco: janela de aviso no canto da tela.
@@ -377,6 +392,7 @@ export function Settings({ accounts, reload, providers, refreshProviders, onGame
           <Card title="Nova" sub="Assistente da home. Não lê os arquivos dos projetos."><JarvisConfig accounts={accounts} /></Card>
           <Card title="Agentes nomeados" sub={<>Dê um nome a um provedor e modelo para delegar por nome: <em>“delegue para o Fabricio”</em>.</>}><AgentNames /></Card>
           <Card title="Nome dos chats" sub="Vale para chats novos."><SummaryTitles /></Card>
+          <Card title="Checkpoints" sub="Os commits ficam no histórico da branch e vão junto no push."><TurnCheckpoints /></Card>
         </>}
         {tab === 'permissoes' && <PermissionRules />}
         {tab === 'avisos' && <Card title="Quando avisar"><NotifySettings /></Card>}

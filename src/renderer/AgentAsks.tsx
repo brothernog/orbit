@@ -16,6 +16,7 @@ export function QuestionPrompt({ taskId }: { taskId: number }) {
   const [picks, setPicks] = useState<Pick[]>([])
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [folded, setFolded] = useState(false) // recolhido mostra so o titulo; o agente continua esperando
   const load = () => api.listQuestions(taskId).then(setList, () => {})
   useEffect(() => {
     load()
@@ -25,7 +26,7 @@ export function QuestionPrompt({ taskId }: { taskId: number }) {
   }, [taskId])
 
   const p = list[0]
-  useEffect(() => { setPicks(p ? p.questions.map(() => ({ selected: [], other: '' })) : []); setErr('') }, [p?.id])
+  useEffect(() => { setPicks(p ? p.questions.map(() => ({ selected: [], other: '' })) : []); setErr(''); setFolded(false) }, [p?.id])
   if (!p || picks.length !== p.questions.length) return null
 
   const who = PROVIDER[p.provider]?.label ?? p.provider
@@ -45,7 +46,10 @@ export function QuestionPrompt({ taskId }: { taskId: number }) {
     <div className="pp-inline">
       <form className="pp qp" aria-labelledby={`qp-${p.id}`} onSubmit={e => { e.preventDefault(); if (ready) reply(picks) }}
         onKeyDown={e => { if (e.key === 'Enter' && e.ctrlKey && ready && !busy) { e.preventDefault(); reply(picks) } }}>
-        <h2 id={`qp-${p.id}`}><Icon n="spark" size={16} /> {who} tem {p.questions.length === 1 ? 'uma pergunta' : `${p.questions.length} perguntas`}{list.length > 1 && <small className="pp-count">1 de {list.length}</small>}</h2>
+        <h2 id={`qp-${p.id}`}><Icon n="spark" size={16} /> {who} tem {p.questions.length === 1 ? 'uma pergunta' : `${p.questions.length} perguntas`}{list.length > 1 && <small className="pp-count">1 de {list.length}</small>}
+          <button type="button" className={`icon sm qp-fold${folded ? ' folded' : ''}`} aria-expanded={!folded} aria-controls={`qp-body-${p.id}`}
+            aria-label={folded ? 'Mostrar a pergunta' : 'Recolher a pergunta'} title={folded ? 'Mostrar' : 'Recolher'} onClick={() => setFolded(!folded)}><Icon n="chevron" size={15} /></button></h2>
+        {!folded && <div id={`qp-body-${p.id}`} className="qp-body">
         {p.questions.map((q, i) => (
           <fieldset key={i} className="qp-q">
             <legend><span className="qp-tag">{q.header}</span>{q.question}{q.multiSelect && <small> (marque quantas quiser)</small>}</legend>
@@ -67,6 +71,7 @@ export function QuestionPrompt({ taskId }: { taskId: number }) {
           <button type="button" disabled={busy} onClick={() => reply(null)}>Pular</button>
         </div>
         <small>{who} espera a resposta para continuar. Pular (ou não responder a tempo) faz ele seguir com a suposição mais segura.</small>
+        </div>}
       </form>
     </div>
   )

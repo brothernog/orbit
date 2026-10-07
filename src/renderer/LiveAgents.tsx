@@ -31,17 +31,18 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 function Row({ a }: { a: TaskAgent }) {
   const waiting = a.status === 'awaiting_context_approval', running = a.status === 'running', done = DONE_ICON[a.status]
   const who = `${PROVIDER[a.provider]?.label ?? a.provider}${a.model ? ` ${a.model}` : ''}`
-  const sub = running ? doingText(a.doing) ?? 'começando…' : waiting ? 'aguardando você aprovar o contexto' : who
+  const sub = running ? doingText(a.doing) ?? 'começando…' : waiting ? 'aguardando você aprovar o contexto' : a.error ? `${who} · ${a.error}` : who
   return (
     <li className={`la-row s-${a.status}`}>
       <Avatar provider={a.provider} size="sm" live={running} />
       <span className="la-body">
         <span className="la-title" title={a.title}>{a.title}</span>
-        <span className="la-sub" title={`${who} · ${a.mode === 'edit' ? 'edição' : 'só leitura'}`}>{sub}</span>
+        <span className="la-sub" title={`${who} · ${a.mode === 'edit' ? 'edição' : 'só leitura'}${a.error ? `
+${a.error}` : ''}`}>{sub}</span>
       </span>
       {running && a.startedAt && <span className="la-time">{elapsedMin(a.startedAt)}</span>}
       {waiting && <span className="la-wait">você</span>}
-      {done && <span className="la-end" title={done.label}><Icon n={done.n} size={14} /></span>}
+      {done && <span className="la-end" title={a.error ? `${done.label}: ${a.error}` : done.label}><Icon n={done.n} size={14} /></span>}
     </li>
   )
 }
