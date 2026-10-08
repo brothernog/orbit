@@ -118,6 +118,9 @@ test('leitura: executa o filho com modo read (limitado pelo executor), sem recur
   assert.ok(!/Contexto aprovado|Contexto informado/.test(p.input)) // sem contexto candidato, nada alem da ordem direta
   assert.deepEqual(AGENTS.codex.chatArgs(undefined, p.opts).slice(0, 6), ['exec', '--json', '--skip-git-repo-check', '-s', 'read-only', '-m']) // leitura efetiva na sandbox
   const row = db.prepare('SELECT * FROM delegations').get() as any
+  assert.equal(p.taskId, taskId)
+  assert.equal(p.delegationId, row.id)
+  assert.equal(p.objective, 'leia src/a.gd e resuma')
   assert.deepEqual([row.status, row.mode, row.provider, row.task_id], ['completed', 'read', 'codex', taskId])
   assert.equal(f.notes.length, 2) // inicio e fim visiveis no chat do pai
   assert.match(f.notes[0], /↳ Delegacao #\d+ para codex\/gpt-6-luna \(low\) em modo somente leitura/)

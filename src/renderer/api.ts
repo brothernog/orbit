@@ -1,9 +1,12 @@
 // Ponte com o processo principal (ver src/preload/index.ts) e tipos compartilhados da interface.
 import { expireRead, invalidateRead, setRead } from './readCache.ts'
+export type { OrbitAgent, OrbitActivity } from '../main/orbitActivity.ts'
+export type { FileWindow as OrbitFile } from '../main/orbitFiles.ts'
 import { SETTINGS_READS } from '../main/settingsReads.ts'
 import type { Catalog, ModelOpt } from '../main/catalog.ts'
 import type { SendResult } from '../main/chatService.ts'
 import type { TaskAgent } from '../main/agentsLive.ts'
+import type { Steps } from './stepsView'
 import type { StoredMetric, Task as StoredTask, TaskSel } from '../main/tasks.ts'
 export type { Catalog, ModelOpt, SendResult }
 
@@ -57,13 +60,13 @@ export type Task = StoredTask & {
 }
 export type Msg = {
   id: number; role: 'user' | 'agent' | 'system'; text: string; status?: 'completed' | 'failed' | 'cancelled' | null
-  provider?: string | null; account_id?: number | null; model?: string | null; effort?: string | null; created_at: string
+  provider?: string | null; account_id?: number | null; model?: string | null; effort?: string | null; steps?: string | null; created_at: string
 }
 export type Sel = TaskSel
 export type Metric = StoredMetric
 // Conversa da tarefa (IPC taskChat).
 export type TaskChat = {
-  task: Task; running: boolean; awaitingContext: boolean; live: string; session: string | null; sessions: { provider: string; profile: string }[]
+  task: Task; running: boolean; awaitingContext: boolean; live: string; liveSteps?: Steps | null; session: string | null; sessions: { provider: string; profile: string }[]
   sel: Sel | null; metric: Metric | null; messages: Msg[]
 }
 

@@ -2,6 +2,7 @@
 // Formatos conferidos nas versoes instaladas (claude 2.1.284, codex 0.147.0, gemini 0.60.0, opencode 1.18.31);
 // os campos de eventos que so aparecem em chamadas reais estao marcados em docs/roadmap.md como nao validados.
 import path from 'node:path'
+import { activityText, claudeResultActivity, codexMessages, opencodeActivity, toolActivity, type Activity } from './agentActivity.ts'
 
 // Medidas de tokens. Cada campo so existe quando o provedor o informa; nada e inferido do texto visivel.
 export type Metric = {
@@ -24,6 +25,7 @@ export type Ev =
   | { kind: 'text'; text: string; delta?: boolean } // delta: pedaco de um texto maior, concatenar sem separador
   | { kind: 'tool'; name: string; detail?: string; ref?: string } // detail: alvo curto (arquivo, padrao, comando), so para mostrar o que o agente faz agora; ref: id da chamada
   | { kind: 'toolResult'; ref: string; ok: boolean | null; output?: string } // resultado informado pela CLI (erro/exit code); null = a CLI nao disse
+  | { kind: 'activity'; activity: Activity } // observabilidade ao vivo, fora de resposta/memoria
   | { kind: 'usage'; data: any } // janelas de limite da CONTA (rate limit), nao e contexto
   | { kind: 'context'; metric: Metric; accumulate?: boolean; key?: string } // accumulate: somar consumo ao anterior (eventos por passo); key: id do passo, repetido = ignorado
   | { kind: 'note'; text: string } // aviso nao fatal (ex.: acao negada pela protecao do provedor)
@@ -71,7 +73,7 @@ export const safeArg = (s: string) => {
 }
 // Alvo curto de uma ferramenta: nome do arquivo (sem a pasta), padrao de busca ou inicio do comando.
 export const toolDetail = (i: any): string | undefined => {
-  const f = i?.file_path ?? i?.notebook_path ?? i?.path
+  const f = i?.file_path ?? i?.filePath ?? i?.notebook_path ?? i?.path
   if (typeof f === 'string' && f) return f.split(/[\\/]/).filter(Boolean).pop() // os dois separadores: a CLI pode rodar em outro sistema que o app
   const c = i?.command ?? i?.pattern ?? i?.query ?? i?.url
   return typeof c === 'string' && c ? c.replace(/\s+/g, ' ').slice(0, 60) : undefined
@@ -87,14 +89,36 @@ const msg = (v: any) => str(v?.message) ?? str(v?.error?.message) ?? str(v?.data
 export const AGENTS: Record<string, Agent> = {
   claude: {
     cmd: 'claude', promptArgs: p => [q(p)], resumeArgs: s => ['--resume', safeArg(s)],
-    chatArgs: (s, o) => ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', o?.permissionMode === 'auto' && o.mode !== 'read' ? 'auto' : 'acceptEdits', ...flag('--model', o?.model), ...flag('--effort', o?.effort), ...imgDirs('--add-dir', o), ...claudeTools(o), ...(o?.extra ?? []), ...(s ? ['--resume', safeArg(s)] : [])],
+    chatArgs: (s, o) => ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--forward-subagent-text', '--permission-mode', o?.permissionMode === 'auto' && o.mode !== 'read' ? 'auto' : 'acceptEdits', ...flag('--model', o?.model), ...flag('--effort', o?.effort), ...imgDirs('--add-dir', o), ...claudeTools(o), ...(o?.extra ?? []), ...(s ? ['--resume', safeArg(s)] : [])],
     parse: ev => {
       const out: Ev[] = []
+      const content = Array.isArray(ev.message?.content) ? ev.message.content : []
+      const native = str(ev.parent_tool_use_id)
+      // A CLI encaminha o transcript nativo; ele nunca vira resposta/sessao/uso do agente pai.
+      if (native && (ev.type === 'assistant' || ev.type === 'user')) {
+        const extra = { agent: native.slice(0, 200), title: 'Subagente CLI', direction: ev.type === 'assistant' ? 'received' as const : 'sent' as const }
+        for (const [index, c] of content.entries()) {
+          const ref = str(ev.message?.id) ? `${ev.message.id}:${index}` : undefined
+          if (c?.type === 'text') out.push(...activityText('message', c.text, { ...extra, ref }).map(activity => ({ kind: 'activity' as const, activity })))
+          else if (c?.type === 'thinking') out.push(...activityText('thinking', c.thinking, { ...extra, ref }).map(activity => ({ kind: 'activity' as const, activity })))
+          else if (c?.type === 'tool_use') {
+            const activities = toolActivity('claude', String(c.name), c.input, str(c.id))
+            if (!activities.length) activities.push({ kind: 'tool', tool: String(c.name), ...(str(c.id) ? { ref: c.id } : {}) })
+            out.push(...activities.map(activity => ({ kind: 'activity' as const, activity: { ...activity, ...extra } })))
+          }
+        }
+        if (ev.type === 'user' && !content.some((c: any) => c?.type === 'tool_result' && c.is_error === true)) out.push(...claudeResultActivity(ev.tool_use_result, str(content.find((c: any) => c?.type === 'tool_result')?.tool_use_id)).map(activity => ({ kind: 'activity' as const, activity: { ...activity, ...extra } })))
+        return out
+      }
       if (str(ev.session_id)) out.push({ kind: 'session', id: ev.session_id })
       if (ev.type === 'assistant') {
-        for (const c of ev.message?.content ?? []) {
+        for (const [index, c] of content.entries()) {
           if (c.type === 'text' && c.text) out.push({ kind: 'text', text: c.text })
-          else if (c.type === 'tool_use') { const detail = toolDetail(c.input); out.push({ kind: 'tool', name: c.name, ...(detail ? { detail } : {}), ...(str(c.id) ? { ref: c.id } : {}) }) }
+          else if (c.type === 'tool_use') {
+            const detail = toolDetail(c.input)
+            out.push({ kind: 'tool', name: c.name, ...(detail ? { detail } : {}), ...(str(c.id) ? { ref: c.id } : {}) })
+            out.push(...toolActivity('claude', String(c.name), c.input, str(c.id)).map(activity => ({ kind: 'activity' as const, activity })))
+          } else if (c.type === 'thinking') out.push(...activityText('thinking', c.thinking, { ...(str(ev.message?.id) ? { ref: `${ev.message.id}:${index}` } : {}) }).map(activity => ({ kind: 'activity' as const, activity })))
         }
         // Contexto ocupado = entrada total da ULTIMA chamada ao modelo (entrada + cache lido + cache criado).
         const u = ev.message?.usage
@@ -102,10 +126,15 @@ export const AGENTS: Record<string, Agent> = {
           out.push({ kind: 'context', metric: { occupied: u.input_tokens + (num(u.cache_read_input_tokens) ?? 0) + (num(u.cache_creation_input_tokens) ?? 0), source: 'usage da ultima mensagem do Claude' } })
       }
       // Resultado de cada ferramenta: o Claude marca is_error (no Bash, exit code diferente de zero).
-      if (ev.type === 'user') for (const c of ev.message?.content ?? []) {
+      if (ev.type === 'user') for (const c of content) {
         if (c?.type !== 'tool_result' || !str(c.tool_use_id)) continue
         const output = typeof c.content === 'string' ? c.content : Array.isArray(c.content) ? c.content.map((x: any) => (x?.type === 'text' ? x.text : '')).join('\n') : ''
         out.push({ kind: 'toolResult', ref: c.tool_use_id, ok: typeof c.is_error === 'boolean' ? !c.is_error : null, output: output.slice(-20_000) })
+      }
+      if (ev.type === 'user' && !content.some((c: any) => c?.type === 'tool_result' && c.is_error === true)) out.push(...claudeResultActivity(ev.tool_use_result, str(content.find((c: any) => c?.type === 'tool_result')?.tool_use_id)).map(activity => ({ kind: 'activity' as const, activity })))
+      if (ev.type === 'user' && ['peer', 'coordinator', 'task-notification', 'channel', 'observer'].includes(ev.origin?.kind)) {
+        const texts = typeof ev.message?.content === 'string' ? [ev.message.content] : content.filter((c: any) => c?.type === 'text').map((c: any) => c.text)
+        for (const [index, text] of texts.entries()) out.push(...activityText('message', text, { direction: 'received', title: 'Mensagem de coordenacao da CLI', ...(str(ev.uuid) ? { ref: `${ev.uuid}:${index}` } : {}) }).map(activity => ({ kind: 'activity' as const, activity })))
       }
       if ((ev.type === 'rate_limit_event' && ev.rate_limit_info?.status === 'rejected') || (ev.type === 'assistant' && (ev.error ?? ev.message?.error) === 'rate_limit')) out.push({ kind: 'limit' })
       if (ev.type === 'rate_limit_event' && ev.rate_limit_info?.unifiedWindows) out.push({ kind: 'usage', data: ev.rate_limit_info.unifiedWindows })
@@ -134,9 +163,23 @@ export const AGENTS: Record<string, Agent> = {
     parse: ev => {
       switch (ev.type) {
         case 'thread.started': return str(ev.thread_id) ? [{ kind: 'session', id: ev.thread_id }] : []
-        case 'item.started': return ev.item?.type === 'command_execution' ? [{ kind: 'tool', name: String(ev.item.command), ...(str(ev.item.id) ? { ref: ev.item.id } : {}) }] : []
+        case 'item.started':
+        case 'item.updated': {
+          const i = ev.item
+          if (i?.type === 'command_execution') return ev.type === 'item.started' ? [{ kind: 'tool', name: String(i.command), ...(str(i.id) ? { ref: i.id } : {}) }] : []
+          if (i?.type === 'reasoning') return activityText('thinking', i.text, { ref: str(i.id) }).map(activity => ({ kind: 'activity', activity }))
+          if (i?.type === 'collab_tool_call') return codexMessages(i, ev.type).map(activity => ({ kind: 'activity', activity }))
+          if (i?.type === 'mcp_tool_call' && ev.type === 'item.started') {
+            const activities = toolActivity('codex', String(i.tool), i.arguments, str(i.id))
+            return (activities.length ? activities : [{ kind: 'tool' as const, tool: String(i.tool), ...(str(i.id) ? { ref: i.id } : {}) }]).map(activity => ({ kind: 'activity', activity }))
+          }
+          return []
+        }
         case 'item.completed':
           if (ev.item?.type === 'command_execution' && str(ev.item.id)) return [{ kind: 'toolResult', ref: ev.item.id, ok: typeof ev.item.exit_code === 'number' ? ev.item.exit_code === 0 : null, output: String(ev.item.aggregated_output ?? '').slice(-20_000) }]
+          if (ev.item?.type === 'reasoning') return activityText('thinking', ev.item.text, { ref: str(ev.item.id) }).map(activity => ({ kind: 'activity', activity }))
+          if (ev.item?.type === 'collab_tool_call') return codexMessages(ev.item, ev.type).map(activity => ({ kind: 'activity', activity }))
+          if (ev.item?.type === 'file_change' && ev.item.status === 'completed') return (Array.isArray(ev.item.changes) ? ev.item.changes : []).slice(0, 100).filter((c: any) => str(c?.path)).map((c: any) => ({ kind: 'activity', activity: { kind: 'edit', tool: 'file_change', path: c.path, ...(str(ev.item.id) ? { ref: ev.item.id } : {}) } }))
           return ev.item?.type === 'agent_message' && ev.item.text ? [{ kind: 'text', text: ev.item.text }] : []
         // `exec --json` so informa o uso acumulado do thread; janela e contexto ocupado nao vem neste fluxo.
         case 'turn.completed': return [
@@ -164,7 +207,11 @@ export const AGENTS: Record<string, Agent> = {
       switch (ev.type) {
         case 'init': return str(ev.session_id) ? [{ kind: 'session', id: ev.session_id }] : []
         case 'message': return ev.role === 'assistant' && ev.content ? [{ kind: 'text', text: String(ev.content), delta: !!ev.delta }] : []
-        case 'tool_use': return [{ kind: 'tool', name: String(ev.tool_name) }]
+        case 'tool_use': {
+          const detail = toolDetail(ev.parameters)
+          return [{ kind: 'tool', name: String(ev.tool_name), ...(detail ? { detail } : {}), ...(str(ev.tool_id) ? { ref: ev.tool_id } : {}) }, ...toolActivity('gemini', String(ev.tool_name), ev.parameters, str(ev.tool_id)).map(activity => ({ kind: 'activity' as const, activity }))]
+        }
+        case 'tool_result': return str(ev.tool_id) ? [{ kind: 'toolResult', ref: ev.tool_id, ok: ev.status === 'success' ? true : ev.status === 'error' ? false : null, output: typeof ev.output === 'string' ? ev.output.slice(-20_000) : '' }] : []
         case 'error': return [{ kind: 'error', message: msg(ev), fatal: ev.severity === 'error' }]
         case 'result': {
           if (ev.status === 'error') return [{ kind: 'error', message: 'O Gemini terminou com erro.', fatal: true }]
@@ -180,12 +227,18 @@ export const AGENTS: Record<string, Agent> = {
     cmd: 'opencode', promptArgs: p => ['--prompt', q(p)], resumeArgs: s => ['--session', safeArg(s)],
     // --print-logs --log-level ERROR: o evento de erro do stdout e generico ("Unexpected server error"); a causa real (ex.: modelo inexistente
     // no opencode.json do projeto) so aparece no stderr, e so com logs de erro ligados. Nao muda o stdout.
-    chatArgs: (s, o) => ['run', '--format', 'json', '--print-logs', '--log-level', 'ERROR', ...flag('-m', o?.model), ...flag('--variant', o?.effort), ...(o?.images?.length ? ['-f', ...o.images] : []), ...(o?.extra ?? []), ...(s ? ['--session', safeArg(s)] : [])],
+    chatArgs: (s, o) => ['run', '--format', 'json', '--print-logs', '--log-level', 'ERROR', '--thinking', ...flag('-m', o?.model), ...flag('--variant', o?.effort), ...(o?.images?.length ? ['-f', ...o.images] : []), ...(o?.extra ?? []), ...(s ? ['--session', safeArg(s)] : [])],
     parse: ev => {
       const out: Ev[] = []
       if (str(ev.sessionID)) out.push({ kind: 'session', id: ev.sessionID })
       if (ev.type === 'text' && ev.part?.text) out.push({ kind: 'text', text: ev.part.text })
-      else if (ev.type === 'tool_use') out.push({ kind: 'tool', name: String(ev.part?.tool) })
+      else if (ev.type === 'tool_use') {
+        const detail = toolDetail(ev.part?.state?.input), ref = str(ev.part?.callID ?? ev.part?.id)
+        out.push({ kind: 'tool', name: String(ev.part?.tool), ...(detail ? { detail } : {}), ...(ref ? { ref } : {}) })
+        out.push(...opencodeActivity(ev.part).map(activity => ({ kind: 'activity' as const, activity })))
+        if (ref && (ev.part?.state?.status === 'completed' || ev.part?.state?.status === 'error')) out.push({ kind: 'toolResult', ref, ok: ev.part.state.status === 'completed', output: String(ev.part.state.output ?? ev.part.state.error ?? '').slice(-20_000) })
+      }
+      else if (ev.type === 'reasoning') out.push(...activityText('thinking', ev.part?.text, { ref: str(ev.part?.id) }).map(activity => ({ kind: 'activity' as const, activity })))
       else if (ev.type === 'step_finish') {
         const t = ev.part?.tokens
         if (t) { // por passo: o consumo soma; a entrada do ultimo passo e uma APROXIMACAO do contexto ocupado

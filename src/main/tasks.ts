@@ -68,7 +68,7 @@ export const summaryTitle = (db: DatabaseSync, id: number, title: string, provis
   db.prepare('UPDATE tasks SET title=? WHERE id=? AND title=?').run(clip(title, 60), id, provisional)
 
 // So as colunas que o chat mostra (renderer/api.ts Msg): clean/clean_parts (transferencia de contexto) nao vao a cada abertura.
-export const taskMessages = (db: DatabaseSync, id: number) => all(db, 'SELECT id, role, text, status, provider, account_id, model, effort, created_at FROM messages WHERE task_id=? ORDER BY id', id)
+export const taskMessages = (db: DatabaseSync, id: number) => all(db, 'SELECT id, role, text, status, provider, account_id, model, effort, steps, created_at FROM messages WHERE task_id=? ORDER BY id', id)
 
 // ---- Sessoes nativas: uma por (tarefa, provedor, perfil). Provedores diferentes nunca compartilham sessao.
 export const profileOf = (provider: string, accountId?: number | null) => (provider === 'claude' ? String(accountId ?? '') : '')

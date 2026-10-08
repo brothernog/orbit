@@ -34,7 +34,7 @@ function Seismo({ ticks, n = 48 }: { ticks: Tick[]; n?: number }) {
 }
 
 // Arquivos que a tarefa esta mudando, ao vivo. Tudo vem do disco e do Git pelo processo principal: nao gasta tokens.
-export function FilesPanel({ task, provider, onClose }: { task: Task; provider?: string; onClose: () => void }) {
+export function FilesPanel({ task, provider, onClose, onEnableOrbit }: { task: Task; provider?: string; onClose: () => void; onEnableOrbit?: () => void }) {
   const [st, setSt] = useState<State | null>(null)
   const [err, setErr] = useState('')
   const [ticks, setTicks] = useState<Tick[]>([])
@@ -99,6 +99,7 @@ export function FilesPanel({ task, provider, onClose }: { task: Task; provider?:
     <aside className="panel files-panel" aria-label="Arquivos alterados" style={{ '--c': provider ? `var(--p-${provider})` : 'var(--accent)' } as CSSProperties}>
       <header>
         <h2 className="panel-title" title="Lidos do disco e do Git pelo próprio app. Não usa IA nem tokens.">Arquivos alterados</h2>
+        {onEnableOrbit && <button className="mini" onClick={onEnableOrbit} title="Ativar planeta e acompanhar os agentes">Planeta</button>}
         <button className="icon" aria-label="Fechar arquivos" title="Fechar arquivos" onClick={onClose}><Icon n="close" size={16} /></button>
       </header>
       <Seismo ticks={ticks} />

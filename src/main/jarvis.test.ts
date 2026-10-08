@@ -25,7 +25,7 @@ test('jarvis enxuto: sem ferramentas, sem MCP global, instrucoes no prompt de si
   assert.ok(lean.includes('--strict-mcp-config') && !lean.includes('--mcp-config')) // nenhum servidor MCP (nem os da configuracao global)
   assert.equal(lean[lean.indexOf('--system-prompt-file') + 1], JARVIS_SYSTEM_FILE) // relativo: nada de caminho com espacos na linha de comando
   assert.ok(!lean.some(a => a === '')) // nenhum argumento vazio
-  assert.deepEqual(jarvisArgs({ model: 'm', effort: 'e', lean: false }), ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--model', 'm', '--effort', 'e', '--tools', 'Read,Grep,Glob'])
+  assert.deepEqual(jarvisArgs({ model: 'm', effort: 'e', lean: false }), ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--forward-subagent-text', '--permission-mode', 'acceptEdits', '--model', 'm', '--effort', 'e', '--tools', 'Read,Grep,Glob'])
   const snap = { now: 'agora', projects: [], agents: [], todo: [] }
   const leanPrompt = buildPrompt(snap, [], 'oi', { lean: true })
   assert.ok(leanPrompt.startsWith('Retrato (agora)') && !leanPrompt.includes('Voce e o Jarvis'))

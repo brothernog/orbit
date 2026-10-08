@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import os from 'node:os'
 import path from 'node:path'
 import { AGENTS, type Metric } from './adapters.ts'
+import type { Activity } from './agentActivity.ts'
 
 import { fail, sameKey as sameDir } from './guard.ts'
 import { delegateTool, mcpWire, normalizeSettings, WorkspaceGuard, type ParentCtx } from './delegation.ts'
@@ -27,10 +28,11 @@ import { readSkill } from './skills.ts'
 
 import { autoTitle, contextFor, DEFAULT_TITLE, getTask, profileOf, saveSel, saveSession, sessionOf, stripTitle, summaryTitle, titleIn, type TaskSel } from './tasks.ts'
 import type { LogEntry } from './providers.ts'
+import { createStepLog, throttle, type StepSnapshot } from './steps.ts'
 import type { AccountUsage } from './accountUsage.ts'
 
 type Sel = TaskSel
-export type ActiveRun = { runId: number; cancel: (sync?: boolean) => void; text: string; workspace: string; provider?: string; model?: string; startedAt?: number; doing?: { tool: string; detail?: string } }
+export type ActiveRun = { runId: number; cancel: (sync?: boolean) => void; text: string; workspace: string; provider?: string; model?: string; startedAt?: number; doing?: { tool: string; detail?: string }; steps?: () => StepSnapshot }
 type ChatDeps = {
   db: DatabaseSync; active: Map<number, ActiveRun>; guard: WorkspaceGuard; broker: PermissionBroker; workspaceBusy: (cwd: string) => boolean
   asTask: (id: number) => ReturnType<typeof getTask>; taskCwd: (t: ReturnType<typeof getTask>) => Promise<string>
@@ -45,6 +47,8 @@ type ChatDeps = {
   registerParent: (token: string, parent: ParentCtx, perm: boolean) => void; unregisterToken: (token: string) => void
   attachRoot: string; linkedinDir: string
   onRunStart?: (taskId: number, runId: number, cwd: string) => void // linha de base dos arquivos para o resumo do aviso
+  onActivity?: (taskId: number, runId: number, cwd: string, provider: string, activity: Activity) => void
+  onRunEnd?: (taskId: number, runId: number, provider: string) => void
   engineGrants?: (game: string, cwd: string) => EngineGrants // engines do organizador presentes na pasta (Godot/Unity/Blender)
   summaryTitles?: () => boolean // Configuracoes: titulo-resumo pelo agente (padrao ligado)
   questions?: { expire: (o: { runId: number }) => void } // perguntas pendentes do agente (questions.ts)
@@ -156,17 +160,21 @@ export function createChatService(d: ChatDeps) {
     const runId = startRun(db, { taskId: t.id, provider: sel.provider, accountId: sel.accountId, model: sel.model, effort: sel.effort }, text, notice)
     const provisional = autoTitle(db, t.id, text)
     const deliveries = plan.deliver.map(x => ({ x, id: recordDelivery(db, x.pkg, sid ?? '', x.items) }))
-    const entry = { runId, cancel: (_sync?: boolean) => {}, text: '', workspace: cwd, provider: sel.provider, model: sel.model, startedAt: Date.now(), doing: undefined as { tool: string; detail?: string } | undefined }
+    const entry = { runId, cancel: (_sync?: boolean) => {}, text: '', workspace: cwd, provider: sel.provider, model: sel.model, startedAt: Date.now(), doing: undefined as { tool: string; detail?: string } | undefined, steps: undefined as (() => StepSnapshot) | undefined }
     dctx.runId = runId
     if (wire) registerParent(token, dctx, perm)
     const savePartial = partialSaver(db, runId)
+    const stepLog = createStepLog(), emitSteps = throttle(() => active.get(t.id) === entry && emit({ taskId: t.id, steps: stepLog.snapshot() }), 400)
+    entry.steps = () => stepLog.snapshot()
     const acts: Act[] = [] // ferramenta + alvo (+ resultado dos testes informado pela CLI), para o resumo do aviso
     try { d.onRunStart?.(t.id, runId, cwd) } catch {}
+    try { d.onActivity?.(t.id, runId, cwd, sel.provider, { kind: 'tool', summary: 'Execução iniciada' }) } catch {}
     const run = runChat({
       cmd: a.cmd, args, cwd, env: { ...envFor(sel), ...wire?.env, ...permEnv }, parse: a.parse,
       input, // a mensagem vai pelo stdin, nunca na linha de comando
-      onTool: (tool, detail, ref) => { entry.doing = { tool: tool.slice(0, 80), detail }; if (acts.length < 500) acts.push({ line: `${tool} ${detail ?? ''}`.trim().slice(0, 300), ref }) },
-      onToolResult: (ref, ok, output) => { const a = acts.find(x => x.ref === ref); if (a && isTestCommand(a.line)) { a.ok = ok; a.summary = summarizeTestOutput(output)?.summary } },
+      onActivity: activity => { stepLog.activity(activity); emitSteps(); try { d.onActivity?.(t.id, runId, cwd, sel.provider, activity) } catch {} },
+      onTool: (tool, detail, ref) => { stepLog.tool(tool, detail, ref); emitSteps(); entry.doing = { tool: tool.slice(0, 80), detail }; if (acts.length < 500) acts.push({ line: `${tool} ${detail ?? ''}`.trim().slice(0, 300), ref }) },
+      onToolResult: (ref, ok, output) => { stepLog.result(ref, ok); emitSteps(); const a = acts.find(x => x.ref === ref); if (a && isTestCommand(a.line)) { a.ok = ok; a.summary = summarizeTestOutput(output)?.summary } },
       maxTools: contextLimits().maxToolsPerMessage, // so a mensagem do usuario; filhos delegados ja tem timeout proprio
       onSession: id => { saveSession(db, t.id, sel.provider, profile, id); bindGrantSession(db, grant, id) },
       onText: full => {
@@ -191,6 +199,7 @@ export function createChatService(d: ChatDeps) {
     active.set(t.id, entry)
     run.result.then(r => {
       active.delete(t.id)
+      try { d.onRunEnd?.(t.id, runId, sel.provider) } catch {}
       unregisterToken(token)
       wire?.cleanup()
       for (const c of dctx.children) c.cancel()
@@ -201,7 +210,7 @@ export function createChatService(d: ChatDeps) {
           r = { ...r, text: stripTitle(r.text), answer: r.answer && stripTitle(r.answer), messages: r.messages?.map(stripTitle) }
           if (title && provisional) { summaryTitle(db, t.id, title, provisional); emit({ taskId: t.id, refresh: true }) }
         }
-        finishRun(db, runId, r)
+        finishRun(db, runId, r, stepLog.json())
       } catch (e: any) { // banco fechado (backup) ou falha de gravacao: a interface ainda recebe o `done`, como falha
         saved = false
         logFor('app')({ category: 'unknown', detail: `resposta da tarefa ${t.id} nao foi gravada: ${e?.message}` })

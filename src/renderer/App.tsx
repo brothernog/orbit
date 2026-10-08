@@ -14,7 +14,7 @@ import { PermissionPrompt } from './PermissionPrompt'
 import { Toasts } from './Toasts'
 import { Limits } from './Limits'
 import { Palette } from './Palette'
-import { FilesPanel } from './FilesPanel'
+import { WorkspaceFiles } from './WorkspaceFiles'
 import { LinkedIn } from './LinkedIn'
 import orbitMark from './orbit-mark.svg'
 import { Confirm, ContextMenu, GroupDialog, ProjectIcon, RenameInput, type MenuItem } from './Nav'
@@ -620,7 +620,7 @@ export default function App() {
             </section>}
       </div>
 
-      {showFiles && <FilesPanel key={task!.id} task={task!} provider={active.find(a => a.taskId === task!.id)?.provider} onClose={() => setFiles(false)} />}
+      {showFiles && <WorkspaceFiles key={task!.id} task={task!} provider={active.find(a => a.taskId === task!.id)?.provider} onClose={() => setFiles(false)} />}
       {inProject && panel && <ProjectPanel key={game} game={game} accounts={accounts} onOpenTask={openTask} onClose={() => setPanel(false)} />}
       {palette && <Palette game={game} games={games} active={active} queue={queue} attOf={attOf} onClose={() => setPalette(false)} onProject={pick} onTask={openTask}
         onOpenTask={t => openQueued(t, false)} onNewTask={() => create()} onHome={goHome} onSettings={goSettings} />}

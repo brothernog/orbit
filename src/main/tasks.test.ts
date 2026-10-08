@@ -214,7 +214,7 @@ test('historico: chat so recebe as colunas exibidas; contexto le so a janela e c
     else put.run('', 'agent', `bruto ${i}`, t, 'claude', 'completed', `limpo ${i} ` + 'c'.repeat(i % 5 * 900), JSON.stringify([`fala a ${i} ` + 'x'.repeat(2000), `fala b ${i} ` + 'y'.repeat(1500)]))
   }
   const [first] = taskMessages(db, t)
-  assert.deepEqual(Object.keys(first).sort(), ['account_id', 'created_at', 'effort', 'id', 'model', 'provider', 'role', 'status', 'text'])
+  assert.deepEqual(Object.keys(first).sort(), ['account_id', 'created_at', 'effort', 'id', 'model', 'provider', 'role', 'status', 'steps', 'text'])
   // Referencia: a implementacao anterior (historico inteiro em memoria).
   const reference = (maxChars: number) => {
     const rows = db.prepare("SELECT id, role, provider, text, clean, clean_parts FROM messages WHERE task_id=? AND id>? AND role IN ('user','agent') AND text<>'' AND NOT (role='agent' AND status='failed') ORDER BY id").all(t, 0) as any[]
