@@ -3,6 +3,7 @@
 export const SETTINGS_READS: Record<string, string> = {
   setContextLimits: 'getContextLimits', setNotifySettings: 'getNotifySettings', setJarvisSettings: 'getJarvisSettings',
   setDelegationSettings: 'getDelegationSettings', setPermissionSettings: 'getPermissionSettings',
+  setWorkspaceOrbit: 'workspaceOrbit',
   setAgentAliases: 'getAgentAliases', setSummaryTitles: 'summaryTitles', setTurnCheckpoints: 'turnCheckpoints', setAutomations: 'getAutomations', setHandover: 'getHandover'
 }
 

@@ -22,7 +22,7 @@ import { engineGrants, type EngineGrants } from './engines.ts'
 import { engineCommandError, validatePreparedEngine } from './engineFlow.ts'
 import { setBlenderScriptRoots } from './blender.ts'
 import { validatePreparedGodot, godotCommandError } from './godotFlow.ts'
-import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, screen, shell, type IpcMainInvokeEvent } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -33,6 +33,10 @@ import { getCatalog, peekCatalog, validateSelection } from './catalog.ts'
 import { codexContextFromRollout, codexLimits, findRollout } from './codexSession.ts'
 import { projectIconData } from './projectIcon.ts'
 import { changedFiles, dirtOf, fileDiff, recentCommits, stopWatching, watchDir } from './fileWatch.ts'
+import type { StepSnapshot } from './steps.ts'
+import type { Activity } from './agentActivity.ts'
+import { createOrbitActivityStore, type OrbitAgent } from './orbitActivity.ts'
+import { readFileWindow, relativeActivityPath } from './orbitFiles.ts'
 import { createPulse } from './pulse.ts'
 import { createNoticeInfo } from './noticeInfo.ts'
 import { createAccounts } from './accounts.ts'
@@ -272,7 +276,7 @@ async function launchTask(taskId: number, sel: Sel, resume: boolean, isolate: bo
 // ---- Chat: cada mensagem roda a CLI em modo headless e retoma EXATAMENTE a sessao gravada para
 // (tarefa, provedor, perfil). O historico e da tarefa; trocar de provedor nao o esconde.
 const childDoing = new Map<number, Doing>() // ferramenta atual de cada filho (delegacao) rodando: dock e chat
-const active = new Map<number, { runId: number; cancel: (sync?: boolean) => void; text: string; workspace: string; provider?: string; model?: string; startedAt?: number; doing?: { tool: string; detail?: string } }>()
+const active = new Map<number, { runId: number; cancel: (sync?: boolean) => void; text: string; workspace: string; provider?: string; model?: string; startedAt?: number; doing?: { tool: string; detail?: string }; steps?: () => StepSnapshot }>()
 let win: BrowserWindow | undefined
 app.on('second-instance', () => { if (!win || win.isDestroyed()) return; if (win.isMinimized()) win.restore(); win.focus() })
 
@@ -280,7 +284,7 @@ function taskChat(taskId: number, sel: Sel) {
   const t = asTask(taskId)
   const sessions = db.prepare('SELECT provider, profile FROM task_sessions WHERE task_id=?').all(t.id)
   return {
-    task: t, running: active.has(t.id), awaitingContext: !!awaitingSend(db, t.id), live: active.get(t.id)?.text ?? '',
+    task: t, running: active.has(t.id), awaitingContext: !!awaitingSend(db, t.id), live: active.get(t.id)?.text ?? '', liveSteps: active.get(t.id)?.steps?.() ?? null,
     session: sessionOf(db, t.id, sel.provider, profileOf(sel.provider, sel.accountId)) ?? null, sessions,
     sel: getSel(db, t.id), metric: getMetric(db, t.id, sel.provider, profileOf(sel.provider, sel.accountId)),
     messages: taskMessages(db, t.id)
@@ -290,6 +294,36 @@ function taskChat(taskId: number, sel: Sel) {
 const pct = (w: any) => w && { utilization: w.utilization * 100, resets_at: new Date(w.resetsAt * 1000).toISOString() }
 const send = (ev: object) => { if (win && !win.isDestroyed()) win.webContents.send('chat', ev) }
 const emit = (ev: object) => { send(ev); try { attend(ev) } catch {} } // aviso e opcional: nunca derruba o evento
+const orbitActivity = createOrbitActivityStore()
+const orbitPending = new Map<string, { taskId: number; agent: OrbitAgent }>()
+let orbitTimer: ReturnType<typeof setTimeout> | undefined
+const flushOrbit = () => {
+  orbitTimer = undefined
+  for (const orbit of orbitPending.values()) send({ orbitActivity: orbit })
+  orbitPending.clear()
+}
+function reportOrbit(taskId: number, id: string, provider: string, cwd: string, activity: Activity) {
+  try {
+    const nativeId = activity.agent ? `${id}:native:${activity.agent.slice(0, 120)}` : id
+    const file = activity.path ? relativeActivityPath(cwd, activity.path) : undefined
+    let image: string | undefined
+    if (!file && activity.kind === 'image' && activity.path) {
+      const root = path.join(attachRoot, String(taskId)), rel = relativeActivityPath(root, activity.path)
+      if (rel) image = safeJoin(root, rel)
+    }
+    const agent = orbitActivity.record(taskId, nativeId, provider, { ...activity, path: file ?? image, ...(!file && !image ? { line: undefined, endLine: undefined } : {}) })
+    orbitPending.set(`${taskId}:${nativeId}`, { taskId, agent })
+    // Tokens parciais viram no maximo dez atualizacoes de UI por segundo; nenhuma consulta Git aqui.
+    orbitTimer ??= setTimeout(flushOrbit, 100)
+  } catch {} // observabilidade nunca interrompe a execucao
+}
+function finishOrbit(taskId: number, id: string, provider: string) {
+  for (const a of orbitActivity.snapshot(taskId).agents.filter(a => a.id === id || a.id.startsWith(`${id}:native:`))) {
+    const agent = orbitActivity.finish(taskId, a.id, provider)
+    orbitPending.set(`${taskId}:${a.id}`, { taskId, agent })
+  }
+  clearTimeout(orbitTimer); flushOrbit()
+}
 
 // Avisos de atencao (notify.ts). Com a Orbita em foco: cartao dentro do app. Fora de foco: janela propria de aviso no canto da tela
 // (mesmo visual do app, sem roubar o foco) e a barra de tarefas pisca. Ao voltar para o app, o que ficou pendente vira cartao la dentro.
@@ -442,11 +476,23 @@ const delegationDeps: Deps = {
   catalogCheck: async (provider, model, effort) => validateSelection(await getCatalog(provider, envFor({ provider }), false), model, effort),
   envFor: (provider, accountId) => envFor({ provider, accountId }),
   otherTasksActiveIn: (ws, taskId) => commands.busy(ws) || [...active].some(([id, r]) => id !== taskId && sameDir(r.workspace, ws)),
-  runChild: ({ provider, opts, cwd, env, input, session, delegationId }) => {
+  runChild: ({ taskId, objective, provider, opts, cwd, env, input, session, delegationId }) => {
     const a = AGENTS[provider]
-    const run = runChat({ cmd: a.cmd, args: a.chatArgs(session, opts), cwd, env, parse: a.parse, input, onTool: (tool, detail) => childDoing.set(delegationId, { tool: tool.slice(0, 80), detail }) })
+    const id = `delegation:${delegationId}`
+    const parent = active.get(taskId)
+    if (parent) reportOrbit(taskId, `chat:${parent.runId}`, parent.provider ?? 'claude', cwd,
+      { kind: 'message', direction: 'sent', title: `Ordem para ${provider}`, summary: objective })
+    reportOrbit(taskId, id, provider, cwd, { kind: 'message', direction: 'received', title: 'Ordem do orquestrador', summary: objective })
+    const run = runChat({ cmd: a.cmd, args: a.chatArgs(session, opts), cwd, env, parse: a.parse, input,
+      onTool: (tool, detail) => childDoing.set(delegationId, { tool: tool.slice(0, 80), detail }),
+      onActivity: activity => reportOrbit(taskId, id, provider, cwd, activity) })
     run.result.finally(() => childDoing.delete(delegationId)).catch(() => {})
-    return run
+    return { cancel: run.cancel, result: run.result.then(r => {
+      const answer = r.answer || r.text
+      if (answer) reportOrbit(taskId, id, provider, cwd, { kind: 'message', direction: 'sent', title: 'Resposta ao orquestrador', summary: answer.slice(0, 16_000), truncated: answer.length > 16_000, ...(answer.length > 16_000 ? { fullText: answer } : {}) })
+      finishOrbit(taskId, id, provider)
+      return r
+    }, e => { finishOrbit(taskId, id, provider); throw e }) }
   },
   // Filhos recebem so as ferramentas de contexto/area de trabalho do papel (nunca delegar). Gemini nao le MCP por execucao: sem consulta incremental.
   childTools: async p => {
@@ -479,7 +525,12 @@ const getMcp = () => (mcpServer ??= startMcpServer<McpCtx>({
       const p = c.kind === 'parent' ? { provider: c.p.provider, taskId: c.p.taskId, runId: c.p.runId, cwd: c.p.cwd } : { provider: c.t.provider ?? 'claude', taskId: c.t.taskId, delegationId: c.t.delegationId, cwd: c.t.cwd }
       return { text: answerText(await broker.handle(p, args, signal)), isError: false }
     }
-    if (c.kind === 'parent' && name === TOOL_NAME) return runDelegation(delegationDeps, c.p, args, signal)
+    if (c.kind === 'parent' && name === TOOL_NAME) {
+      const result = await runDelegation(delegationDeps, c.p, args, signal)
+      reportOrbit(c.p.taskId, `chat:${c.p.runId}`, c.p.provider, c.p.cwd,
+        { kind: 'message', direction: 'received', title: 'Retorno da delegação', summary: result.text.slice(0, 16_000), truncated: result.text.length > 16_000, ...(result.text.length > 16_000 ? { fullText: result.text } : {}) })
+      return result
+    }
     if (c.kind === 'parent' && name === ASK_TOOL_NAME) return questions.ask({ taskId: c.p.taskId, runId: c.p.runId, provider: c.p.provider }, args, signal)
     if (c.kind === 'parent' && name === SUGGEST_TOOL_NAME) {
       const r = suggestTask(db, { taskId: c.p.taskId, runId: c.p.runId, provider: c.p.provider }, args)
@@ -494,7 +545,14 @@ const getMcp = () => (mcpServer ??= startMcpServer<McpCtx>({
     if (c.kind === 'child' && !c.tools.some(t => t.name === name)) return { text: 'Ferramenta nao anunciada para esta execucao.', isError: true }
     const grants = ctxGrants(c), tctx = { ...(c.kind === 'parent' ? parentTool(c.p) : c.t), engines: grantedEngines(grants) }
     if (engineOf(name)) return callEngineTool(db, contextLimits(), tctx, grants, name, args, signal)
-    return callTaskTool(db, contextLimits(), tctx, name, args)
+    const result = await callTaskTool(db, contextLimits(), tctx, name, args)
+    if (name === 'read_file_range' && !result.isError) {
+      const range = /\(linhas (\d+)-(\d+)/.exec(result.text)
+      const delivered = [...result.text.matchAll(/^(\d+)\t/gm)].map(m => Number(m[1]))
+      reportOrbit(tctx.taskId, tctx.role === 'child' ? `delegation:${tctx.delegationId}` : `chat:${tctx.runId}`, tctx.provider ?? (c.kind === 'parent' ? c.p.provider : 'claude'), tctx.cwd,
+        { kind: 'read', tool: name, path: (args as { path: string }).path, ...(range ? { line: delivered[0] ?? Number(range[1]), endLine: delivered.at(-1) ?? Number(range[2]), position: 'reported' } : {}) })
+    }
+    return result
   }
 }))
 
@@ -508,6 +566,8 @@ const { sendTask, decideSend: decideChatSend } = createChatService({
   db, active, guard, broker, asTask, taskCwd, checkSel, contextLimits, delegationSettings, permissionSettings,
   getMcp, mcpDir, nativeFor, envFor, emit, note, logFor, accountRow, setSetting, recordMetric, attachRoot, linkedinDir,
   workspaceBusy: commands.busy, onRunStart: runStart, summaryTitles,
+  onActivity: (taskId, runId, cwd, provider, activity) => reportOrbit(taskId, `chat:${runId}`, provider, cwd, activity),
+  onRunEnd: (taskId, runId, provider) => finishOrbit(taskId, `chat:${runId}`, provider),
   accountUsageWriter: id => accountUsageService.writer(id),
   engineGrants: (game, cwd) => engineGrants(db, game, cwd),
   onFinished: o => handover(o), questions,
@@ -771,6 +831,18 @@ const handlers: Record<string, (...a: any[]) => any> = {
     return { isolated: dir !== t.game, ...(await changedFiles(dir)) }
   },
   fileDiff: (id: number, rel: string, full?: boolean) => { const t = asTask(id); return fileDiff(taskDir(t), asStr(rel, 'arquivo', 1000), full === true) },
+  orbitFile: async (id: number, rel: unknown, line?: unknown) => readFileWindow(await taskCwd(asTask(id)), rel, line),
+  taskOrbit: async (id: number) => { const t = asTask(id); await taskCwd(t); return orbitActivity.snapshot(t.id) },
+  orbitActivityText: async (taskId: number, agentId: unknown, textId: unknown, offset?: unknown) => {
+    const t = asTask(taskId); await taskCwd(t)
+    const start = offset === undefined ? 0 : typeof offset === 'number' && Number.isSafeInteger(offset) && offset >= 0 ? offset : fail('Posição inválida.')
+    return orbitActivity.text(t.id, asStr(agentId, 'agente', 300), asStr(textId, 'texto', 100), start)
+  },
+  workspaceOrbit: () => getSetting('workspaceOrbit') !== 'off',
+  setWorkspaceOrbit: (enabled: unknown) => {
+    if (typeof enabled !== 'boolean') fail('Preferência inválida.')
+    setSetting('workspaceOrbit', enabled ? 'on' : 'off'); send({ workspaceOrbit: enabled }); return enabled
+  },
   stopFiles: () => { filesWatch?.off(); filesWatch = null },
   // Nucleo da home: gravacoes da ultima hora (em memoria) e, por projeto, commits recentes e o que esta sem commit (pasta + worktrees).
   pulseEvents: () => pulse.events(),
@@ -839,6 +911,7 @@ const handlers: Record<string, (...a: any[]) => any> = {
     const t = asTask(id)
     if (active.has(t.id) || commands.hasTask(t.id) || (handlers.listActive() as any[]).some(a => a.taskId === t.id)) fail('Pare a execucao antes de excluir.')
     deleteTask(db, t.id)
+    orbitActivity.forget(t.id)
     emit({ todoChanged: true, productionChanged: true, game: t.game })
   },
   archiveTask: (id: number, archived: boolean) => {
@@ -948,7 +1021,14 @@ const handlers: Record<string, (...a: any[]) => any> = {
     return v
   },
   listDelegations: (taskId: number) => db.prepare('SELECT id, provider, model, effort, mode, objective, status, error, changed_files, out_of_scope, consumed, artifact_id, package_id, continuation_of, started_at, ended_at FROM delegations WHERE task_id=? ORDER BY id DESC LIMIT 50').all(asTask(taskId).id),
-  ...contextHandlers({ db, asTask, asGame, taskCwd, emit, decideSend, contextLimits, waiters, broker, permissionSettings, setSetting, attachRoot }),
+  ...contextHandlers({ db, asTask, asGame, taskCwd, emit, decideSend, contextLimits, waiters, broker, permissionSettings, setSetting, attachRoot,
+    imagePreview: data => {
+      const image = nativeImage.createFromDataURL(data), size = image.getSize()
+      if (image.isEmpty()) return data.length < 512_000 ? data : null
+      const ratio = Math.min(1, 1024 / Math.max(size.width, size.height))
+      return `data:image/jpeg;base64,${image.resize({ width: Math.max(1, Math.round(size.width * ratio)), height: Math.max(1, Math.round(size.height * ratio)) }).toJPEG(75).toString('base64')}`
+    }
+  }),
   // ---- Perguntas do agente (ask_user) e sugestoes de tarefa (suggest_task). Usar a sugestao so cria a tarefa: a ordem volta ao compositor.
   listQuestions: (taskId?: number) => questions.list(taskId == null ? undefined : asTask(taskId).id),
   answerQuestion: (id: number, answers: unknown) => questions.answer(asInt(id, 'pergunta'), answers ?? null),

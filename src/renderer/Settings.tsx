@@ -260,7 +260,18 @@ function TurnCheckpoints() {
   )
 }
 
-const TABS = [['contas', 'Contas'], ['agentes', 'Agentes'], ['permissoes', 'Permissões'], ['delegacao', 'Delegação'], ['avisos', 'Avisos'], ['dados', 'Dados']] as const
+const TABS = [['contas', 'Contas'], ['agentes', 'Agentes'], ['permissoes', 'Permissões'], ['delegacao', 'Delegação'], ['interface', 'Interface'], ['avisos', 'Avisos'], ['dados', 'Dados']] as const
+
+function WorkspaceOrbitSetting() {
+  const read = useCachedRead<boolean>('workspaceOrbit', () => api.workspaceOrbit())
+  const [error, setError] = useState('')
+  if (read.data === undefined) return <small>{read.error ? errText(read.error) : 'Carregando…'}</small>
+  return <div className="deleg">
+    <label className="check"><input type="checkbox" checked={read.data} onChange={e => api.setWorkspaceOrbit(e.target.checked).then(read.set, e => setError(errText(e)))} /> Planeta e acompanhamento dos agentes no painel de arquivos</label>
+    <small>Ligado por padrão. Também pode ser alternado no topo do painel. Desligado, mostra a lista de arquivos alterados.</small>
+    {error && <small className="err" role="alert">{error}</small>}
+  </div>
+}
 
 // Avisos de atencao (src/main/notify.ts). Com o app em foco: cartao dentro dele; fora de foco: janela de aviso no canto da tela.
 type Notify = { done: boolean; failed: boolean; approval: boolean; system: boolean; sound: boolean }
@@ -396,6 +407,7 @@ export function Settings({ accounts, reload, providers, refreshProviders, onGame
         </>}
         {tab === 'permissoes' && <PermissionRules />}
         {tab === 'avisos' && <Card title="Quando avisar"><NotifySettings /></Card>}
+        {tab === 'interface' && <Card title="Painel de arquivos"><WorkspaceOrbitSetting /></Card>}
         {tab === 'dados' && <BackupSettings />}
         {tab === 'delegacao' && <>
           <Card title="Delegação entre provedores"><Delegation goAgents={() => setTab('agentes')} /></Card>

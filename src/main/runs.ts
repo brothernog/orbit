@@ -62,15 +62,15 @@ export function partialSaver(db: DatabaseSync, runId: number, everyMs = 10_000, 
 }
 
 // Encerra a execucao e grava a mensagem do agente uma unica vez (repetir a chamada nao duplica nada).
-export function finishRun(db: DatabaseSync, runId: number, r: Reply) {
+export function finishRun(db: DatabaseSync, runId: number, r: Reply, steps: string | null = null) {
   db.exec('BEGIN')
   try {
     const run = db.prepare('SELECT * FROM runs WHERE id=?').get(runId) as any
     const done = db.prepare("UPDATE runs SET status=?, error=?, category=?, partial='', ended_at=CURRENT_TIMESTAMP WHERE id=? AND status='running'")
       .run(r.status, r.error ?? null, r.category ?? null, runId)
     if (done.changes) {
-      db.prepare('INSERT INTO messages (chat_key, role, text, status, task_id, provider, account_id, model, effort, clean, clean_parts) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-        .run(run.chat_key, 'agent', composeReply(r), r.status, run.task_id, run.provider, run.account_id, run.model, run.effort, cleanReply(r), cleanParts(r))
+      db.prepare('INSERT INTO messages (chat_key, role, text, status, task_id, provider, account_id, model, effort, clean, clean_parts, steps) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(run.chat_key, 'agent', composeReply(r), r.status, run.task_id, run.provider, run.account_id, run.model, run.effort, cleanReply(r), cleanParts(r), steps)
       if (run.task_id) touch(db, run.task_id)
     }
     db.exec('COMMIT')

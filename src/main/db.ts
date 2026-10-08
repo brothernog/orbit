@@ -305,7 +305,9 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
   `),
   // v23: execucoes por tarefa (resumos da lista em briefs.ts, troca de pasta em worktreeTasks.ts, exclusao da tarefa).
   // Sem ele cada consulta varria a tabela runs inteira (EXPLAIN QUERY PLAN: SCAN runs).
-  db => db.exec('CREATE INDEX runs_task ON runs(task_id,id);')
+  db => db.exec('CREATE INDEX runs_task ON runs(task_id,id);'),
+  // v24: passos do agente (steps.ts) em JSON na mensagem do agente. So exibicao no chat: nunca entra em contextFor, prompt ou memoria.
+  db => db.exec('ALTER TABLE messages ADD COLUMN steps TEXT;')
 ]
 
 const PIN_TASK_STATE: Record<string, string> = { aberto: 'aberta', andamento: 'andamento', feito: 'concluida' }

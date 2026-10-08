@@ -2,6 +2,7 @@
 // Sem dependencia de 'electron' (testavel com CLIs simuladas).
 import path from 'node:path'
 import type { Ev, Metric } from './adapters.ts'
+import { activityStream, type Activity } from './agentActivity.ts'
 import { categorize, cliSpawn, killTree, resolveCli, sanitize, type Category } from './providers.ts'
 import { coalesce } from './coalesce.ts'
 
@@ -49,6 +50,7 @@ export type RunOptions = {
   onMetric?: (m: Metric) => void // medida acumulada a cada evento de contexto (medidor ao vivo)
   onTool?: (name: string, detail?: string, ref?: string) => void // cada ferramenta que comeca (o que o agente faz agora); ref liga ao resultado
   onToolResult?: (ref: string, ok: boolean | null, output: string) => void // resultado informado pela CLI (so Claude e Codex informam)
+  onActivity?: (activity: Activity) => void // efemero; nao entra em texto, conclusao ou memoria
   maxTools?: number // teto de ferramentas por mensagem: ao pedir a seguinte, a execucao pausa (0/ausente = sem teto)
 }
 
@@ -73,6 +75,7 @@ export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; resu
     const messages: string[] = [], tools: string[] = []
     let lastWasText = false, retries = 0, paused = false, limited = false
     const seenKeys = new Set<string>() // passos de consumo ja contados (evento repetido nao soma duas vezes)
+    const stream = activityStream()
     const t0 = Date.now()
     const finish = (code: number | null): ChatResult => {
       if (!text && done && doneText) { text = doneText; messages.push(doneText) }
@@ -100,6 +103,7 @@ export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; resu
       if (!line.trim()) return
       let ev: any
       try { ev = JSON.parse(line) } catch { rawOut = tail(rawOut + line + '\n'); return }
+      for (const a of stream.observe(ev)) o.onActivity?.(a)
       for (const e of o.parse(ev)) {
         if (e.kind === 'session') { if (e.id !== session) { session = e.id; o.onSession?.(e.id) } }
         else if (e.kind === 'text') {
@@ -113,7 +117,8 @@ export function runChat(o: RunOptions): { cancel: (sync?: boolean) => void; resu
           return
         }
         else if (e.kind === 'toolResult') o.onToolResult?.(e.ref, e.ok, e.output ?? '')
-        else if (e.kind === 'tool') { o.onTool?.(e.name, e.detail, e.ref); text += `\n\n\`> ${e.name.replace(/`/g, "'").slice(0, 200)}\`\n\n`; textOut.push(text); tools.push(e.name.slice(0, 500)); lastWasText = false }
+        else if (e.kind === 'activity') { if (!((e.activity.kind === 'thinking' || e.activity.kind === 'message') && stream.seen(e.activity.ref))) o.onActivity?.(e.activity) }
+        else if (e.kind === 'tool') { o.onTool?.(e.name, e.detail, e.ref); o.onActivity?.({ kind: 'tool', tool: e.name, ...(e.detail ? { summary: e.detail } : {}), ...(e.ref ? { ref: e.ref } : {}) }); text += `\n\n\`> ${e.name.replace(/`/g, "'").slice(0, 200)}\`\n\n`; textOut.push(text); tools.push(e.name.slice(0, 500)); lastWasText = false }
         else if (e.kind === 'usage') { usage = e.data; o.onUsage?.(e.data) }
         else if (e.kind === 'context') {
           if (e.key && e.accumulate) { if (seenKeys.has(e.key)) continue; seenKeys.add(e.key) }

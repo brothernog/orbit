@@ -19,6 +19,7 @@ export function contextHandlers(d: {
   db: DatabaseSync; asTask: (v: unknown) => Task; asGame: (v: unknown) => string; taskCwd: (t: Task) => Promise<string>; emit: (ev: object) => void
   decideSend: (id: number, hash: string, decision: Decision, keep?: string[]) => Promise<unknown>
   contextLimits: () => ContextLimits; waiters: ApprovalWaiters; broker: PermissionBroker
+  imagePreview?: (data: string) => string | null
   permissionSettings: () => ReturnType<typeof normalizePermissionSettings>; setSetting: (k: string, v: string) => void; attachRoot: string
 }) {
   const { db, asTask, asGame, taskCwd, emit, decideSend, contextLimits, waiters, broker, permissionSettings, setSetting, attachRoot } = d
@@ -77,11 +78,12 @@ export function contextHandlers(d: {
     listTaskArtifacts: (taskId: number) => listArtifacts(db, asTask(taskId).id),
     readTaskArtifact: (taskId: number, id: number, offset?: number) =>
       readArtifact(db, { taskId: asTask(taskId).id, reader: '', id: asInt(id, 'artefato'), offset: Number.isSafeInteger(offset) ? offset : 0, limit: contextLimits().queryChars, asUser: true }),
-    taskImage: async (taskId: number, p: string) => {
+    taskImage: async (taskId: number, p: string, preview?: boolean) => {
       const t = asTask(taskId)
       let cwd: string | null = null
       try { cwd = await taskCwd(t) } catch {}
-      return readImage(asStr(p, 'caminho', 2000), [...(cwd ? [cwd] : []), path.join(attachRoot, String(t.id))])
+      const data = readImage(asStr(p, 'caminho', 2000), [...(cwd ? [cwd] : []), path.join(attachRoot, String(t.id))])
+      return data && preview === true && d.imagePreview ? d.imagePreview(data) : data
     },
   }
 }

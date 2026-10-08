@@ -14,6 +14,8 @@ import { Bar } from './UsageBar'
 import { shrink, Thumbs, type TodoDraft } from './Todo'
 import { Workflow } from './Workflow'
 import { Checkpoints } from './Checkpoints'
+import { ActivityLog } from './ActivityLog'
+import { parseSteps } from './stepsView'
 import { ProjectCommands } from './ProjectCommands'
 import { fileRefs, imageRefs, sentCaption, stripMarks } from './msgImages'
 import { loadRead } from './readCache'
@@ -202,7 +204,7 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed, 
     api.setTaskSel(task.id, next).catch(e => { setSelState(prev); setErr(errText(e)) })
   }
 
-  const { hist, live, load, send: sendChat } = useTaskChat(task.id, {
+  const { hist, live, liveSteps, load, send: sendChat } = useTaskChat(task.id, {
     sel: () => sel, msgs, stick, onError: setErr,
     // Sem escolha gravada: sugere o provedor/conta da ultima resposta desta tarefa.
     onLoaded: h => {
@@ -281,10 +283,9 @@ export function Chat({ task, accounts, providers, onChange, draft, onDraftUsed, 
           </div>}
           {hist && <Thread messages={hist.messages} known={known.current?.ids ?? null} accounts={accounts} taskId={task.id} onOpen={setView} />}
           {running && <div className="msg agent streaming enter-rise">
-            <div className="who"><Avatar provider={sel.provider} size="sm" live /><span>{PROVIDER[sel.provider]?.label ?? sel.provider} trabalhando</span>{doing && <span className="who-doing" title={doing}>{doing}</span>}</div>
+            <ActivityLog steps={liveSteps ?? { total: 0, items: [], totals: { edit: 0, read: 0, run: 0, search: 0, web: 0, other: 0, failed: 0, added: 0, removed: 0, files: 0 } }} live />
             {live && live !== '…' && <Markdown text={live} />}
             <ChildAgents list={agents} />
-            <span className="typing" aria-label="Trabalhando"><i /><i /><i /></span>
           </div>}
         </div>
       </div>
@@ -349,11 +350,13 @@ const Thread = memo(function Thread({ messages, known, accounts, taskId, onOpen 
 
 const MsgRow = memo(function MsgRow({ m, rise, accounts, taskId, onOpen }: { m: Msg; rise: boolean; accounts: Account[]; taskId: number; onOpen: (src: string) => void }) {
   const plain = useMemo(() => (m.role === 'agent' ? '' : stripMarks(m.text)), [m.role, m.text])
+  const steps = useMemo(() => (m.role === 'agent' ? parseSteps(m.steps) : null), [m.role, m.steps])
   const files = useMemo(() => (m.role === 'system' ? fileRefs(m.text) : []), [m.role, m.text]) // arquivo enviado pelo agente: cartao no lugar da nota
   return (
     <div className={`msg ${m.role} ${files.length ? 'sent' : ''} ${m.status ?? ''} ${rise ? 'enter-rise' : ''}`}>
       {m.role === 'agent' && <div className="who">{m.provider && <Avatar provider={m.provider} size="sm" />}<span>{label(m, accounts)}</span>
         {m.status === 'failed' && <span className="flag">falhou</span>}{m.status === 'cancelled' && <span className="flag">interrompida</span>}</div>}
+      {steps && <ActivityLog steps={steps} />}
       {m.role === 'agent' ? <Markdown text={m.text} /> : !files.length && plain && <p>{plain}</p>}
       <MsgImages taskId={taskId} text={m.text} marksOnly={m.role !== 'agent'} onOpen={onOpen} />
       {files.length > 0 && <SharedFiles taskId={taskId} refs={files} caption={sentCaption(plain)} onOpen={onOpen} />}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { api, errText, onChat, type Sel, type TaskChat } from './api'
+import type { Steps } from './stepsView'
 
 type Live = { occupied: number; capacity: number | null; estimated: boolean; source?: string }
 
@@ -17,6 +18,7 @@ export function useTaskChat(taskId: number, o: {
 }) {
   const [hist, setHist] = useState<TaskChat | null>(null)
   const [live, setLive] = useState('')
+  const [liveSteps, setLiveSteps] = useState<Steps | null>(null)
   const opts = useRef(o)
   opts.current = o
   const req = useRef(0) // descarta respostas antigas (troca rapida de tarefa/provedor)
@@ -27,6 +29,7 @@ export function useTaskChat(taskId: number, o: {
     return api.taskChat(taskId, opts.current.sel()).then(h => {
       if (n !== req.current) return
       setHist(h)
+      setLiveSteps(h.running ? h.liveSteps ?? null : null)
       setLive(h.live || (h.running ? '…' : '')) // volta a mostrar o streaming de uma execucao ativa
       opts.current.onLoaded?.(h)
     }, (e: unknown) => opts.current.onError(errText(e)))
@@ -38,6 +41,7 @@ export function useTaskChat(taskId: number, o: {
     if (ev.taskId !== taskId) return
     const o = opts.current
     if (ev.refresh) return void load() // delegacao iniciou/terminou: mensagem de sistema nova
+    if (ev.steps) return void setLiveSteps(ev.steps)
     if (ev.metric) return void o.onMetric?.(ev.metric)
     if (ev.done) return void (o.onDone ? o.onDone(load()) : load()) // load() limpa o streaming junto com a mensagem final
     if (typeof ev.text !== 'string') return // pedidos de permissao/contexto tambem trazem taskId, mas nao sao texto: nao apagam o streaming
@@ -49,5 +53,5 @@ export function useTaskChat(taskId: number, o: {
     if (m && (opts.current.stick?.current ?? true)) m.scrollTop = m.scrollHeight
   }, [hist, live])
 
-  return { hist, setHist, live, load, send }
+  return { hist, setHist, live, liveSteps, load, send }
 }

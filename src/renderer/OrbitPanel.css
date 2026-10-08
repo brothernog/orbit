@@ -1,0 +1,75 @@
+.orbit-panel { --c: var(--accent); overflow: hidden; }
+.orbit-panel > header { justify-content: flex-start; gap: 8px; }
+.orbit-panel > header > svg { color: var(--c); flex: none; }
+.orbit-panel > header h2 { font-size: 14px; }
+.orbit-panel .orbit-disable { margin-left: auto; font-size: 11px; padding: 8px 4px; white-space: nowrap; }
+.orbit-panel [role=tablist].orbit-agent-tabs { margin: 0 12px 8px; padding: 4px; gap: 4px; border-radius: var(--r-sm); overflow-x: auto; flex: none; }
+.orbit-panel .orbit-agent-tabs [role=tab] { min-height: 36px; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; padding: 4px 8px; flex: none; font-size: 12px; }
+.orbit-agent-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
+.orbit-agent-dot.live { background: var(--agent-color, var(--c)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent-color, var(--c)) 12%, transparent); }
+.orbit-top { flex: 3 1 0; min-height: 160px; min-width: 0; display: flex; flex-direction: column; position: relative; }
+.orbit-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px 8px; font-size: 11px; color: var(--faint); }
+.orbit-status .live { color: var(--c); }
+.orbit-filehead { padding: 8px 16px; background: var(--surface); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.orbit-filehead > span { font: 600 12px/1.5 'Cascadia Mono', 'Cascadia Code', Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.orbit-filehead > small { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.orbit-source-area { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--bg); overflow: hidden; }
+.orbit-code { margin: 0; overflow: auto; flex: 1; min-height: 0; padding: 8px 0; font: 12px/1.75 'Cascadia Mono', 'Cascadia Code', Consolas, monospace; tab-size: 2; position: relative; }
+.orbit-line { display: flex; min-width: max-content; position: relative; }
+.orbit-line-number { flex: 0 0 52px; padding: 0 12px; color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; user-select: none; position: sticky; left: 0; background: var(--bg); z-index: 1; }
+.orbit-line-text { display: block; padding-right: 16px; color: var(--muted); }
+.orbit-line.active { background: color-mix(in srgb, var(--c) 10%, var(--bg)); }
+.orbit-line.active .orbit-line-number { color: var(--c); background: color-mix(in srgb, var(--c) 10%, var(--bg)); box-shadow: inset 2px 0 0 var(--c); }
+.orbit-line.active .orbit-line-text { color: var(--text); }
+.orbit-line.estimated.active .orbit-line-number { box-shadow: inset 2px 0 0 var(--limit); color: var(--limit); }
+.orbit-window { flex: none; padding: 4px 16px; font-size: 10px; color: var(--faint); font-variant-numeric: tabular-nums; background: var(--side-bg); }
+.orbit-note { padding: 8px 16px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.orbit-note.err { color: var(--hot); }
+.orbit-wait { padding: 24px 20px; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; text-align: center; color: var(--muted); font-size: 13px; flex: 1; min-height: 0; }
+.orbit-wait > svg { color: var(--faint); }
+.orbit-wait small { font-size: 12px; max-width: 32ch; color: var(--faint); }
+.orbit-manual { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 4px 16px; color: var(--muted); font-size: 11px; }
+.orbit-manual button { min-height: 32px; font-size: 12px; color: var(--c); }
+.orbit-updating { position: absolute; bottom: 36px; right: 12px; padding: 2px 8px; background: var(--raised); color: var(--muted); border-radius: var(--r-sm); font-size: 10px; pointer-events: none; }
+.orbit-thought { padding: 16px; overflow: auto; min-height: 0; }
+.orbit-thought > small { font-size: 11px; color: var(--faint); }
+.orbit-thought pre, .orbit-event pre { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.65 'Cascadia Mono', 'Cascadia Code', Consolas, monospace; color: var(--text); }
+.orbit-text > small { font-size: 10px; color: var(--faint); }
+.orbit-text > button { min-height: 36px; font-size: 12px; margin: 4px 0; color: var(--c); }
+.orbit-panel .orbit-activity { flex: none; background: var(--side-bg); }
+.orbit-panel .orbit-activity > summary { margin: 0; padding: 8px 16px; font-size: 12px; }
+.orbit-activity > summary > span { color: var(--faint); margin-left: 8px; font-variant-numeric: tabular-nums; }
+.orbit-activity-list { max-height: 180px; overflow: auto; padding: 0 16px 8px; }
+.orbit-panel .orbit-event > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; margin: 0; font-size: 11px; }
+.orbit-event > summary::before { content: '›'; color: var(--faint); }
+.orbit-event[open] > summary::before { content: '⌄'; }
+.orbit-event > summary > span { flex: 1; }
+.orbit-event time { color: var(--faint); font-variant-numeric: tabular-nums; font-size: 10px; }
+.orbit-event code { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.orbit-event > b { font-size: 12px; display: block; margin-bottom: 4px; }
+.orbit-image { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; overflow: auto; min-height: 0; flex: 1; }
+.orbit-image img { max-width: 100%; max-height: 100%; object-fit: contain; flex: 1 1 auto; min-height: 0; border-radius: var(--r-sm); outline: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
+.orbit-image > code { flex: none; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; align-self: flex-start; }
+.orbit-bottom { flex: 2 1 0; display: flex; flex-direction: column; min-height: 260px; min-width: 0; border-top: 1px solid var(--line-soft); overflow: hidden; }
+.orbit-bottom > .orbit-globe { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.orbit-bottom .orbit-globe-stage { flex: 1 0 140px; min-height: 140px; height: auto; }
+.orbit-bottom .orbit-globe-agents { display: none; }
+.orbit-bottom .orbit-globe-focus { flex: none; min-height: 28px; padding-bottom: 4px; }
+.orbit-bottom .orbit-globe-files { flex: none; }
+.orbit-panel .orbit-globe-files > summary { min-height: 32px; margin-top: 0; }
+.orbit-bottom .orbit-globe-file-list { max-height: 120px; }
+.orbit-legend { display: flex; justify-content: space-between; padding: 4px 16px; gap: 8px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.orbit-legend > span:last-child { color: var(--faint); }
+.orbit-scope { margin: 0; padding: 4px 16px 12px; color: var(--faint); font-size: 10px; line-height: 1.5; }
+@media (max-height: 620px) { .orbit-top { min-height: 120px; } .orbit-bottom { min-height: 220px; } .orbit-bottom .orbit-globe-stage { flex-basis: 100px; min-height: 100px; } .orbit-activity-list { max-height: 100px; } }
+@media (prefers-reduced-motion: reduce) { .orbit-panel .orbit-agent-dot.live { box-shadow: none; } }
+.orbit-panel { position: relative; }
+.orbit-resizer { position: absolute; left: -3px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 5; touch-action: none; -webkit-app-region: no-drag; }
+.orbit-resizer::after { content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: transparent; }
+.orbit-resizer:hover::after, .orbit-resizer:focus-visible::after, .orbit-resizer:active::after { background: var(--c); }
+.orbit-line.added { background: color-mix(in srgb, var(--ok) 11%, var(--bg)); }
+.orbit-line.added .orbit-line-number { color: var(--ok); background: color-mix(in srgb, var(--ok) 11%, var(--bg)); box-shadow: inset 2px 0 0 var(--ok); }
+.orbit-line.added .orbit-line-text { color: var(--text); }
+.orbit-line.active.added .orbit-line-number { box-shadow: inset 2px 0 0 var(--c); }
+.orbit-line-tag { position: sticky; right: 8px; margin: 2px 8px 2px auto; padding: 0 8px; align-self: center; border-radius: 999px; font: 600 10px/16px 'Segoe UI', sans-serif; white-space: nowrap; color: var(--bg); background: var(--agent-color); opacity: .75; }
+.orbit-line-tag.sel { opacity: 1; box-shadow: 0 0 0 2px color-mix(in srgb, var(--agent-color) 30%, transparent); }

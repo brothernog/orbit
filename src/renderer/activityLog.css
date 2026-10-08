@@ -1,0 +1,16 @@
+.activity { margin: 6px 0 4px; font-size: 12.5px; color: var(--muted); }
+.activity-head { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; padding: 2px 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.activity-head:hover { color: var(--text, inherit); }
+.activity-head svg { transition: transform .15s; }
+.activity-head[aria-expanded="true"] svg { transform: rotate(180deg); }
+.activity .typing { padding: 0; gap: 3px; }
+.activity .typing i { width: 4px; height: 4px; }
+.activity-list { list-style: none; margin: 4px 0 0; padding: 4px 0 4px 10px; border-left: 2px solid var(--line); max-height: 260px; overflow: auto; display: grid; gap: 3px; }
+.activity-list li { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.activity-list b { font-weight: 500; flex: none; }
+.activity-list code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.activity-list .muted { opacity: .7; }
+.activity-list .add { color: var(--ok); font-style: normal; }
+.activity-list .del { color: var(--bad, #e5484d); font-style: normal; }
+.activity-list .fail, .activity-list .bad { color: var(--bad, #e5484d); }
+@media (prefers-reduced-motion: reduce) { .activity.live .activity-head span, .activity-head svg { animation: none; transition: none; } }

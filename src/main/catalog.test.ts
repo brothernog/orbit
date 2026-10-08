@@ -98,7 +98,7 @@ test('a configuracao escolhida chega ao provedor correto (flags por CLI)', () =>
   const cx = AGENTS.codex.chatArgs('t1', o)
   assert.deepEqual(cx.slice(cx.indexOf('-m')), ['-m', 'gpt-6-luna', '-c', 'model_reasoning_effort=high', 'resume', 't1', '-'])
   assert.ok(cx.indexOf('-m') < cx.indexOf('resume')) // opcoes do exec ficam antes de `resume`
-  assert.deepEqual(AGENTS.opencode.chatArgs(undefined, { model: 'deepseek/deepseek-flash', effort: 'max' }), ['run', '--format', 'json', '--print-logs', '--log-level', 'ERROR', '-m', 'deepseek/deepseek-flash', '--variant', 'max'])
+  assert.deepEqual(AGENTS.opencode.chatArgs(undefined, { model: 'deepseek/deepseek-flash', effort: 'max' }), ['run', '--format', 'json', '--print-logs', '--log-level', 'ERROR', '--thinking', '-m', 'deepseek/deepseek-flash', '--variant', 'max'])
   assert.deepEqual(AGENTS.gemini.chatArgs(undefined, { model: 'gemini-2.5-flash' }).slice(-2), ['-m', 'gemini-2.5-flash'])
   assert.ok(!AGENTS.gemini.chatArgs(undefined, { model: 'x', effort: 'high' }).includes('high')) // gemini nunca recebe esforco
   assert.ok(!AGENTS.claude.chatArgs().includes('--model')) // sem escolha: padrao da CLI, nada e injetado
