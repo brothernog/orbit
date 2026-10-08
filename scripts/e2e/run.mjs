@@ -1100,7 +1100,7 @@ try {
   if(!selected)throw Error('A tarefa XSS não ficou visível após o resize.')
   await inv(ev, 'sendTask', tX, { provider: 'codex' }, 'TRAVAR para capturar a execucao')
   for (let i = 0; i < 40 && !(await inv(ev, 'taskChat', tX, { provider: 'codex' })).value.live.includes('parcial'); i++) await sleep(250)
-  const probe = "({ live: !!document.querySelector('.msg.streaming .who .avatar.live'), stop: !!document.querySelector('.composer button[aria-label=Parar]'), spin: !!document.querySelector('.tasklist .att[data-att=working]'), dock: !!document.querySelector('.dock-btn.busy') })"
+  const probe = "({ live: !!document.querySelector('.msg.streaming .activity.live'), stop: !!document.querySelector('.composer button[aria-label=Parar]'), spin: !!document.querySelector('.tasklist .att[data-att=working]'), dock: !!document.querySelector('.dock-btn.busy') })"
   let running = {}
   for (let i = 0; i < 20 && !(running.live && running.stop && running.spin && running.dock); i++) { await sleep(250); running = await ev(probe) } // dock e lista usam polling de 3 s
   fs.writeFileSync(path.join(shotDir, 'execucao.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
