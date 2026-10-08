@@ -24,6 +24,7 @@ test('pai + filhos da execucao atual; filho de outra execucao fica de fora; doin
   add(t, 5, 'completed', 'antigo')
   const run = add(t, 7, 'running', 'investigar colisao')
   const done = add(t, 7, 'failed', 'rodar testes')
+  db.prepare('UPDATE delegations SET error=? WHERE id=?').run('Tempo limite de 15 min esgotado', done)
   const doing = new Map([[run, { tool: 'Read', detail: 'a.gd' }], [done, { tool: 'Bash' }]])
   const list = taskAgents(db, t, { runId: 7, provider: 'claude', model: 'opus', startedAt: 1, doing: { tool: 'Edit' } }, doing)
   assert.deepEqual(list.map(a => [a.kind, a.title, a.status, a.doing?.tool]), [
@@ -31,4 +32,5 @@ test('pai + filhos da execucao atual; filho de outra execucao fica de fora; doin
   ])
   assert.equal(list[1].startedAt, Date.parse('2026-01-01T10:00:00Z'))
   assert.equal(list[1].endedAt, null)
+  assert.deepEqual(list.slice(1).map(a => a.error), [null, 'Tempo limite de 15 min esgotado']) // o painel mostra por que falhou
 })
