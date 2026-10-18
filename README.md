@@ -1,4 +1,28 @@
-# Órbita — Game Planning Dashboard
+# Órbita (Orbit)
+
+Aplicativo desktop para orquestrar agentes de IA de vários provedores e contas num só lugar. Funciona com Claude Code, Codex, Gemini CLI e OpenCode usando as CLIs e os logins que você já tem.
+
+## Destaques
+
+- **Várias contas do Claude no mesmo app.** Cada conta tem seu próprio perfil, o app mostra o uso de cada uma e pode trocar de conta automaticamente quando o limite está perto.
+- **Delegação entre provedores.** Um agente principal pode passar uma tarefa para um modelo de outra assinatura ou de outro provedor (por exemplo, Opus delegando para um modelo do Codex). Delegações de edição rodam em paralelo quando os arquivos não se sobrepõem.
+- **Alterações ao vivo.** Um painel mostra em tempo real quais arquivos cada agente está alterando, com as linhas novas destacadas, e um histórico de atividade fica salvo.
+- **Controle.** Regras de permissão por agente, aprovação explícita antes de compartilhar contexto entre provedores, worktrees do Git por tarefa e checkpoints opcionais.
+- **Acessibilidade.** Rótulos ARIA, foco visível por teclado e respeito à preferência de movimento reduzido do sistema.
+
+## Qualidade
+
+- 549 testes unitários e testes de ponta a ponta que abrem o app real com CLIs simuladas, sem nenhuma chamada paga.
+- Integração contínua em Windows, macOS e Linux, com instaladores gerados a cada versão.
+- TypeScript em modo estrito e validação central de tudo que chega da interface.
+
+| | |
+|---|---|
+| App | Electron, React, TypeScript |
+| Dados | SQLite com migrações versionadas |
+| Integrações | MCP, Godot, Unity, Blender |
+
+## Começando
 
 App desktop (Electron + React + TypeScript + SQLite) para planejar jogos e trabalhar com agentes (Claude Code, Codex, Gemini CLI e OpenCode) usando as CLIs e os logins que voce ja tem. Nao pede chaves de API nem cobra nada alem do que essas CLIs ja usam.
 
